@@ -1,0 +1,19 @@
+<Project Sdk="MSTest.Sdk/4.3.3">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <IsPackable>false</IsPackable>
+    <UseVSTest>true</UseVSTest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference
+      Include="../../src/PromptHelper/PromptHelper.csproj" />
+  </ItemGroup>
+
+</Project>

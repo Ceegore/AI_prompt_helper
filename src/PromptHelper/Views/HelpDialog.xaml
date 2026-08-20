@@ -1,0 +1,48 @@
+<Window x:Class="PromptHelper.Views.HelpDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Help — Prompt Helper"
+        Width="500"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="{StaticResource AppBackgroundBrush}">
+    <Border Background="{StaticResource SurfaceBrush}" Padding="28" CornerRadius="12" Margin="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+        <StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                <Border Width="36" Height="36" Background="{StaticResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
+                    <TextBlock Text="P" Foreground="{StaticResource SurfaceBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <TextBlock Text="Choose a category to browse your prompt library."
+                       FontSize="14" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
+            <TextBlock Text="• Use + Add to create categories."
+                       FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+            <TextBlock Text="• Use + Prompt to create prompts."
+                       FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+            <TextBlock Text="• Use Copy to copy a prompt to the Windows clipboard."
+                       FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,16"/>
+
+            <TextBlock Text="Data folder:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,2"/>
+            <TextBox x:Name="DataFolderTextBox"
+                     Style="{StaticResource ModernTextBoxStyle}"
+                     IsReadOnly="True"
+                     FontSize="12"
+                     Margin="0,0,0,12"/>
+
+            <TextBlock Text="Version:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,2"/>
+            <TextBlock x:Name="VersionTextBlock"
+                       FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+
+            <Button Content="Close"
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    HorizontalAlignment="Right"
+                    IsDefault="True"
+                    IsCancel="True"
+                    Click="CloseButton_Click"/>
+        </StackPanel>
+    </Border>
+</Window>
