@@ -115,7 +115,7 @@ public sealed class LibraryStartupService
 
     private StartupResult HandleFirstRunOrInterruptedInit()
     {
-        bool markerExists = File.Exists(_paths.InitializationMarkerPath);
+        bool markerExists = IsMarkerPresent();
         IReadOnlyList<string> existingPromptFiles = _promptRepo.EnumeratePromptFiles();
         DefaultLibraryPackage defaultPkg = DefaultLibraryFactory.CreateDefaults();
 
@@ -177,14 +177,28 @@ public sealed class LibraryStartupService
         }
     }
 
+    private bool IsMarkerPresent()
+    {
+        try
+        {
+            using var fs = new FileStream(_paths.InitializationMarkerPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
     private void TryRemoveStaleMarker()
     {
         try
         {
-            if (File.Exists(_paths.InitializationMarkerPath))
-            {
-                _deleter.DeleteIfExists(_paths.InitializationMarkerPath);
-            }
+            _deleter.DeleteIfExists(_paths.InitializationMarkerPath);
         }
         catch
         {

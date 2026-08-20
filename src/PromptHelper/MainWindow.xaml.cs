@@ -1,4 +1,5 @@
 using System.IO;
+using System.Security;
 using System.Windows;
 using System.Windows.Controls;
 using PromptHelper.Services;
@@ -65,7 +66,7 @@ public partial class MainWindow : Window
                 var result = _viewModel.CreateCategory(dialog.ResultName);
                 ShowWarningIfPresent(result.Warning);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
             {
                 MessageBox.Show(
                     this,
@@ -101,7 +102,7 @@ public partial class MainWindow : Window
                     var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
                     ShowWarningIfPresent(result.Warning);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
                         this,
@@ -118,7 +119,6 @@ public partial class MainWindow : Window
     {
         if (sender is FrameworkElement fe && fe.DataContext is CategoryItemViewModel cat)
         {
-            // PLH-012: Pre-check emptiness before asking for irreversible destructive confirmation
             if (!_viewModel.CanDeleteCategory(cat.Id, out string? blockReason))
             {
                 MessageBox.Show(
@@ -145,7 +145,7 @@ public partial class MainWindow : Window
                     var result = _viewModel.DeleteCategory(cat.Id);
                     ShowWarningIfPresent(result.Warning);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
                         this,
@@ -180,7 +180,7 @@ public partial class MainWindow : Window
                 ShowWarningIfPresent(result.Warning);
                 break;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
             {
                 MessageBox.Show(
                     this,
@@ -202,7 +202,7 @@ public partial class MainWindow : Window
             {
                 promptText = _viewModel.GetPromptContent(card.Id);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
             {
                 MessageBox.Show(
                     this,
@@ -232,7 +232,7 @@ public partial class MainWindow : Window
                     ShowWarningIfPresent(result.Warning);
                     break;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
                         this,
@@ -265,7 +265,7 @@ public partial class MainWindow : Window
                     var result = _viewModel.DeletePrompt(card.Id);
                     ShowWarningIfPresent(result.Warning);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
                         this,
@@ -307,7 +307,7 @@ public partial class MainWindow : Window
                         ShowWarningIfPresent(result.Warning);
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
                         this,
@@ -342,7 +342,7 @@ public partial class MainWindow : Window
                 card.CopyButtonText = "Copy";
                 card.IsCopying = false;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
             {
                 card.CopyButtonText = "Copy";
                 card.IsCopying = false;

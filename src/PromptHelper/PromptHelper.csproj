@@ -8,6 +8,8 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>PromptHelper</RootNamespace>
     <AssemblyName>PromptHelper</AssemblyName>
+    <Version>0.1.0</Version>
+    <InvariantGlobalization>false</InvariantGlobalization>
     <ApplicationIcon></ApplicationIcon>
   </PropertyGroup>
 

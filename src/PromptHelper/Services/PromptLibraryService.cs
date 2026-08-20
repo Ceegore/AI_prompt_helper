@@ -32,6 +32,15 @@ public sealed class PromptLibraryService
         return _document.Categories
             .Where(c => c.ParentId == parentId)
             .OrderBy(c => c.SortOrder)
+            .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Id)
+            .Select(c => new CategoryRecord
+            {
+                Id = c.Id,
+                ParentId = c.ParentId,
+                Name = c.Name,
+                SortOrder = c.SortOrder
+            })
             .ToList();
     }
 
@@ -72,7 +81,15 @@ public sealed class PromptLibraryService
         CommitResult commitResult = _libraryRepo.Commit(candidate);
         _document = candidate;
 
-        return new OperationResult<CategoryRecord>(newCategory, commitResult.Warning);
+        var returnedCategory = new CategoryRecord
+        {
+            Id = newCategory.Id,
+            ParentId = newCategory.ParentId,
+            Name = newCategory.Name,
+            SortOrder = newCategory.SortOrder
+        };
+
+        return new OperationResult<CategoryRecord>(returnedCategory, commitResult.Warning);
     }
 
     public OperationResult RenameCategory(Guid categoryId, string newName)
@@ -156,6 +173,7 @@ public sealed class PromptLibraryService
         var prompts = _document.Prompts
             .Where(p => p.CategoryId == categoryId)
             .OrderBy(p => p.SortOrder)
+            .ThenBy(p => p.Id)
             .ToList();
 
         var results = new List<PromptDisplayRecord>(prompts.Count);
@@ -190,7 +208,7 @@ public sealed class PromptLibraryService
             throw new InvalidOperationException($"Category does not exist: {categoryId.Value}");
         }
 
-        var newPromptId = Guid.NewGuid();
+        var newPromptId = GenerateUniquePromptGuid(candidate);
         long nextSortOrder = CalculateNextPromptSortOrder(candidate, categoryId, null);
 
         var newPrompt = new PromptRecord
@@ -224,7 +242,15 @@ public sealed class PromptLibraryService
         }
 
         _document = candidate;
-        return new OperationResult<PromptRecord>(newPrompt, commitResult.Warning);
+
+        var returnedPrompt = new PromptRecord
+        {
+            Id = newPrompt.Id,
+            CategoryId = newPrompt.CategoryId,
+            SortOrder = newPrompt.SortOrder
+        };
+
+        return new OperationResult<PromptRecord>(returnedPrompt, commitResult.Warning);
     }
 
     public OperationResult EditPrompt(Guid promptId, string content)
@@ -378,23 +404,15 @@ public sealed class PromptLibraryService
             categoryPaths.Add((cat.Id, pathStr));
         }
 
-        // Sort categories alphabetically by path
-        var sortedCategories = categoryPaths
-            .OrderBy(c => c.RawPath, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
         // Global uniqueness enforcement (PLH-007)
         var usedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Home" };
-        var results = new List<DestinationRecord>(sortedCategories.Count + 1)
-        {
-            new(null, "Home")
-        };
-
-        var rawGroupCounts = sortedCategories
+        var rawGroupCounts = categoryPaths
             .GroupBy(r => r.RawPath, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
 
-        foreach (var (catId, rawPath) in sortedCategories)
+        var disambiguatedCategories = new List<DestinationRecord>(categoryPaths.Count);
+
+        foreach (var (catId, rawPath) in categoryPaths)
         {
             string candidatePath = rawPath;
             bool isColliding = string.Equals(rawPath, "Home", StringComparison.OrdinalIgnoreCase) ||
@@ -414,8 +432,20 @@ public sealed class PromptLibraryService
             }
 
             usedPaths.Add(candidatePath);
-            results.Add(new DestinationRecord(catId, candidatePath));
+            disambiguatedCategories.Add(new DestinationRecord(catId, candidatePath));
         }
+
+        // PLH2-006: Sort final disambiguated categories by complete DisplayPath (OrdinalIgnoreCase) then by CategoryId
+        var sortedCategories = disambiguatedCategories
+            .OrderBy(c => c.DisplayPath, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.CategoryId)
+            .ToList();
+
+        var results = new List<DestinationRecord>(sortedCategories.Count + 1)
+        {
+            new(null, "Home")
+        };
+        results.AddRange(sortedCategories);
 
         return results;
     }
@@ -423,6 +453,20 @@ public sealed class PromptLibraryService
     #endregion
 
     #region Helpers
+
+    private Guid GenerateUniquePromptGuid(LibraryDocument candidate)
+    {
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            var candidateGuid = Guid.NewGuid();
+            if (!candidate.Prompts.Any(p => p.Id == candidateGuid) && !_promptRepo.Exists(candidateGuid))
+            {
+                return candidateGuid;
+            }
+        }
+
+        throw new InvalidOperationException("Failed to generate a unique prompt GUID after 10 attempts.");
+    }
 
     private long CalculateNextCategorySortOrder(LibraryDocument document, Guid? parentId)
     {
@@ -435,7 +479,11 @@ public sealed class PromptLibraryService
         long maxSort = siblings.Max(c => c.SortOrder);
         if (maxSort > long.MaxValue - 10)
         {
-            var ordered = siblings.OrderBy(c => c.SortOrder).ToList();
+            var ordered = siblings
+                .OrderBy(c => c.SortOrder)
+                .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.Id)
+                .ToList();
             long newSort = 10;
             foreach (var s in ordered)
             {
@@ -462,7 +510,10 @@ public sealed class PromptLibraryService
         long maxSort = siblings.Max(p => p.SortOrder);
         if (maxSort > long.MaxValue - 10)
         {
-            var ordered = siblings.OrderBy(p => p.SortOrder).ToList();
+            var ordered = siblings
+                .OrderBy(p => p.SortOrder)
+                .ThenBy(p => p.Id)
+                .ToList();
             long newSort = 10;
             foreach (var s in ordered)
             {

@@ -19,8 +19,23 @@ public sealed class PromptRepository
         _deleter = deleter;
     }
 
-    public bool Exists(Guid id) =>
-        File.Exists(_paths.GetPromptPath(id));
+    public bool Exists(Guid id)
+    {
+        string path = _paths.GetPromptPath(id);
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
     public string Read(Guid id) =>
         File.ReadAllText(_paths.GetPromptPath(id));
@@ -29,7 +44,7 @@ public sealed class PromptRepository
     {
         string path = _paths.GetPromptPath(id);
 
-        if (File.Exists(path))
+        if (Exists(id))
         {
             throw new InvalidOperationException($"Prompt file already exists: {id}");
         }
@@ -41,7 +56,15 @@ public sealed class PromptRepository
     {
         string path = _paths.GetPromptPath(id);
 
-        if (!File.Exists(path))
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        }
+        catch (FileNotFoundException)
+        {
+            throw new FileNotFoundException("Prompt file does not exist.", path);
+        }
+        catch (DirectoryNotFoundException)
         {
             throw new FileNotFoundException("Prompt file does not exist.", path);
         }

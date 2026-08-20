@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Models;
 using PromptHelper.Services;
@@ -122,7 +123,7 @@ public sealed class AuditDefectRegressionTests
     }
 
     [TestMethod]
-    public void PLH007_Destination_paths_are_globally_unique_case_insensitively()
+    public void PLH007_PLH2006_Destination_paths_are_globally_unique_and_sorted_by_final_path()
     {
         using var testDir = new TestDirectory();
         var paths = new AppPaths(testDir.Root);
@@ -138,9 +139,7 @@ public sealed class AuditDefectRegressionTests
         {
             Categories =
             [
-                // Category literally named "Home"
                 new CategoryRecord { Id = c1Id, Name = "Home", SortOrder = 10 },
-                // Category named "Home [11111111]" colliding with disambiguated label
                 new CategoryRecord { Id = c2Id, Name = "Home [11111111]", SortOrder = 20 }
             ]
         };
@@ -149,11 +148,24 @@ public sealed class AuditDefectRegressionTests
         var service = new PromptLibraryService(doc, libRepo, promptRepo);
         var destinations = service.GetDestinations();
 
+        // 1. Home is first
+        Assert.AreEqual("Home", destinations[0].DisplayPath);
+        Assert.IsNull(destinations[0].CategoryId);
+
+        // 2. Global uniqueness
         var uniquePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var dest in destinations)
         {
             bool added = uniquePaths.Add(dest.DisplayPath);
             Assert.IsTrue(added, $"Duplicate destination label found: {dest.DisplayPath}");
+        }
+
+        // 3. Sorted by final display path
+        for (int i = 1; i < destinations.Count - 1; i++)
+        {
+            Assert.IsTrue(
+                string.Compare(destinations[i].DisplayPath, destinations[i + 1].DisplayPath, StringComparison.OrdinalIgnoreCase) <= 0,
+                $"Destinations not sorted by final display path: {destinations[i].DisplayPath} vs {destinations[i + 1].DisplayPath}");
         }
     }
 
@@ -186,7 +198,7 @@ public sealed class AuditDefectRegressionTests
 
         var moved = service.CurrentDocument.Prompts.First(p => p.Id == pId);
         Assert.AreEqual(targetCat.Id, moved.CategoryId);
-        Assert.AreEqual(10, moved.SortOrder); // First in empty category must be 10, NOT 1000010
+        Assert.AreEqual(10, moved.SortOrder);
     }
 
     [TestMethod]
@@ -244,7 +256,7 @@ public sealed class AuditDefectRegressionTests
     }
 
     [TestMethod]
-    public void PLH014_CurrentDocument_is_defensive_clone()
+    public void PLH2001_Public_APIs_return_safe_clones_not_live_references()
     {
         using var testDir = new TestDirectory();
         var paths = new AppPaths(testDir.Root);
@@ -253,22 +265,77 @@ public sealed class AuditDefectRegressionTests
         var libRepo = new LibraryRepository(paths, writer);
         var promptRepo = new PromptRepository(paths, writer, deleter);
 
+        var catId = Guid.NewGuid();
         var doc = new LibraryDocument
         {
-            Categories = [new CategoryRecord { Id = Guid.NewGuid(), Name = "Original", SortOrder = 10 }]
+            Categories = [new CategoryRecord { Id = catId, Name = "Original", SortOrder = 10 }]
         };
         libRepo.Commit(doc);
 
         var service = new PromptLibraryService(doc, libRepo, promptRepo);
 
-        // Mutating initial document after construction has no effect
-        doc.Categories[0].Name = "ExternalMutated";
+        // 1. GetCategories leak check
+        var retrievedCategories = service.GetCategories(null);
+        retrievedCategories[0].Name = "MutatedThroughGetCategories";
         Assert.AreEqual("Original", service.CurrentDocument.Categories[0].Name);
 
-        // Mutating snapshot returned by CurrentDocument has no effect
-        var snapshot = service.CurrentDocument;
-        snapshot.Categories[0].Name = "SnapshotMutated";
-        Assert.AreEqual("Original", service.CurrentDocument.Categories[0].Name);
+        // 2. CreateCategory result leak check
+        var createdCategoryResult = service.CreateCategory(null, "CreatedCat");
+        createdCategoryResult.Value.Name = "MutatedThroughCreateResult";
+        Assert.AreEqual("CreatedCat", service.CurrentDocument.Categories.First(c => c.Id == createdCategoryResult.Value.Id).Name);
+
+        // 3. CreatePrompt result leak check
+        var createdPromptResult = service.CreatePrompt(null, "Content");
+        createdPromptResult.Value.SortOrder = 999999;
+        Assert.AreNotEqual(999999, service.CurrentDocument.Prompts.First(p => p.Id == createdPromptResult.Value.Id).SortOrder);
+    }
+
+    [TestMethod]
+    public void PLH2003_Deterministic_category_and_prompt_tie_break_ordering()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        var cB = new CategoryRecord { Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), Name = "B_Cat", SortOrder = 10 };
+        var cA = new CategoryRecord { Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), Name = "A_Cat", SortOrder = 10 };
+
+        var p2 = new PromptRecord { Id = Guid.Parse("22222222-2222-2222-2222-222222222222"), CategoryId = null, SortOrder = 10 };
+        var p1 = new PromptRecord { Id = Guid.Parse("11111111-1111-1111-1111-111111111111"), CategoryId = null, SortOrder = 10 };
+
+        promptRepo.Create(p1.Id, "c1");
+        promptRepo.Create(p2.Id, "c2");
+
+        var doc = new LibraryDocument
+        {
+            Categories = [cB, cA], // Intentionally unordered in list
+            Prompts = [p2, p1]
+        };
+        libRepo.Commit(doc);
+
+        var service = new PromptLibraryService(doc, libRepo, promptRepo);
+
+        var categories = service.GetCategories(null);
+        Assert.AreEqual("A_Cat", categories[0].Name);
+        Assert.AreEqual("B_Cat", categories[1].Name);
+
+        var prompts = service.GetPrompts(null);
+        Assert.AreEqual(p1.Id, prompts[0].Id);
+        Assert.AreEqual(p2.Id, prompts[1].Id);
+    }
+
+    [TestMethod]
+    public void PLH2004_Assembly_version_is_0_1_0()
+    {
+        var asm = typeof(PromptHelper.App).Assembly;
+        var version = asm.GetName().Version;
+        Assert.IsNotNull(version);
+        Assert.AreEqual(0, version.Major);
+        Assert.AreEqual(1, version.Minor);
+        Assert.AreEqual(0, version.Build);
     }
 
     [TestMethod]
