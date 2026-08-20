@@ -331,4 +331,63 @@ public sealed class AppSettingsRepositoryTests
         Assert.IsTrue(saveResult.Warning.Contains("settings backup could not be synchronized"));
         Assert.IsTrue(File.Exists(settingsPath));
     }
+
+    [TestMethod]
+    public void CRUU4_001_Valid_primary_preserves_future_schema_backup()
+    {
+        using var temp = new TestDirectory();
+
+        string primary = Path.Combine(temp.Root, "settings.json");
+        string backup = Path.Combine(temp.Root, "settings.backup.json");
+
+        File.WriteAllText(
+            primary,
+            "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Current\"}");
+
+        File.WriteAllText(
+            backup,
+            "{\"schemaVersion\":2,\"dataRootPath\":\"C:\\\\Newer\"}");
+
+        byte[] backupBefore = File.ReadAllBytes(backup);
+
+        var repo = new AppSettingsRepository(
+            settingsPathOverride: primary,
+            backupPathOverride: backup);
+
+        SettingsLoadResult result = repo.LoadOrRecover();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.AreEqual(Path.GetFullPath(@"C:\Current"), result.Settings.DataRootPath);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "newer");
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(backup));
+    }
+
+    [TestMethod]
+    public void CRUU4_001_Valid_primary_unreadable_backup_starts_with_warning()
+    {
+        using var temp = new TestDirectory();
+
+        string primary = Path.Combine(temp.Root, "settings.json");
+        string backup = Path.Combine(temp.Root, "settings.backup.json");
+
+        File.WriteAllText(
+            primary,
+            "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Current\"}");
+
+        File.WriteAllText(backup, "{\"schemaVersion\":1}");
+
+        using var lockStream = new FileStream(backup, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var repo = new AppSettingsRepository(
+            settingsPathOverride: primary,
+            backupPathOverride: backup);
+
+        SettingsLoadResult result = repo.LoadOrRecover();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.AreEqual(Path.GetFullPath(@"C:\Current"), result.Settings.DataRootPath);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "could not be inspected or synchronized");
+    }
 }

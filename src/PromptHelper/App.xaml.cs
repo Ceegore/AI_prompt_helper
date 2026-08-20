@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
@@ -25,6 +26,17 @@ public partial class App : Application
             var settings = settingsResult.Settings;
 
             string effectiveDataRoot = settingsRepo.GetEffectiveDataRoot(settings);
+
+            string bootstrapRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PromptHelper");
+
+            var physicalResolver = new WindowsPhysicalPathResolver();
+            var rootPolicy = new ManagedDataRootPolicy(physicalResolver);
+
+            effectiveDataRoot = rootPolicy.ValidateConfiguredRootForStartup(
+                effectiveDataRoot,
+                bootstrapRoot);
 
             if (!string.IsNullOrWhiteSpace(settings.DataRootPath))
             {

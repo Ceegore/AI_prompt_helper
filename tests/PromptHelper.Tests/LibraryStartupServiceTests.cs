@@ -328,4 +328,67 @@ public sealed class LibraryStartupServiceTests
         Assert.AreEqual(1, result.Document.Categories.Count);
         Assert.IsFalse(File.Exists(paths.InitializationMarkerPath));
     }
+
+    [TestMethod]
+    public void CRUU4_002_Valid_primary_preserves_future_schema_library_backup()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, libRepo, _) = CreateTestContext(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        var doc = new LibraryDocument
+        {
+            Categories = [new CategoryRecord { Id = Guid.NewGuid(), Name = "ValidPrimary", SortOrder = 10 }]
+        };
+        libRepo.Commit(doc);
+
+        string futureBackupJson = "{\"schemaVersion\": 99, \"categories\": [], \"prompts\": []}";
+        File.WriteAllText(paths.LibraryBackupPath, futureBackupJson);
+        byte[] backupBefore = File.ReadAllBytes(paths.LibraryBackupPath);
+
+        var result = service.LoadOrInitialize();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.AreEqual(1, result.Document.Categories.Count);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "schema version 99");
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(paths.LibraryBackupPath));
+    }
+
+    [TestMethod]
+    public void CRUU4_002_Corrupt_primary_future_backup_throws_unsupported_schema()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, _, _) = CreateTestContext(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        File.WriteAllText(paths.LibraryPath, "corrupt json");
+        File.WriteAllText(paths.LibraryBackupPath, "{\"schemaVersion\": 99, \"categories\": [], \"prompts\": []}");
+
+        var ex = Assert.Throws<UnsupportedLibrarySchemaException>(() => service.LoadOrInitialize());
+        Assert.AreEqual(99, ex.SchemaVersion);
+    }
+
+    [TestMethod]
+    public void CRUU4_002_Valid_primary_locked_backup_still_starts()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, libRepo, _) = CreateTestContext(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        var doc = new LibraryDocument
+        {
+            Categories = [new CategoryRecord { Id = Guid.NewGuid(), Name = "ValidPrimary", SortOrder = 10 }]
+        };
+        libRepo.Commit(doc);
+
+        using var lockStream = new FileStream(paths.LibraryBackupPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var result = service.LoadOrInitialize();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.AreEqual(1, result.Document.Categories.Count);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "could not");
+    }
 }

@@ -23,15 +23,44 @@ public sealed class IconAssetTests
     }
 
     [TestMethod]
-    public void VerifyReleaseAssets_script_exists_and_contains_RequireIcon_parameter()
+    public void CRUU4_011_Workflow_invokes_non_strict_release_asset_verification()
+    {
+        string workflowPath = RepositoryTestPaths.RequireFile(".github", "workflows", "windows-ci.yml");
+        string workflowContent = File.ReadAllText(workflowPath);
+
+        StringAssert.Contains(workflowContent, "./tools/VerifyReleaseAssets.ps1");
+    }
+
+    [TestMethod]
+    public void CRUU4_011_Strict_workflow_path_invokes_RequireIcon()
+    {
+        string workflowPath = RepositoryTestPaths.RequireFile(".github", "workflows", "windows-ci.yml");
+        string workflowContent = File.ReadAllText(workflowPath);
+
+        StringAssert.Contains(workflowContent, "release_gate");
+        StringAssert.Contains(workflowContent, "./tools/VerifyReleaseAssets.ps1 -RequireIcon");
+        StringAssert.Contains(workflowContent, "-PublishedExe artifacts/publish-check/PromptHelper.exe");
+    }
+
+    [TestMethod]
+    public void CRUU4_012_Release_asset_script_checks_ico_payload_bounds()
     {
         string scriptPath = RepositoryTestPaths.RequireFile("tools", "VerifyReleaseAssets.ps1");
         string scriptContent = File.ReadAllText(scriptPath);
 
-        StringAssert.Contains(scriptContent, "RequireIcon");
-        StringAssert.Contains(scriptContent, "MISSING_REQUIRED_ASSET");
-        StringAssert.Contains(scriptContent, "PromptHelperLogo.svg");
-        StringAssert.Contains(scriptContent, "PromptHelper.ico");
+        StringAssert.Contains(scriptContent, "imageSize");
+        StringAssert.Contains(scriptContent, "imageOffset");
+        StringAssert.Contains(scriptContent, "directoryLength");
+    }
+
+    [TestMethod]
+    public void CRUU4_012_Release_asset_script_supports_published_exe_icon_check()
+    {
+        string scriptPath = RepositoryTestPaths.RequireFile("tools", "VerifyReleaseAssets.ps1");
+        string scriptContent = File.ReadAllText(scriptPath);
+
+        StringAssert.Contains(scriptContent, "PublishedExe");
+        StringAssert.Contains(scriptContent, "ExtractIconEx");
     }
 
     [TestMethod]

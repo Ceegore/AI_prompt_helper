@@ -4,6 +4,7 @@ namespace PromptHelper.Services;
 
 public interface IUserConfirmationService
 {
+    bool Confirm(string message, string title);
     bool ConfirmExistingLibrarySwitch(string targetPath, string? warning);
 }
 
@@ -14,6 +15,15 @@ public sealed class WpfUserConfirmationService : IUserConfirmationService
     public WpfUserConfirmationService(Window? owner = null)
     {
         _owner = owner;
+    }
+
+    public bool Confirm(string message, string title)
+    {
+        MessageBoxResult result = _owner != null
+            ? MessageBox.Show(_owner, message, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning)
+            : MessageBox.Show(message, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+
+        return result == MessageBoxResult.OK;
     }
 
     public bool ConfirmExistingLibrarySwitch(string targetPath, string? warning)
@@ -30,10 +40,6 @@ public sealed class WpfUserConfirmationService : IUserConfirmationService
             message = $"{warning}\n\n" + message;
         }
 
-        MessageBoxResult result = _owner != null
-            ? MessageBox.Show(_owner, message, "Switch to Existing Library", MessageBoxButton.OKCancel, MessageBoxImage.Warning)
-            : MessageBox.Show(message, "Switch to Existing Library", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-
-        return result == MessageBoxResult.OK;
+        return Confirm(message, "Switch to Existing Library");
     }
 }

@@ -4,7 +4,8 @@
 #>
 [CmdletBinding()]
 param(
-    [switch]$RequireIcon
+    [switch]$RequireIcon,
+    [string]$PublishedExe
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +46,12 @@ if (Test-Path $outputIco) {
         exit 1
     }
 
+    $directoryLength = 6 + ($count * 16)
+    if ($bytes.Length -lt $directoryLength) {
+        Write-Error "ICO directory table is truncated."
+        exit 1
+    }
+
     $sizes = [System.Collections.Generic.HashSet[int]]::new()
     for ($i = 0; $i -lt $count; $i++) {
         $offset = 6 + ($i * 16)
@@ -56,6 +63,25 @@ if (Test-Path $outputIco) {
             exit 1
         }
         $sizes.Add($w) | Out-Null
+
+        $imageSize = [System.BitConverter]::ToUInt32($bytes, $offset + 8)
+        $imageOffset = [System.BitConverter]::ToUInt32($bytes, $offset + 12)
+
+        if ($imageSize -eq 0) {
+            Write-Error "ICO frame $i has zero image size."
+            exit 1
+        }
+
+        if ($imageOffset -lt $directoryLength) {
+            Write-Error "ICO frame $i points inside the directory table."
+            exit 1
+        }
+
+        $end = [UInt64]$imageOffset + [UInt64]$imageSize
+        if ($end -gt [UInt64]$bytes.Length) {
+            Write-Error "ICO frame $i extends beyond end of file."
+            exit 1
+        }
     }
 
     $requiredSizes = @(16, 24, 32, 48, 64, 128, 256)
@@ -67,6 +93,45 @@ if (Test-Path $outputIco) {
     }
 
     Write-Host "Validated PromptHelper.ico with $count square frames."
+}
+
+if ($RequireIcon -and $PublishedExe) {
+    if (-not (Test-Path $PublishedExe)) {
+        Write-Error "Published executable not found: '$PublishedExe'"
+        exit 1
+    }
+
+    $resolvedExe = (Resolve-Path $PublishedExe).Path
+
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class PromptHelperNativeIconCheck
+{
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint ExtractIconEx(
+        string szFileName,
+        int nIconIndex,
+        IntPtr phiconLarge,
+        IntPtr phiconSmall,
+        uint nIcons);
+}
+"@
+
+    $iconCount = [PromptHelperNativeIconCheck]::ExtractIconEx(
+        $resolvedExe,
+        -1,
+        [IntPtr]::Zero,
+        [IntPtr]::Zero,
+        0)
+
+    if ($iconCount -lt 1) {
+        Write-Error "Published PromptHelper.exe contains no embedded icon resources."
+        exit 1
+    }
+
+    Write-Host "Published EXE exposes $iconCount embedded icon group(s)."
 }
 
 Write-Host "Release asset verification completed successfully."

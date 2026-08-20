@@ -58,29 +58,44 @@ public sealed class AppSettingsRepository
     public SettingsLoadResult LoadOrRecover()
     {
         SettingsReadState primaryState = ReadState(_settingsPath);
-        SettingsReadState backupState = ReadState(_backupPath);
 
-        // 1. Missing / Missing -> Default settings
-        if (primaryState is SettingsReadState.Missing && backupState is SettingsReadState.Missing)
-        {
-            return new SettingsLoadResult(new AppSettings(), false, null);
-        }
-
-        // 2. Primary Future Schema -> HALT immediately without touching files or reading backup
+        // Future primary: authoritative incompatibility. Do not even inspect backup.
         if (primaryState is SettingsReadState.FutureSchema futurePrimary)
         {
             throw new UnsupportedSettingsSchemaException(futurePrimary.Version);
         }
 
-        // 3. Primary Unreadable -> HALT immediately without falling back to stale backup
+        // Temporarily unreadable primary: do not substitute stale backup.
         if (primaryState is SettingsReadState.Unreadable unreadablePrimary)
         {
             throw new SettingsReadException(_settingsPath, unreadablePrimary.Error);
         }
 
-        // 4. Primary Valid -> Authoritative primary wins
         if (primaryState is SettingsReadState.Valid validPrimary)
         {
+            SettingsReadState backupState = ReadState(_backupPath);
+
+            if (backupState is SettingsReadState.FutureSchema futureBackup)
+            {
+                return new SettingsLoadResult(
+                    validPrimary.Settings,
+                    RecoveredFromBackup: false,
+                    Warning:
+                        $"Prompt Helper loaded settings.json, but settings.backup.json " +
+                        $"was created by a newer settings schema ({futureBackup.Version}). " +
+                        "The newer backup was preserved and was not overwritten.");
+            }
+
+            if (backupState is SettingsReadState.Unreadable unreadableBackup)
+            {
+                return new SettingsLoadResult(
+                    validPrimary.Settings,
+                    RecoveredFromBackup: false,
+                    Warning:
+                        $"Prompt Helper loaded settings.json, but settings.backup.json " +
+                        $"could not be inspected or synchronized: {unreadableBackup.Error.Message}");
+            }
+
             string? warning = null;
             try
             {
@@ -89,65 +104,83 @@ public sealed class AppSettingsRepository
                 {
                     Directory.CreateDirectory(dir);
                 }
+
                 string json = JsonSerializer.Serialize(validPrimary.Settings, JsonOptions);
                 _writer.Write(_backupPath, json);
             }
             catch (Exception ex)
             {
-                warning = $"Settings loaded from settings.json, but settings.backup.json could not be synchronized: {ex.Message}";
+                warning =
+                    "Settings loaded from settings.json, but settings.backup.json " +
+                    $"could not be synchronized: {ex.Message}";
             }
 
             return new SettingsLoadResult(validPrimary.Settings, false, warning);
         }
 
-        // 5. Primary Corrupt or Missing -> Backup evaluation
-        if (primaryState is SettingsReadState.Corrupt or SettingsReadState.Missing)
+        // Backup is only needed after a missing/corrupt primary.
+        SettingsReadState backupStateForRecovery = ReadState(_backupPath);
+
+        if (primaryState is SettingsReadState.Missing &&
+            backupStateForRecovery is SettingsReadState.Missing)
         {
-            if (backupState is SettingsReadState.FutureSchema futureBackup)
-            {
-                throw new UnsupportedSettingsSchemaException(futureBackup.Version);
-            }
-
-            if (backupState is SettingsReadState.Unreadable unreadableBackup)
-            {
-                throw new SettingsReadException(_backupPath, unreadableBackup.Error);
-            }
-
-            if (backupState is SettingsReadState.Valid validBackup)
-            {
-                string? warning = "Prompt Helper recovered its data-folder setting from settings.backup.json.\r\n\r\nThe configured prompt library itself was not modified by this recovery.";
-                try
-                {
-                    string? dir = Path.GetDirectoryName(_settingsPath);
-                    if (!string.IsNullOrEmpty(dir))
-                    {
-                        Directory.CreateDirectory(dir);
-                    }
-                    string json = JsonSerializer.Serialize(validBackup.Settings, JsonOptions);
-                    _writer.Write(_settingsPath, json);
-                }
-                catch (Exception ex)
-                {
-                    warning = $"Settings were recovered from settings.backup.json, but settings.json could not be restored: {ex.Message}";
-                }
-
-                return new SettingsLoadResult(validBackup.Settings, true, warning);
-            }
-
-            if (backupState is SettingsReadState.Corrupt corruptBackup)
-            {
-                throw new InvalidDataException(
-                    $"Settings file '{_backupPath}' is corrupt: {corruptBackup.Error.Message}", corruptBackup.Error);
-            }
-
-            if (primaryState is SettingsReadState.Corrupt corruptPrimary)
-            {
-                throw new InvalidDataException(
-                    $"Settings file '{_settingsPath}' is corrupt and no valid backup exists: {corruptPrimary.Error.Message}", corruptPrimary.Error);
-            }
+            return new SettingsLoadResult(new AppSettings(), false, null);
         }
 
-        throw new InvalidDataException($"Failed to load settings from '{_settingsPath}'.");
+        if (backupStateForRecovery is SettingsReadState.FutureSchema futureBackupForRecovery)
+        {
+            throw new UnsupportedSettingsSchemaException(futureBackupForRecovery.Version);
+        }
+
+        if (backupStateForRecovery is SettingsReadState.Unreadable unreadableBackupForRecovery)
+        {
+            throw new SettingsReadException(_backupPath, unreadableBackupForRecovery.Error);
+        }
+
+        if (backupStateForRecovery is SettingsReadState.Valid validBackup)
+        {
+            string warning =
+                "Prompt Helper recovered its data-folder setting from settings.backup.json.\r\n\r\n" +
+                "The configured prompt library itself was not modified by this recovery.";
+
+            try
+            {
+                string? dir = Path.GetDirectoryName(_settingsPath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                string json = JsonSerializer.Serialize(validBackup.Settings, JsonOptions);
+                _writer.Write(_settingsPath, json);
+            }
+            catch (Exception ex)
+            {
+                warning =
+                    "Settings were recovered from settings.backup.json, but settings.json " +
+                    $"could not be restored: {ex.Message}";
+            }
+
+            return new SettingsLoadResult(validBackup.Settings, true, warning);
+        }
+
+        if (backupStateForRecovery is SettingsReadState.Corrupt corruptBackup)
+        {
+            throw new InvalidDataException(
+                $"Settings file '{_backupPath}' is corrupt: {corruptBackup.Error.Message}",
+                corruptBackup.Error);
+        }
+
+        if (primaryState is SettingsReadState.Corrupt corruptPrimary)
+        {
+            throw new InvalidDataException(
+                $"Settings file '{_settingsPath}' is corrupt and no valid backup exists: " +
+                corruptPrimary.Error.Message,
+                corruptPrimary.Error);
+        }
+
+        throw new InvalidDataException(
+            $"Failed to load settings from '{_settingsPath}'.");
     }
 
     public AppSettings Load()

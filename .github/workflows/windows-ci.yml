@@ -9,7 +9,13 @@ on:
       stress:
         description: 'Run full test suite five times'
         required: false
-        default: 'false'
+        default: false
+        type: boolean
+      release_gate:
+        description: 'Require all final release assets, including the real app icon'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build-test-publish:
@@ -24,6 +30,15 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Verify repository release assets
+        shell: pwsh
+        run: ./tools/VerifyReleaseAssets.ps1
+
+      - name: Verify strict release assets
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate }}
+        shell: pwsh
+        run: ./tools/VerifyReleaseAssets.ps1 -RequireIcon
 
       - name: Restore
         run: dotnet restore PromptHelper.slnx
@@ -71,6 +86,14 @@ jobs:
               throw "Missing required publish artifact: $path"
             }
           }
+
+      - name: Verify published executable release assets
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate }}
+        shell: pwsh
+        run: >
+          ./tools/VerifyReleaseAssets.ps1
+          -RequireIcon
+          -PublishedExe artifacts/publish-check/PromptHelper.exe
 
       - name: Upload test results
         if: always()

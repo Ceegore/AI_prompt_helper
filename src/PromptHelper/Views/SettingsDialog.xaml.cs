@@ -15,19 +15,25 @@ public partial class SettingsDialog : Window
     private readonly AppSettingsRepository _settingsRepo;
     private readonly DataFolderMigrationService _migrationService;
     private readonly IUserConfirmationService _confirmationService;
+    private readonly DataFolderTransitionCoordinator _coordinator;
     private string _selectedDataFolder;
 
     public SettingsDialog(
         string currentDataFolder,
         AppSettingsRepository settingsRepo,
         DataFolderMigrationService migrationService,
-        IUserConfirmationService? confirmationService = null)
+        IUserConfirmationService? confirmationService = null,
+        DataFolderTransitionCoordinator? coordinator = null)
     {
         InitializeComponent();
         _currentDataFolder = currentDataFolder ?? throw new ArgumentNullException(nameof(currentDataFolder));
         _settingsRepo = settingsRepo ?? throw new ArgumentNullException(nameof(settingsRepo));
         _migrationService = migrationService ?? throw new ArgumentNullException(nameof(migrationService));
         _confirmationService = confirmationService ?? new WpfUserConfirmationService(this);
+        _coordinator = coordinator ?? new DataFolderTransitionCoordinator(
+            _settingsRepo,
+            _migrationService,
+            _confirmationService);
 
         _selectedDataFolder = _currentDataFolder;
         DataFolderTextBox.Text = _selectedDataFolder;
@@ -64,11 +70,17 @@ public partial class SettingsDialog : Window
                 ? DataFolderTextBox.Text
                 : _selectedDataFolder;
 
-            string normalizedCurrent = Path.GetFullPath(_currentDataFolder.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string normalizedSelected = Path.GetFullPath((targetInput ?? string.Empty).Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            DataFolderTransitionResult result = _coordinator.RequestTransition(targetInput ?? string.Empty);
 
-            if (string.Equals(normalizedCurrent, normalizedSelected, StringComparison.OrdinalIgnoreCase))
+            if (!result.Changed)
             {
+                if (result.ExistingLibrarySelected)
+                {
+                    // User cancelled confirmation, remain on dialog
+                    return;
+                }
+
+                // Same directory selected, no-op
                 RestartRequired = false;
                 try
                 {
@@ -81,43 +93,12 @@ public partial class SettingsDialog : Window
                 return;
             }
 
-            if (AppInstanceLock.IsExistingLockHeld(normalizedSelected))
-            {
-                MessageBox.Show(
-                    this,
-                    "The selected Prompt Helper library is currently in use by another running instance.\r\n\r\nClose that instance and try again.",
-                    "Target Library In Use",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-                return;
-            }
-
-            var result = _migrationService.PrepareTarget(_currentDataFolder, targetInput ?? string.Empty);
-
-            if (result.ExistingLibraryFound)
-            {
-                bool confirmed = _confirmationService.ConfirmExistingLibrarySwitch(
-                    result.NormalizedTargetRoot,
-                    result.Warning);
-
-                if (!confirmed)
-                {
-                    return;
-                }
-            }
-
-            var saveResult = _settingsRepo.Save(new AppSettings
-            {
-                SchemaVersion = AppSettings.CurrentSchemaVersion,
-                DataRootPath = result.NormalizedTargetRoot
-            });
-
-            if (!result.ExistingLibraryFound)
+            if (!result.ExistingLibrarySelected)
             {
                 string successMessage = "The data folder has been saved.\r\n\r\nPrompt Helper will use it the next time the application starts.\r\n\r\nThe previous data folder was left unchanged as a safety copy.";
-                if (!string.IsNullOrEmpty(saveResult.Warning))
+                if (!string.IsNullOrEmpty(result.Warning))
                 {
-                    successMessage += $"\r\n\r\nWarning: {saveResult.Warning}";
+                    successMessage += $"\r\n\r\nWarning: {result.Warning}";
                 }
 
                 MessageBox.Show(
@@ -127,17 +108,17 @@ public partial class SettingsDialog : Window
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
             }
-            else if (!string.IsNullOrEmpty(saveResult.Warning))
+            else if (!string.IsNullOrEmpty(result.Warning))
             {
                 MessageBox.Show(
                     this,
-                    $"The data folder setting was updated, but a warning occurred:\r\n\r\n{saveResult.Warning}",
+                    $"The data folder setting was updated, but a warning occurred:\r\n\r\n{result.Warning}",
                     "Settings Warning",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
 
-            RestartRequired = true;
+            RestartRequired = result.RestartRequired;
             try
             {
                 DialogResult = true;
@@ -147,7 +128,14 @@ public partial class SettingsDialog : Window
             }
             Close();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or InvalidDataException or ArgumentException or NotSupportedException or InvalidOperationException)
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            SecurityException or
+            InvalidDataException or
+            ArgumentException or
+            NotSupportedException or
+            InvalidOperationException)
         {
             MessageBox.Show(
                 this,

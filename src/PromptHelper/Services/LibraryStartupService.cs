@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using System.Security;
 using System.Text.Json;
 using PromptHelper.Models;
 
@@ -43,17 +45,42 @@ public sealed class LibraryStartupService
             throw new UnsupportedLibrarySchemaException(primaryFuture.Version);
         }
 
-        // Valid primary always wins immediately (PLH4-002)
+        if (primaryResult is MetadataReadResult.Unreadable primaryUnreadable)
+        {
+            throw new IOException($"The library metadata could not be read: {primaryUnreadable.Error.Message}", primaryUnreadable.Error);
+        }
+
+        // Valid primary always wins immediately
         if (primaryResult is MetadataReadResult.Valid primaryValid)
         {
             string? backupWarning = null;
-            try
+            MetadataReadResult backupState = ReadMetadataState(_paths.LibraryBackupPath);
+
+            if (backupState is MetadataReadResult.FutureSchema futureBackup)
             {
-                _libraryRepo.SynchronizeBackup(primaryValid.Document);
+                backupWarning =
+                    $"The current library.json was loaded, but library.backup.json uses " +
+                    $"newer schema version {futureBackup.Version}. " +
+                    "The newer backup was preserved and was not overwritten.";
             }
-            catch (Exception)
+            else if (backupState is MetadataReadResult.Unreadable unreadableBackup)
             {
-                backupWarning = "The library was loaded from library.json, but its safety backup could not be synchronized.";
+                backupWarning =
+                    "The current library.json was loaded, but its safety backup could not " +
+                    $"be synchronized: {unreadableBackup.Error.Message}";
+            }
+            else
+            {
+                try
+                {
+                    _libraryRepo.SynchronizeBackup(primaryValid.Document);
+                }
+                catch (Exception)
+                {
+                    backupWarning =
+                        "The library was loaded from library.json, but its safety backup " +
+                        "could not be synchronized.";
+                }
             }
 
             TryRemoveStaleMarker();
@@ -62,6 +89,18 @@ public sealed class LibraryStartupService
 
         // 2. Inspect Backup only when primary is corrupt or missing
         MetadataReadResult backupResult = ReadMetadataState(_paths.LibraryBackupPath);
+
+        if (backupResult is MetadataReadResult.FutureSchema backupFuture)
+        {
+            throw new UnsupportedLibrarySchemaException(backupFuture.Version);
+        }
+
+        if (backupResult is MetadataReadResult.Unreadable unreadableBackupRecovery)
+        {
+            throw new IOException(
+                $"The library backup could not be read: {unreadableBackupRecovery.Error.Message}",
+                unreadableBackupRecovery.Error);
+        }
 
         // Primary is Corrupt
         if (primaryResult is MetadataReadResult.Corrupt primaryCorrupt)
@@ -85,11 +124,6 @@ public sealed class LibraryStartupService
         }
 
         // Primary is Missing
-        if (backupResult is MetadataReadResult.FutureSchema backupFuture)
-        {
-            throw new UnsupportedLibrarySchemaException(backupFuture.Version);
-        }
-
         if (backupResult is MetadataReadResult.Valid backupValidFromMissing)
         {
             var commitResult = _libraryRepo.Commit(backupValidFromMissing.Document);
@@ -221,6 +255,13 @@ public sealed class LibraryStartupService
         {
             return new MetadataReadResult.Missing();
         }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            SecurityException)
+        {
+            return new MetadataReadResult.Unreadable(ex);
+        }
 
         try
         {
@@ -243,5 +284,6 @@ public sealed class LibraryStartupService
         public sealed record Corrupt(string RawContent) : MetadataReadResult;
         public sealed record Missing : MetadataReadResult;
         public sealed record FutureSchema(int Version) : MetadataReadResult;
+        public sealed record Unreadable(Exception Error) : MetadataReadResult;
     }
 }

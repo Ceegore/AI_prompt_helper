@@ -320,4 +320,214 @@ public sealed class DataFolderMigrationServiceTests
         // Closed again -> not held
         Assert.IsFalse(AppInstanceLock.IsExistingLockHeld(temp.Root));
     }
+
+    [TestMethod]
+    public void CRUU4_003_Snapshot_document_is_parsed_from_same_bytes_that_are_hashed()
+    {
+        using var source = new TestDirectory();
+        SeedValidLibrary(source.Root, out Guid promptId);
+
+        var migration = new DataFolderMigrationService();
+        var snapshot = migration.CaptureSourceSnapshot(source.Root);
+
+        byte[] actualBytes = File.ReadAllBytes(Path.Combine(source.Root, "library.json"));
+        CollectionAssert.AreEqual(actualBytes, snapshot.LibraryBytes);
+        Assert.IsTrue(snapshot.PromptHashes.ContainsKey(promptId));
+    }
+
+    [TestMethod]
+    public void CRUU4_003_Snapshot_referenced_prompt_set_matches_snapshot_document()
+    {
+        using var source = new TestDirectory();
+        SeedValidLibrary(source.Root, out Guid promptId);
+
+        var migration = new DataFolderMigrationService();
+        var snapshot = migration.CaptureSourceSnapshot(source.Root);
+
+        Assert.AreEqual(snapshot.Document.Prompts.Count, snapshot.PromptHashes.Count);
+        foreach (var prompt in snapshot.Document.Prompts)
+        {
+            Assert.IsTrue(snapshot.PromptHashes.ContainsKey(prompt.Id));
+        }
+    }
+
+    [TestMethod]
+    public void CRUU4_004_Altered_but_valid_target_library_bytes_abort_and_rollback()
+    {
+        using var source = new TestDirectory();
+        using var targetParent = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        string target = Path.Combine(targetParent.Root, "Target");
+
+        var ops = new FaultInjectingMigrationFileOps
+        {
+            OnCopyFile = (src, dst, overwrite) =>
+            {
+                if (Path.GetFileName(src).Equals("library.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    string json = File.ReadAllText(src);
+                    // Add whitespace to change bytes while remaining valid JSON
+                    json = json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 1   ");
+                    File.WriteAllText(dst, json);
+                    return;
+                }
+
+                File.Copy(src, dst, overwrite);
+            }
+        };
+
+        var service = new DataFolderMigrationService(fileOps: ops);
+
+        Assert.Throws<IOException>(() =>
+            service.PrepareTarget(source.Root, target));
+
+        Assert.IsFalse(File.Exists(Path.Combine(target, "library.json")));
+    }
+
+    [TestMethod]
+    public void CRUU4_005_Snapshot_read_failure_leaves_nonexistent_target_nonexistent()
+    {
+        using var source = new TestDirectory();
+        using var parent = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        string target = Path.Combine(parent.Root, "NewTarget");
+
+        var ops = new FaultInjectingMigrationFileOps
+        {
+            OnReadAllBytes = path =>
+            {
+                if (Path.GetFileName(path).Equals("library.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException("Injected source snapshot failure");
+                }
+
+                return File.ReadAllBytes(path);
+            }
+        };
+
+        var migration = new DataFolderMigrationService(fileOps: ops);
+
+        Assert.Throws<IOException>(() =>
+            migration.PrepareTarget(source.Root, target));
+
+        Assert.IsFalse(
+            Directory.Exists(target),
+            "A source snapshot failure must not leave a target directory behind.");
+    }
+
+    [TestMethod]
+    public void CRUU4_006_Damaged_current_prompt_does_not_block_switch_to_existing_good_library()
+    {
+        using var current = new TestDirectory();
+        using var target = new TestDirectory();
+
+        SeedValidLibrary(current.Root, out Guid currentPrompt);
+        SeedValidLibrary(target.Root, out _);
+
+        File.Delete(Path.Combine(
+            current.Root,
+            "prompts",
+            $"{currentPrompt:N}.md"));
+
+        var migration = new DataFolderMigrationService();
+
+        DataFolderChangeResult result =
+            migration.PrepareTarget(current.Root, target.Root);
+
+        Assert.IsTrue(result.ExistingLibraryFound);
+        Assert.IsFalse(result.Copied);
+    }
+
+    [TestMethod]
+    public void CRUU4_006_Damaged_current_prompt_still_blocks_copy_to_empty_target()
+    {
+        using var current = new TestDirectory();
+        using var target = new TestDirectory();
+
+        SeedValidLibrary(current.Root, out Guid currentPrompt);
+
+        File.Delete(Path.Combine(
+            current.Root,
+            "prompts",
+            $"{currentPrompt:N}.md"));
+
+        var migration = new DataFolderMigrationService();
+
+        Assert.Throws<InvalidDataException>(() =>
+            migration.PrepareTarget(current.Root, target.Root));
+
+        Assert.IsFalse(File.Exists(Path.Combine(target.Root, "library.json")));
+    }
+
+    [TestMethod]
+    public void CRUU4_007_Backup_only_target_with_missing_prompt_is_not_recoverable()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+
+        Guid missingPrompt = Guid.NewGuid();
+
+        File.WriteAllText(
+            Path.Combine(target.Root, "library.backup.json"),
+            $$"""
+            {
+              "schemaVersion": 1,
+              "categories": [],
+              "prompts": [
+                {
+                  "id": "{{missingPrompt}}",
+                  "categoryId": null,
+                  "sortOrder": 10,
+                  "title": "Missing"
+                }
+              ]
+            }
+            """);
+
+        var migration = new DataFolderMigrationService();
+
+        Assert.Throws<InvalidDataException>(() =>
+            migration.PrepareTarget(source.Root, target.Root));
+    }
+
+    [TestMethod]
+    public void CRUU4_007_Backup_only_target_with_all_prompt_bodies_is_selectable()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+
+        Guid promptId = Guid.NewGuid();
+        string promptsDir = Path.Combine(target.Root, "prompts");
+        Directory.CreateDirectory(promptsDir);
+        File.WriteAllText(Path.Combine(promptsDir, $"{promptId:N}.md"), "Prompt body");
+
+        File.WriteAllText(
+            Path.Combine(target.Root, "library.backup.json"),
+            $$"""
+            {
+              "schemaVersion": 1,
+              "categories": [],
+              "prompts": [
+                {
+                  "id": "{{promptId}}",
+                  "categoryId": null,
+                  "sortOrder": 10,
+                  "title": "Present"
+                }
+              ]
+            }
+            """);
+
+        var migration = new DataFolderMigrationService();
+        var result = migration.PrepareTarget(source.Root, target.Root);
+
+        Assert.IsTrue(result.ExistingLibraryFound);
+        Assert.IsFalse(result.Copied);
+    }
 }
