@@ -1,5 +1,8 @@
+using System;
 using System.IO;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 using PromptHelper.Services;
 
@@ -191,5 +194,130 @@ public sealed class DataFolderMigrationServiceTests
         var migration = new DataFolderMigrationService();
         Assert.Throws<InvalidDataException>(() => migration.PrepareTarget(sourceDir.Root, targetDir.Root));
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
+    }
+
+    [TestMethod]
+    public void CRUU3_006_Prompt_changed_during_copy_aborts_and_rolls_back()
+    {
+        using var sourceDir = new TestDirectory();
+        using var targetDir = new TestDirectory();
+        SeedValidLibrary(sourceDir.Root, out Guid promptId);
+
+        var faultOps = new FaultInjectingMigrationFileOps();
+        int readCount = 0;
+        faultOps.OnReadAllBytes = path =>
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (path.EndsWith($"{promptId:N}.md"))
+            {
+                readCount++;
+                if (readCount > 1)
+                {
+                    // Return mutated bytes on second read
+                    return [.. bytes, 0x21];
+                }
+            }
+            return bytes;
+        };
+
+        var migration = new DataFolderMigrationService(fileOps: faultOps);
+        Assert.Throws<IOException>(() => migration.PrepareTarget(sourceDir.Root, targetDir.Root));
+
+        // Target library.json must be deleted in rollback
+        Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
+    }
+
+    [TestMethod]
+    public void CRUU3_009_Valid_backup_only_target_detected_existing_and_not_overwritten()
+    {
+        using var sourceDir = new TestDirectory();
+        using var targetDir = new TestDirectory();
+        SeedValidLibrary(sourceDir.Root, out Guid sourcePromptId);
+
+        // Put a valid library.backup.json in target but NO primary library.json
+        string targetBackup = Path.Combine(targetDir.Root, "library.backup.json");
+        string validBackupDoc = "{\"schemaVersion\": 1, \"categories\": [], \"prompts\": []}";
+        File.WriteAllText(targetBackup, validBackupDoc);
+
+        var migration = new DataFolderMigrationService();
+        var result = migration.PrepareTarget(sourceDir.Root, targetDir.Root);
+
+        Assert.IsTrue(result.ExistingLibraryFound);
+        Assert.IsFalse(result.Copied);
+        Assert.IsNotNull(result.Warning);
+        Assert.IsTrue(result.Warning.Contains("recoverable Prompt Helper safety backup"));
+        Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
+    }
+
+    [TestMethod]
+    public void CRUU3_009_Corrupt_primary_valid_backup_target_rejected_conservatively()
+    {
+        using var sourceDir = new TestDirectory();
+        using var targetDir = new TestDirectory();
+        SeedValidLibrary(sourceDir.Root, out _);
+
+        File.WriteAllText(Path.Combine(targetDir.Root, "library.json"), "corrupt primary");
+        File.WriteAllText(Path.Combine(targetDir.Root, "library.backup.json"), "{\"schemaVersion\": 1, \"categories\": [], \"prompts\": []}");
+
+        var migration = new DataFolderMigrationService();
+        Assert.Throws<InvalidDataException>(() => migration.PrepareTarget(sourceDir.Root, targetDir.Root));
+    }
+
+    [TestMethod]
+    public void CRUU3_009_Future_schema_target_rejected()
+    {
+        using var sourceDir = new TestDirectory();
+        using var targetDir = new TestDirectory();
+        SeedValidLibrary(sourceDir.Root, out _);
+
+        File.WriteAllText(Path.Combine(targetDir.Root, "library.json"), "{\"schemaVersion\": 99, \"categories\": [], \"prompts\": []}");
+
+        var migration = new DataFolderMigrationService();
+        var ex = Assert.Throws<UnsupportedLibrarySchemaException>(() => migration.PrepareTarget(sourceDir.Root, targetDir.Root));
+        Assert.AreEqual(99, ex.SchemaVersion);
+    }
+
+    [TestMethod]
+    public void CRUU3_010_Capability_probe_failure_on_new_target_rolls_back_migrated_files()
+    {
+        using var sourceDir = new TestDirectory();
+        using var targetDir = new TestDirectory();
+        SeedValidLibrary(sourceDir.Root, out _);
+
+        var baseWriter = new AtomicTextWriter();
+        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        {
+            ShouldFail = (_, callNum) => callNum == 2
+        };
+        var capability = new DataRootCapabilityValidator(faultWriter);
+
+        var migration = new DataFolderMigrationService(capabilityValidator: capability);
+        Assert.Throws<IOException>(() => migration.PrepareTarget(sourceDir.Root, targetDir.Root));
+
+        // Rolled back
+        Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
+    }
+
+    [TestMethod]
+    public void CRUU3_012_Target_lock_held_is_detected()
+    {
+        using var temp = new TestDirectory();
+        string lockFile = Path.Combine(temp.Root, ".app.lock");
+
+        // Before lock file exists -> not held
+        Assert.IsFalse(AppInstanceLock.IsExistingLockHeld(temp.Root));
+
+        // Create lock file but don't hold open -> not held
+        File.WriteAllText(lockFile, "lock");
+        Assert.IsFalse(AppInstanceLock.IsExistingLockHeld(temp.Root));
+
+        // Hold open exclusively -> held
+        using (var stream = new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.IsTrue(AppInstanceLock.IsExistingLockHeld(temp.Root));
+        }
+
+        // Closed again -> not held
+        Assert.IsFalse(AppInstanceLock.IsExistingLockHeld(temp.Root));
     }
 }

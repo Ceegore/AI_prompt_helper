@@ -15,12 +15,14 @@ public partial class MainWindow : Window
     private readonly PromptCopyCoordinator _copyCoordinator;
     private readonly AppSettingsRepository _settingsRepo;
     private readonly DataFolderMigrationService _migrationService;
+    private readonly IApplicationLifetime _applicationLifetime;
 
     public MainWindow(
         MainViewModel viewModel,
         IClipboardService clipboardService,
         AppSettingsRepository? settingsRepo = null,
-        DataFolderMigrationService? migrationService = null)
+        DataFolderMigrationService? migrationService = null,
+        IApplicationLifetime? applicationLifetime = null)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
@@ -28,14 +30,25 @@ public partial class MainWindow : Window
         _copyCoordinator = new PromptCopyCoordinator(_viewModel, _clipboardService);
         _settingsRepo = settingsRepo ?? new AppSettingsRepository();
         _migrationService = migrationService ?? new DataFolderMigrationService();
+        _applicationLifetime = applicationLifetime ?? new WpfApplicationLifetime();
         DataContext = _viewModel;
 
+        TryApplyApplicationIcon();
+    }
+
+    private void TryApplyApplicationIcon()
+    {
         try
         {
             var iconUri = new Uri("pack://application:,,,/PromptHelper;component/Assets/PromptHelper.ico", UriKind.Absolute);
+            System.Windows.Resources.StreamResourceInfo? resource = Application.GetResourceStream(iconUri);
+            if (resource is null)
+            {
+                return;
+            }
             Icon = System.Windows.Media.Imaging.BitmapFrame.Create(iconUri);
         }
-        catch
+        catch (IOException)
         {
             // Optional icon resource if not yet packaged
         }
@@ -47,7 +60,19 @@ public partial class MainWindow : Window
         {
             Owner = this
         };
-        dialog.ShowDialog();
+        bool? result = dialog.ShowDialog();
+
+        if (result == true && dialog.RestartRequired)
+        {
+            MessageBox.Show(
+                this,
+                "Data folder changed\n\nPrompt Helper must close now so the previous data folder cannot be modified after the migration snapshot.\n\nOpen Prompt Helper again to use the selected data folder.",
+                "Restart Required",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            _applicationLifetime.RequestShutdown();
+        }
     }
 
     private void BreadcrumbButton_Click(object sender, RoutedEventArgs e)

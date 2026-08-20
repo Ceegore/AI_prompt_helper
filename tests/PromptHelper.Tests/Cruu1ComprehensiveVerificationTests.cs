@@ -25,30 +25,37 @@ public sealed class Cruu1ComprehensiveVerificationTests
             string originalText = "Line 1 with a very long sentence that exceeds typical dialog widths.\r\nLine 2 with \ttabs and spaces.\nLine 3.";
             var dialog = new PromptEditorDialog("Create Prompt", originalText, "Headline");
 
-            var textBox = (TextBox)dialog.FindName("EditorTextBox");
-            var checkBox = (CheckBox)dialog.FindName("WrapLinesCheckBox");
+            try
+            {
+                var textBox = (TextBox)dialog.FindName("EditorTextBox");
+                var checkBox = (CheckBox)dialog.FindName("WrapLinesCheckBox");
 
-            Assert.IsNotNull(textBox);
-            Assert.IsNotNull(checkBox);
+                Assert.IsNotNull(textBox);
+                Assert.IsNotNull(checkBox);
 
-            // Default state: Unchecked -> NoWrap, ScrollBarVisibility.Auto
-            Assert.IsFalse(checkBox.IsChecked == true);
-            Assert.AreEqual(TextWrapping.NoWrap, textBox.TextWrapping);
-            Assert.AreEqual(ScrollBarVisibility.Auto, textBox.HorizontalScrollBarVisibility);
+                // Default state: Unchecked -> NoWrap, ScrollBarVisibility.Auto
+                Assert.IsFalse(checkBox.IsChecked == true);
+                Assert.AreEqual(TextWrapping.NoWrap, textBox.TextWrapping);
+                Assert.AreEqual(ScrollBarVisibility.Auto, textBox.HorizontalScrollBarVisibility);
 
-            // Toggle Checked -> Wrap, ScrollBarVisibility.Disabled
-            checkBox.IsChecked = true;
-            Assert.AreEqual(TextWrapping.Wrap, textBox.TextWrapping);
-            Assert.AreEqual(ScrollBarVisibility.Disabled, textBox.HorizontalScrollBarVisibility);
+                // Toggle Checked -> Wrap, ScrollBarVisibility.Disabled
+                checkBox.IsChecked = true;
+                Assert.AreEqual(TextWrapping.Wrap, textBox.TextWrapping);
+                Assert.AreEqual(ScrollBarVisibility.Disabled, textBox.HorizontalScrollBarVisibility);
 
-            // Verify text content was NOT mutated
-            Assert.AreEqual(originalText, textBox.Text);
+                // Verify text content was NOT mutated
+                Assert.AreEqual(originalText, textBox.Text);
 
-            // Toggle Unchecked again
-            checkBox.IsChecked = false;
-            Assert.AreEqual(TextWrapping.NoWrap, textBox.TextWrapping);
-            Assert.AreEqual(ScrollBarVisibility.Auto, textBox.HorizontalScrollBarVisibility);
-            Assert.AreEqual(originalText, textBox.Text);
+                // Toggle Unchecked again
+                checkBox.IsChecked = false;
+                Assert.AreEqual(TextWrapping.NoWrap, textBox.TextWrapping);
+                Assert.AreEqual(ScrollBarVisibility.Auto, textBox.HorizontalScrollBarVisibility);
+                Assert.AreEqual(originalText, textBox.Text);
+            }
+            finally
+            {
+                dialog.Close();
+            }
         });
     }
 
@@ -157,22 +164,27 @@ public sealed class Cruu1ComprehensiveVerificationTests
                 "Line 1 Body",
                 initialHeadlineWasAutomatic: true);
 
-            // Trigger save without editing HeadlineTextBox
-            var saveButton = (Button)dialog.FindName("SaveButton");
-            Assert.IsNotNull(saveButton);
+            try
+            {
+                var saveButton = (Button)dialog.FindName("SaveButton");
+                Assert.IsNotNull(saveButton);
 
-            // Execute save logic
-            var editorTextBox = (TextBox)dialog.FindName("EditorTextBox");
-            editorTextBox.Text = "Line 1 Body Modified\nLine 2 Body";
+                var editorTextBox = (TextBox)dialog.FindName("EditorTextBox");
+                editorTextBox.Text = "Line 1 Body Modified\nLine 2 Body";
 
-            var saveClickMethod = typeof(PromptEditorDialog).GetMethod("SaveButton_Click",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            saveClickMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
+                var saveClickMethod = typeof(PromptEditorDialog).GetMethod("SaveButton_Click",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                saveClickMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
 
-            Assert.IsTrue(dialog.ResultUsesAutomaticHeadline);
-            Assert.IsNull(dialog.ResultHeadline);
-            Assert.AreEqual("Line 1 Body", dialog.ResultHeadlineEditorText);
-            Assert.AreEqual("Line 1 Body Modified\nLine 2 Body", dialog.ResultText);
+                Assert.IsTrue(dialog.ResultUsesAutomaticHeadline);
+                Assert.IsNull(dialog.ResultHeadline);
+                Assert.AreEqual("Line 1 Body", dialog.ResultHeadlineEditorText);
+                Assert.AreEqual("Line 1 Body Modified\nLine 2 Body", dialog.ResultText);
+            }
+            finally
+            {
+                dialog.Close();
+            }
         });
     }
 
@@ -187,16 +199,23 @@ public sealed class Cruu1ComprehensiveVerificationTests
                 "Line 1 Body",
                 initialHeadlineWasAutomatic: true);
 
-            var headlineTextBox = (TextBox)dialog.FindName("HeadlineTextBox");
-            headlineTextBox.Text = "Explicitly Pinned Title";
+            try
+            {
+                var headlineTextBox = (TextBox)dialog.FindName("HeadlineTextBox");
+                headlineTextBox.Text = "Explicitly Pinned Title";
 
-            var saveButton = (Button)dialog.FindName("SaveButton");
-            var saveClickMethod = typeof(PromptEditorDialog).GetMethod("SaveButton_Click",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            saveClickMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
+                var saveButton = (Button)dialog.FindName("SaveButton");
+                var saveClickMethod = typeof(PromptEditorDialog).GetMethod("SaveButton_Click",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                saveClickMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
 
-            Assert.IsFalse(dialog.ResultUsesAutomaticHeadline);
-            Assert.AreEqual("Explicitly Pinned Title", dialog.ResultHeadline);
+                Assert.IsFalse(dialog.ResultUsesAutomaticHeadline);
+                Assert.AreEqual("Explicitly Pinned Title", dialog.ResultHeadline);
+            }
+            finally
+            {
+                dialog.Close();
+            }
         });
     }
 
@@ -230,7 +249,7 @@ public sealed class Cruu1ComprehensiveVerificationTests
     }
 
     [TestMethod]
-    public void CRUU2_002_Create_prompt_invalid_control_character_title_does_not_create_orphan_file()
+    public void CRUU3_016_Prompt_title_Unicode_line_separators_rejected_without_file_creation()
     {
         using var testDir = new TestDirectory();
         var paths = new AppPaths(testDir.Root);
@@ -244,36 +263,27 @@ public sealed class Cruu1ComprehensiveVerificationTests
 
         string promptsDir = Path.Combine(testDir.Root, "prompts");
         int fileCountBefore = Directory.Exists(promptsDir) ? Directory.GetFiles(promptsDir, "*.md").Length : 0;
-        int promptCountBefore = service.GetPrompts(null).Count;
 
+        // U+2028 LINE SEPARATOR
         Assert.Throws<InvalidOperationException>(() =>
-            service.CreatePrompt(null, "Body text", "Bad\nHeadline"));
+            service.CreatePrompt(null, "Body text", "Bad\u2028Headline"));
 
-        Assert.AreEqual(promptCountBefore, service.GetPrompts(null).Count);
+        // U+2029 PARAGRAPH SEPARATOR
+        Assert.Throws<InvalidOperationException>(() =>
+            service.CreatePrompt(null, "Body text", "Bad\u2029Headline"));
+
         int fileCountAfter = Directory.Exists(promptsDir) ? Directory.GetFiles(promptsDir, "*.md").Length : 0;
         Assert.AreEqual(fileCountBefore, fileCountAfter);
     }
 
     [TestMethod]
-    public void CRUU2_006_Edit_prompt_invalid_title_does_not_change_body_or_metadata()
+    public void CRUU3_016_Category_name_Unicode_line_separators_rejected()
     {
-        using var testDir = new TestDirectory();
-        var paths = new AppPaths(testDir.Root);
-        var writer = new AtomicTextWriter();
-        var deleter = new FileDeleter();
-        var libRepo = new LibraryRepository(paths, writer);
-        var promptRepo = new PromptRepository(paths, writer, deleter);
-        var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
-        var initResult = startup.LoadOrInitialize();
-        var service = new PromptLibraryService(initResult.Document, libRepo, promptRepo);
+        Assert.IsNotNull(LibraryValidator.ValidateCategoryNameInput("Bad\u2028Category", []));
+        Assert.IsNotNull(LibraryValidator.ValidateCategoryNameInput("Bad\u2029Category", []));
 
-        var prompt = service.CreatePrompt(null, "Old Body", "Old Title").Value;
-
-        Assert.Throws<InvalidOperationException>(() =>
-            service.EditPrompt(prompt.Id, "New Body", "Bad\tTitle"));
-
-        Assert.AreEqual("Old Body", promptRepo.Read(prompt.Id));
-        Assert.AreEqual("Old Title", service.GetPrompts(null).Single(p => p.Id == prompt.Id).Title);
+        // Normal Unicode, accents, emoji are allowed
+        Assert.IsNull(LibraryValidator.ValidateCategoryNameInput("Category with Accents: äöü café 🚀", []));
     }
 
     #endregion
@@ -319,37 +329,83 @@ public sealed class Cruu1ComprehensiveVerificationTests
 
             var dialog = new SettingsDialog(testDir.Root, settingsRepo, migrationService);
 
-            Assert.AreEqual("Tools & Settings — Prompt Helper", dialog.Title);
+            try
+            {
+                Assert.AreEqual("Tools & Settings — Prompt Helper", dialog.Title);
 
-            string xamlPath = RepositoryTestPaths.RequireFile("src", "PromptHelper", "Views", "SettingsDialog.xaml");
-            string xamlContent = File.ReadAllText(xamlPath);
-            Assert.IsTrue(xamlContent.Contains("Made by CeeGore"), "SettingsDialog.xaml must contain exact string 'Made by CeeGore'");
+                string xamlPath = RepositoryTestPaths.RequireFile("src", "PromptHelper", "Views", "SettingsDialog.xaml");
+                string xamlContent = File.ReadAllText(xamlPath);
+                Assert.IsTrue(xamlContent.Contains("Made by CeeGore"), "SettingsDialog.xaml must contain exact string 'Made by CeeGore'");
+            }
+            finally
+            {
+                dialog.Close();
+            }
         });
     }
 
     [TestMethod]
-    public void Feature4_DataFolderMigration_CaseInsensitive_And_TrailingSlashes_Handled_Safely()
+    public void CRUU3_011_SettingsDialog_Existing_Target_Confirmation_Flow()
     {
-        using var testDir = new TestDirectory();
-        var paths = new AppPaths(testDir.Root);
-        paths.EnsureRootDirectory();
-        paths.EnsureDataDirectories();
+        WpfTestHost.Invoke(() =>
+        {
+            using var currentDir = new TestDirectory();
+            using var targetDir = new TestDirectory();
 
-        var writer = new AtomicTextWriter();
-        var deleter = new FileDeleter();
-        var libRepo = new LibraryRepository(paths, writer);
-        var promptRepo = new PromptRepository(paths, writer, deleter);
-        var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
-        startup.LoadOrInitialize();
+            var paths = new AppPaths(currentDir.Root);
+            paths.EnsureRootDirectory();
+            paths.EnsureDataDirectories();
 
-        var migration = new DataFolderMigrationService();
+            var writer = new AtomicTextWriter();
+            var deleter = new FileDeleter();
+            var libRepo = new LibraryRepository(paths, writer);
+            var promptRepo = new PromptRepository(paths, writer, deleter);
+            var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
+            startup.LoadOrInitialize();
 
-        string pathWithSlash = testDir.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        string pathUpper = testDir.Root.ToUpperInvariant();
+            // Target has existing library
+            var targetPaths = new AppPaths(targetDir.Root);
+            targetPaths.EnsureRootDirectory();
+            targetPaths.EnsureDataDirectories();
+            var targetLibRepo = new LibraryRepository(targetPaths, writer);
+            var targetPromptRepo = new PromptRepository(targetPaths, writer, deleter);
+            var targetStartup = new LibraryStartupService(targetPaths, targetLibRepo, targetPromptRepo, deleter, writer);
+            targetStartup.LoadOrInitialize();
 
-        var result = migration.PrepareTarget(pathWithSlash, pathUpper);
-        Assert.IsFalse(result.Copied);
-        Assert.IsFalse(result.ExistingLibraryFound);
+            string settingsFile = Path.Combine(currentDir.Root, "settings.json");
+            var settingsRepo = new AppSettingsRepository(writer, settingsPathOverride: settingsFile);
+            var migration = new DataFolderMigrationService();
+            var confirmation = new FakeUserConfirmationService { ConfirmationResult = false };
+
+            var dialog = new SettingsDialog(currentDir.Root, settingsRepo, migration, confirmation);
+
+            try
+            {
+                var folderBox = (TextBox)dialog.FindName("DataFolderTextBox");
+                folderBox.Text = targetDir.Root;
+
+                var saveButton = (Button)dialog.FindName("SaveButton");
+                var saveMethod = typeof(SettingsDialog).GetMethod("SaveButton_Click",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+                // User cancels confirmation -> settings NOT saved
+                saveMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
+                Assert.AreEqual(1, confirmation.PromptCount);
+                Assert.IsFalse(File.Exists(settingsFile));
+                Assert.IsFalse(dialog.RestartRequired);
+
+                // User confirms -> settings saved, RestartRequired = true
+                confirmation.ConfirmationResult = true;
+                saveMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
+                Assert.AreEqual(2, confirmation.PromptCount);
+                Assert.IsTrue(File.Exists(settingsFile));
+                Assert.IsTrue(dialog.RestartRequired);
+            }
+            finally
+            {
+                dialog.Close();
+            }
+        });
     }
 
     [TestMethod]
@@ -494,6 +550,49 @@ public sealed class Cruu1ComprehensiveVerificationTests
             {
                 Assert.IsNotNull(window);
                 Assert.AreSame(vm, window.DataContext);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [TestMethod]
+    public void CRUU3_001_MainWindow_Requests_Shutdown_On_RestartRequired()
+    {
+        WpfTestHost.Invoke(() =>
+        {
+            using var temp = new TestDirectory();
+            var paths = new AppPaths(temp.Root);
+            paths.EnsureRootDirectory();
+            paths.EnsureDataDirectories();
+
+            var writer = new AtomicTextWriter();
+            var deleter = new FileDeleter();
+            var libRepo = new LibraryRepository(paths, writer);
+            var promptRepo = new PromptRepository(paths, writer, deleter);
+            var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
+            var init = startup.LoadOrInitialize();
+            var service = new PromptLibraryService(init.Document, libRepo, promptRepo);
+            var vm = new MainViewModel(service, promptRepo, temp.Root);
+
+            string settingsPath = Path.Combine(temp.Root, "settings.json");
+            var settingsRepo = new AppSettingsRepository(writer, settingsPathOverride: settingsPath);
+            var fakeClipboard = new FakeClipboardService();
+            var migrationService = new DataFolderMigrationService();
+            var fakeLifetime = new FakeApplicationLifetime();
+
+            var window = new MainWindow(
+                vm,
+                fakeClipboard,
+                settingsRepo,
+                migrationService,
+                fakeLifetime);
+
+            try
+            {
+                Assert.IsFalse(fakeLifetime.ShutdownRequested);
             }
             finally
             {

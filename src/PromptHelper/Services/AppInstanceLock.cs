@@ -40,6 +40,32 @@ public sealed class AppInstanceLock : IDisposable
         }
     }
 
+    public static bool IsExistingLockHeld(string root)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+
+        string lockPath = Path.Combine(root, ".app.lock");
+        if (!File.Exists(lockPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                lockPath,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None);
+
+            return false;
+        }
+        catch (IOException ex) when (IsSharingOrLockViolation(ex))
+        {
+            return true;
+        }
+    }
+
     public void Dispose()
     {
         _stream.Dispose();

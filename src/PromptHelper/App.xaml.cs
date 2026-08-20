@@ -91,11 +91,13 @@ public partial class App : Application
             MainWindow = mainWindow;
             mainWindow.Show();
 
-            if (settingsResult.RecoveredFromBackup && !string.IsNullOrEmpty(settingsResult.Warning))
+            if (!string.IsNullOrEmpty(settingsResult.Warning))
             {
                 MessageBox.Show(
                     settingsResult.Warning,
-                    "Settings Recovery Notice",
+                    settingsResult.RecoveredFromBackup
+                        ? "Settings Recovery Notice"
+                        : "Settings Backup Warning",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
@@ -108,6 +110,15 @@ public partial class App : Application
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
+        }
+        catch (UnsupportedSettingsSchemaException ex)
+        {
+            MessageBox.Show(
+                $"Prompt Helper settings were created by a newer version (schema {ex.SchemaVersion}) and cannot be safely opened by this build.\n\nInstall the newer Prompt Helper version or restore compatible settings.",
+                "Unsupported Settings Schema",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown();
         }
         catch (Exception ex)
         {

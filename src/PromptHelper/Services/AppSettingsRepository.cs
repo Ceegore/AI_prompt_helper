@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using System.Security;
 using System.Text.Json;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
@@ -12,6 +14,15 @@ public sealed class AppSettingsRepository
         WriteIndented = true,
         PropertyNameCaseInsensitive = true
     };
+
+    private abstract record SettingsReadState
+    {
+        public sealed record Missing : SettingsReadState;
+        public sealed record Valid(AppSettings Settings) : SettingsReadState;
+        public sealed record FutureSchema(int Version) : SettingsReadState;
+        public sealed record Corrupt(Exception Error) : SettingsReadState;
+        public sealed record Unreadable(Exception Error) : SettingsReadState;
+    }
 
     private readonly string _settingsPath;
     private readonly string _backupPath;
@@ -46,31 +57,31 @@ public sealed class AppSettingsRepository
 
     public SettingsLoadResult LoadOrRecover()
     {
-        bool primaryExists = File.Exists(_settingsPath);
-        bool backupExists = File.Exists(_backupPath);
+        SettingsReadState primaryState = ReadState(_settingsPath);
+        SettingsReadState backupState = ReadState(_backupPath);
 
-        if (!primaryExists && !backupExists)
+        // 1. Missing / Missing -> Default settings
+        if (primaryState is SettingsReadState.Missing && backupState is SettingsReadState.Missing)
         {
             return new SettingsLoadResult(new AppSettings(), false, null);
         }
 
-        AppSettings? primarySettings = null;
-        Exception? primaryException = null;
-
-        if (primaryExists)
+        // 2. Primary Future Schema -> HALT immediately without touching files or reading backup
+        if (primaryState is SettingsReadState.FutureSchema futurePrimary)
         {
-            try
-            {
-                primarySettings = ReadAndValidate(_settingsPath);
-            }
-            catch (Exception ex)
-            {
-                primaryException = ex;
-            }
+            throw new UnsupportedSettingsSchemaException(futurePrimary.Version);
         }
 
-        if (primarySettings != null)
+        // 3. Primary Unreadable -> HALT immediately without falling back to stale backup
+        if (primaryState is SettingsReadState.Unreadable unreadablePrimary)
         {
+            throw new SettingsReadException(_settingsPath, unreadablePrimary.Error);
+        }
+
+        // 4. Primary Valid -> Authoritative primary wins
+        if (primaryState is SettingsReadState.Valid validPrimary)
+        {
+            string? warning = null;
             try
             {
                 string? dir = Path.GetDirectoryName(_backupPath);
@@ -78,66 +89,65 @@ public sealed class AppSettingsRepository
                 {
                     Directory.CreateDirectory(dir);
                 }
-                string json = JsonSerializer.Serialize(primarySettings, JsonOptions);
+                string json = JsonSerializer.Serialize(validPrimary.Settings, JsonOptions);
                 _writer.Write(_backupPath, json);
-            }
-            catch
-            {
-                // Best effort backup synchronization
-            }
-
-            return new SettingsLoadResult(primarySettings, false, null);
-        }
-
-        AppSettings? backupSettings = null;
-        Exception? backupException = null;
-
-        if (backupExists)
-        {
-            try
-            {
-                backupSettings = ReadAndValidate(_backupPath);
             }
             catch (Exception ex)
             {
-                backupException = ex;
+                warning = $"Settings loaded from settings.json, but settings.backup.json could not be synchronized: {ex.Message}";
             }
+
+            return new SettingsLoadResult(validPrimary.Settings, false, warning);
         }
 
-        if (backupSettings != null)
+        // 5. Primary Corrupt or Missing -> Backup evaluation
+        if (primaryState is SettingsReadState.Corrupt or SettingsReadState.Missing)
         {
-            try
+            if (backupState is SettingsReadState.FutureSchema futureBackup)
             {
-                string? dir = Path.GetDirectoryName(_settingsPath);
-                if (!string.IsNullOrEmpty(dir))
+                throw new UnsupportedSettingsSchemaException(futureBackup.Version);
+            }
+
+            if (backupState is SettingsReadState.Unreadable unreadableBackup)
+            {
+                throw new SettingsReadException(_backupPath, unreadableBackup.Error);
+            }
+
+            if (backupState is SettingsReadState.Valid validBackup)
+            {
+                string? warning = "Prompt Helper recovered its data-folder setting from settings.backup.json.\r\n\r\nThe configured prompt library itself was not modified by this recovery.";
+                try
                 {
-                    Directory.CreateDirectory(dir);
+                    string? dir = Path.GetDirectoryName(_settingsPath);
+                    if (!string.IsNullOrEmpty(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+                    string json = JsonSerializer.Serialize(validBackup.Settings, JsonOptions);
+                    _writer.Write(_settingsPath, json);
                 }
-                string json = JsonSerializer.Serialize(backupSettings, JsonOptions);
-                _writer.Write(_settingsPath, json);
+                catch (Exception ex)
+                {
+                    warning = $"Settings were recovered from settings.backup.json, but settings.json could not be restored: {ex.Message}";
+                }
+
+                return new SettingsLoadResult(validBackup.Settings, true, warning);
             }
-            catch
+
+            if (backupState is SettingsReadState.Corrupt corruptBackup)
             {
-                // Best effort primary restoration
+                throw new InvalidDataException(
+                    $"Settings file '{_backupPath}' is corrupt: {corruptBackup.Error.Message}", corruptBackup.Error);
             }
 
-            return new SettingsLoadResult(
-                backupSettings,
-                true,
-                "Prompt Helper recovered its data-folder setting from settings.backup.json.\r\n\r\nThe configured prompt library itself was not modified by this recovery.");
+            if (primaryState is SettingsReadState.Corrupt corruptPrimary)
+            {
+                throw new InvalidDataException(
+                    $"Settings file '{_settingsPath}' is corrupt and no valid backup exists: {corruptPrimary.Error.Message}", corruptPrimary.Error);
+            }
         }
 
-        string errorMsg = $"Failed to load settings from both primary ('{_settingsPath}') and backup ('{_backupPath}').";
-        if (primaryException != null)
-        {
-            errorMsg += $"\nPrimary error: {primaryException.Message}";
-        }
-        if (backupException != null)
-        {
-            errorMsg += $"\nBackup error: {backupException.Message}";
-        }
-
-        throw new InvalidDataException(errorMsg, primaryException ?? backupException);
+        throw new InvalidDataException($"Failed to load settings from '{_settingsPath}'.");
     }
 
     public AppSettings Load()
@@ -148,6 +158,12 @@ public sealed class AppSettingsRepository
     public SettingsSaveResult Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+
+        if (settings.SchemaVersion != AppSettings.CurrentSchemaVersion)
+        {
+            throw new InvalidDataException(
+                $"Cannot save unsupported settings schema version: {settings.SchemaVersion}.");
+        }
 
         settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
         string json = JsonSerializer.Serialize(settings, JsonOptions);
@@ -191,12 +207,48 @@ public sealed class AppSettingsRepository
             "PromptHelper");
     }
 
-    private AppSettings ReadAndValidate(string path)
+    private static SettingsReadState ReadState(string path)
     {
-        string json = File.ReadAllText(path);
+        string json;
+
+        try
+        {
+            json = File.ReadAllText(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return new SettingsReadState.Missing();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new SettingsReadState.Missing();
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            return new SettingsReadState.Unreadable(ex);
+        }
+
+        try
+        {
+            return new SettingsReadState.Valid(ParseAndValidate(json, path));
+        }
+        catch (UnsupportedSettingsSchemaException ex)
+        {
+            return new SettingsReadState.FutureSchema(ex.SchemaVersion);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return new SettingsReadState.Corrupt(ex);
+        }
+    }
+
+    private static AppSettings ParseAndValidate(string json, string path)
+    {
         if (string.IsNullOrWhiteSpace(json))
         {
-            throw new InvalidDataException($"Settings file is empty or whitespace: '{path}'");
+            throw new InvalidDataException(
+                $"Settings file is empty or whitespace: '{path}'");
         }
 
         AppSettings? settings;
@@ -206,17 +258,25 @@ public sealed class AppSettingsRepository
         }
         catch (JsonException ex)
         {
-            throw new InvalidDataException($"Failed to deserialize settings from '{path}': {ex.Message}", ex);
+            throw new InvalidDataException(
+                $"Failed to deserialize settings from '{path}': {ex.Message}", ex);
         }
 
-        if (settings == null)
+        if (settings is null)
         {
-            throw new InvalidDataException($"Settings deserialized to null from '{path}'");
+            throw new InvalidDataException(
+                $"Settings deserialized to null from '{path}'.");
         }
 
-        if (settings.SchemaVersion != 1)
+        if (settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
         {
-            throw new InvalidDataException($"Unsupported settings schema version: {settings.SchemaVersion}");
+            throw new UnsupportedSettingsSchemaException(settings.SchemaVersion);
+        }
+
+        if (settings.SchemaVersion < AppSettings.CurrentSchemaVersion)
+        {
+            throw new InvalidDataException(
+                $"Invalid settings schema version: {settings.SchemaVersion}.");
         }
 
         settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);

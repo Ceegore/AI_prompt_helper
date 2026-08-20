@@ -297,7 +297,10 @@ Standard:
 %LOCALAPPDATA%\PromptHelper
 ```
 
-Über das Schraubenschlüssel-Symbol **Tools and settings** oben rechts kannst du einen beliebigen anderen Datenordner auf deiner Festplatte auswählen. Beim Speichern wird der bisherige Datenbestand sicher in den neuen Zielordner kopiert (sofern dort nicht bereits eine Prompt-Helper-Bibliothek liegt). Die Änderung wird nach einem Neustart von Prompt Helper aktiv.
+Über das Schraubenschlüssel-Symbol **Tools and settings** oben rechts kannst du einen beliebigen anderen Datenordner auf deiner Festplatte auswählen:
+
+- **Bei Auswahl eines LEEREN Ordners:** Dein aktueller Datenbestand wird vollständig in den neuen Zielordner kopiert. Dein bisheriger Ordner bleibt als unberührte Sicherheitskopie erhalten. Prompt Helper schließt sich unmittelbar nach dem Speichern, damit der alte Stand nicht versehentlich weiterverändert wird. Öffne Prompt Helper danach einfach wieder, um mit dem neuen Ordner weiterzuarbeiten.
+- **Bei Auswahl eines Ordners mit BESTEHENDER Bibliothek:** Dein bisheriger Bestand wird **weder kopiert, noch überschrieben oder zusammengeführt**. Nach einer expliziten Sicherheitsabfrage schließt sich Prompt Helper. Beim nächsten Öffnen lädt Prompt Helper die bereits vorhandene Bibliothek aus dem Zielordner.
 
 Die Bootstrap-Konfiguration (wo sich der aktive Datenordner befindet) verbleibt immer fest unter:
 
@@ -1386,6 +1389,41 @@ Stattdessen:
 2. kompletten Datenordner sichern.
 3. Fehler dokumentieren.
 4. erst danach gezielt analysieren.
+
+---
+
+# 14.8 Datenordner wechseln und migrieren (Tools & Settings)
+
+Über das Schraubenschlüssel-Symbol oben rechts (**🔧 Tools and settings**) kannst du den aktiven Datenordner einsehen und ändern.
+
+## 1. Migration in einen neuen / leeren Ordner
+
+Wenn du einen leeren Ordner auswählst:
+
+- Prompt Helper kopiert deinen aktuellen Bibliotheksbestand (Metadaten und Prompt-Dateien) vollständig dorthin.
+- Dein bisheriger Datenordner bleibt als unberührte Sicherheitskopie erhalten.
+- Prompt Helper schließt sich nach dem Speichern sofort, damit keine Änderungen mehr im alten Ordner landen.
+- **Nach dem Schließen:** Starte Prompt Helper einfach wieder. Das Programm öffnet nun den neuen Zielordner.
+
+## 2. Wechsel zu einer bereits existierenden Bibliothek
+
+Wenn der ausgewählte Ordner bereits eine Prompt-Helper-Bibliothek enthält:
+
+- Dein aktueller Bestand wird **weder kopiert, noch überschrieben oder zusammengeführt**.
+- Ein Sicherheitsdialog weist dich explizit darauf hin.
+- Bestätigst du den Wechsel, wird die Einstellung aktualisiert und Prompt Helper schließt sich.
+- Beim nächsten Start öffnet Prompt Helper die bereits im Zielordner vorhandene Bibliothek.
+
+## 3. Gültigkeitsregeln für den Zielordner
+
+Ein Zielordner muss folgenden Kriterien entsprechen:
+
+- Es muss ein vollständiger, absoluter Pfad sein.
+- Es darf kein Laufwerks-Hauptverzeichnis sein (z. B. `C:\` oder `D:\`).
+- Er darf nicht innerhalb des aktuellen Datenordners liegen und ihn nicht umschließen.
+- Er darf nicht innerhalb des Bootstrap-Ordners (`%LOCALAPPDATA%\PromptHelper`) liegen oder ihn umschließen (außer es ist exakt der Standard-Pfad).
+- Er muss normale Schreib-, Ersetzungs- (`File.Replace`) und Löschzugriffe gestatten.
+- Er darf nicht zeitgleich durch eine andere laufende Prompt-Helper-Instanz gesperrt sein.
 
 ---
 

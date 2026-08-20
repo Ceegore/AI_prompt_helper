@@ -130,9 +130,9 @@ public static class LibraryValidator
                     throw new InvalidDataException($"Prompt '{prompt.Id}' title must be trimmed.");
                 }
 
-                if (prompt.Title.Any(char.IsControl))
+                if (TextUtilities.ContainsForbiddenSingleLineCharacter(prompt.Title))
                 {
-                    throw new InvalidDataException($"Prompt '{prompt.Id}' title cannot contain control characters.");
+                    throw new InvalidDataException($"Prompt '{prompt.Id}' title cannot contain control characters or line breaks.");
                 }
             }
         }
@@ -151,9 +151,9 @@ public static class LibraryValidator
             return "Category name cannot be whitespace only.";
         }
 
-        if (trimmed.Any(char.IsControl))
+        if (TextUtilities.ContainsForbiddenSingleLineCharacter(trimmed))
         {
-            return "Category name cannot contain control characters.";
+            return "Category name cannot contain control characters or line breaks.";
         }
 
         if (TextUtilities.GetTextElementCount(trimmed) > MaximumCategoryNameLength)
@@ -186,9 +186,9 @@ public static class LibraryValidator
             throw new InvalidDataException($"Category name '{name}' must be trimmed.");
         }
 
-        if (name.Any(char.IsControl))
+        if (TextUtilities.ContainsForbiddenSingleLineCharacter(name))
         {
-            throw new InvalidDataException($"Category name '{name}' cannot contain control characters.");
+            throw new InvalidDataException($"Category name '{name}' cannot contain control characters or line breaks.");
         }
 
         if (TextUtilities.GetTextElementCount(name) > MaximumCategoryNameLength)

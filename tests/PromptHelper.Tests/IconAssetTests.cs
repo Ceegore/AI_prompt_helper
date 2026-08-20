@@ -23,6 +23,32 @@ public sealed class IconAssetTests
     }
 
     [TestMethod]
+    public void VerifyReleaseAssets_script_exists_and_contains_RequireIcon_parameter()
+    {
+        string scriptPath = RepositoryTestPaths.RequireFile("tools", "VerifyReleaseAssets.ps1");
+        string scriptContent = File.ReadAllText(scriptPath);
+
+        StringAssert.Contains(scriptContent, "RequireIcon");
+        StringAssert.Contains(scriptContent, "MISSING_REQUIRED_ASSET");
+        StringAssert.Contains(scriptContent, "PromptHelperLogo.svg");
+        StringAssert.Contains(scriptContent, "PromptHelper.ico");
+    }
+
+    [TestMethod]
+    public void WindowsCI_workflow_contains_self_contained_publish_and_TRX_upload()
+    {
+        string workflowPath = RepositoryTestPaths.RequireFile(".github", "workflows", "windows-ci.yml");
+        string workflowContent = File.ReadAllText(workflowPath);
+
+        StringAssert.Contains(workflowContent, "dotnet publish");
+        StringAssert.Contains(workflowContent, "win-x64");
+        StringAssert.Contains(workflowContent, "--self-contained true");
+        StringAssert.Contains(workflowContent, "artifacts/publish-check/PromptHelper.exe");
+        StringAssert.Contains(workflowContent, "if: always()");
+        StringAssert.Contains(workflowContent, "timeout-minutes: 20");
+    }
+
+    [TestMethod]
     public void PromptHelperIco_when_present_is_valid_and_contains_required_square_frames()
     {
         string root = RepositoryTestPaths.Root;

@@ -99,6 +99,18 @@ internal static class WpfTestHost
             dispatcher.InvokeShutdown();
         }
 
-        thread?.Join(TimeSpan.FromSeconds(10));
+        if (thread != null && !thread.Join(TimeSpan.FromSeconds(10)))
+        {
+            throw new TimeoutException(
+                "WPF test host did not stop within 10 seconds.");
+        }
+
+        lock (Sync)
+        {
+            _thread = null;
+            _dispatcher = null;
+            _startupException = null;
+            Ready.Reset();
+        }
     }
 }

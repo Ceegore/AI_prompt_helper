@@ -62,7 +62,7 @@ public sealed class AppSettingsRepositoryTests
     }
 
     [TestMethod]
-    public void Load_unsupported_schema_version_throws_InvalidDataException()
+    public void Load_unsupported_schema_version_throws_UnsupportedSettingsSchemaException()
     {
         using var testDir = new TestDirectory();
         string settingsPath = Path.Combine(testDir.Root, "settings.json");
@@ -70,7 +70,8 @@ public sealed class AppSettingsRepositoryTests
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
 
-        Assert.Throws<InvalidDataException>(() => repo.Load());
+        var ex = Assert.Throws<UnsupportedSettingsSchemaException>(() => repo.Load());
+        Assert.AreEqual(99, ex.SchemaVersion);
     }
 
     [TestMethod]
@@ -139,6 +140,160 @@ public sealed class AppSettingsRepositoryTests
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
 
         Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU3_002_Primary_future_schema_with_valid_old_backup_stops_without_recovery()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
+
+        File.WriteAllText(settingsPath, "{\"schemaVersion\": 2, \"dataRootPath\": \"C:\\\\Future\"}");
+        File.WriteAllText(backupPath, "{\"schemaVersion\": 1, \"dataRootPath\": \"C:\\\\Old\"}");
+
+        byte[] primaryBefore = File.ReadAllBytes(settingsPath);
+        byte[] backupBefore = File.ReadAllBytes(backupPath);
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+
+        var ex = Assert.Throws<UnsupportedSettingsSchemaException>(() => repo.LoadOrRecover());
+        Assert.AreEqual(2, ex.SchemaVersion);
+
+        // Verify neither primary nor backup was modified
+        CollectionAssert.AreEqual(primaryBefore, File.ReadAllBytes(settingsPath));
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(backupPath));
+    }
+
+    [TestMethod]
+    public void CRUU3_002_Missing_primary_with_future_schema_backup_stops()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
+
+        File.WriteAllText(backupPath, "{\"schemaVersion\": 5, \"dataRootPath\": \"C:\\\\FutureBackup\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+
+        var ex = Assert.Throws<UnsupportedSettingsSchemaException>(() => repo.LoadOrRecover());
+        Assert.AreEqual(5, ex.SchemaVersion);
+    }
+
+    [TestMethod]
+    public void CRUU3_002_Corrupt_primary_with_future_schema_backup_stops()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
+
+        File.WriteAllText(settingsPath, "corrupt json text");
+        File.WriteAllText(backupPath, "{\"schemaVersion\": 3, \"dataRootPath\": \"C:\\\\FutureBackup\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+
+        var ex = Assert.Throws<UnsupportedSettingsSchemaException>(() => repo.LoadOrRecover());
+        Assert.AreEqual(3, ex.SchemaVersion);
+    }
+
+    [TestMethod]
+    public void CRUU3_003_Locked_valid_primary_does_not_fall_back_to_stale_backup()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
+
+        string customPrimary = Path.Combine(testDir.Root, "PrimaryData");
+        string customBackup = Path.Combine(testDir.Root, "StaleBackupData");
+
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{customPrimary.Replace("\\", "\\\\")}\"}}");
+        File.WriteAllText(backupPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{customBackup.Replace("\\", "\\\\")}\"}}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+
+        // Lock the primary settings file
+        using var lockStream = new FileStream(
+            settingsPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        Assert.Throws<SettingsReadException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU3_004_Valid_primary_backup_sync_failure_returns_warning_and_primary_settings()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
+        string customPath = Path.Combine(testDir.Root, "ValidPrimaryData");
+
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{customPath.Replace("\\", "\\\\")}\"}}");
+
+        var baseWriter = new AtomicTextWriter();
+        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        {
+            ShouldFail = (path, _) => path.EndsWith("settings.backup.json")
+        };
+
+        var repo = new AppSettingsRepository(
+            writer: faultWriter,
+            settingsPathOverride: settingsPath,
+            backupPathOverride: backupPath);
+
+        var result = repo.LoadOrRecover();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.IsNotNull(result.Warning);
+        Assert.IsTrue(result.Warning.Contains("settings.backup.json could not be synchronized"));
+        Assert.AreEqual(Path.GetFullPath(customPath), result.Settings.DataRootPath);
+    }
+
+    [TestMethod]
+    public void CRUU3_004_Backup_recovery_primary_restore_failure_returns_warning_and_backup_settings()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
+        string customPath = Path.Combine(testDir.Root, "BackupRecoveredData");
+
+        File.WriteAllText(settingsPath, "corrupt primary");
+        File.WriteAllText(backupPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{customPath.Replace("\\", "\\\\")}\"}}");
+
+        var baseWriter = new AtomicTextWriter();
+        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        {
+            ShouldFail = (path, _) => path.EndsWith("settings.json")
+        };
+
+        var repo = new AppSettingsRepository(
+            writer: faultWriter,
+            settingsPathOverride: settingsPath,
+            backupPathOverride: backupPath);
+
+        var result = repo.LoadOrRecover();
+
+        Assert.IsTrue(result.RecoveredFromBackup);
+        Assert.IsNotNull(result.Warning);
+        Assert.IsTrue(result.Warning.Contains("settings.json could not be restored"));
+        Assert.AreEqual(Path.GetFullPath(customPath), result.Settings.DataRootPath);
+    }
+
+    [TestMethod]
+    public void CRUU3_005_Save_invalid_schema_writes_nothing()
+    {
+        using var testDir = new TestDirectory();
+        string settingsPath = Path.Combine(testDir.Root, "settings.json");
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
+
+        Assert.Throws<InvalidDataException>(() => repo.Save(new AppSettings
+        {
+            SchemaVersion = 99,
+            DataRootPath = Path.Combine(testDir.Root, "SomeTarget")
+        }));
+
+        Assert.IsFalse(File.Exists(settingsPath));
     }
 
     [TestMethod]

@@ -44,4 +44,19 @@ public static class TextUtilities
         string normalized = Regex.Replace(content, @"\s+", " ").Trim();
         return TruncateWithEllipsis(normalized, maxTextElements);
     }
+
+    public static bool ContainsForbiddenSingleLineCharacter(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        foreach (char c in value)
+        {
+            if (char.IsControl(c) || c is '\u2028' or '\u2029')
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

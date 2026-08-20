@@ -575,7 +575,7 @@ public sealed class PromptLibraryService
             return null;
         }
 
-        if (trimmed.Any(char.IsControl))
+        if (TextUtilities.ContainsForbiddenSingleLineCharacter(trimmed))
         {
             throw new InvalidOperationException(
                 "Headline cannot contain line breaks, tabs, or other control characters.");
