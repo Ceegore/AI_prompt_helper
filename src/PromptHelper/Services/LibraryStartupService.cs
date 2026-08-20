@@ -43,13 +43,9 @@ public sealed class LibraryStartupService
             throw new UnsupportedLibrarySchemaException(primaryFuture.Version);
         }
 
-        // 2. Inspect Backup
-        MetadataReadResult backupResult = ReadMetadataState(_paths.LibraryBackupPath);
-
-        // Matrix resolution
+        // Valid primary always wins immediately (PLH4-002)
         if (primaryResult is MetadataReadResult.Valid primaryValid)
         {
-            // Valid primary always wins
             string? backupWarning = null;
             try
             {
@@ -64,6 +60,10 @@ public sealed class LibraryStartupService
             return new StartupResult(primaryValid.Document, false, backupWarning);
         }
 
+        // 2. Inspect Backup only when primary is corrupt or missing
+        MetadataReadResult backupResult = ReadMetadataState(_paths.LibraryBackupPath);
+
+        // Primary is Corrupt
         if (primaryResult is MetadataReadResult.Corrupt primaryCorrupt)
         {
             if (backupResult is MetadataReadResult.Valid backupValid)
