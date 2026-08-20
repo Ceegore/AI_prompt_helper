@@ -14,6 +14,7 @@ public sealed class FaultInjectingAtomicTextWriter : IAtomicTextWriter
     }
 
     public Func<string, int, bool>? ShouldFail { get; set; }
+    public Func<string, int, Exception?>? FailureFactory { get; set; }
 
     public int CallCount => _callNumber;
 
@@ -21,7 +22,15 @@ public sealed class FaultInjectingAtomicTextWriter : IAtomicTextWriter
     {
         _callNumber++;
 
-        if (ShouldFail?.Invoke(targetPath, _callNumber) == true)
+        if (FailureFactory != null)
+        {
+            var ex = FailureFactory(targetPath, _callNumber);
+            if (ex != null)
+            {
+                throw ex;
+            }
+        }
+        else if (ShouldFail?.Invoke(targetPath, _callNumber) == true)
         {
             throw new IOException("Injected write failure.");
         }

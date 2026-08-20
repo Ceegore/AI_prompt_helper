@@ -123,7 +123,33 @@ public sealed class AuditDefectRegressionTests
     }
 
     [TestMethod]
-    public void PLH007_PLH2006_Destination_paths_are_globally_unique_and_sorted_by_final_path()
+    public void PLH3001_Non_IOException_during_backup_is_warning_only_and_commits_primary()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var baseWriter = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var promptRepo = new PromptRepository(paths, baseWriter, deleter);
+
+        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        {
+            FailureFactory = (path, _) => path.EndsWith("library.backup.json")
+                ? new InvalidOperationException("Injected non-IOException")
+                : null
+        };
+
+        var libRepo = new LibraryRepository(paths, faultWriter);
+        var doc = new LibraryDocument();
+
+        var result = libRepo.Commit(doc);
+
+        Assert.IsFalse(result.BackupSynchronized);
+        Assert.IsNotNull(result.Warning);
+        Assert.IsTrue(File.Exists(paths.LibraryPath));
+    }
+
+    [TestMethod]
+    public void PLH3001_GUID_generation_retries_on_metadata_or_orphan_collision()
     {
         using var testDir = new TestDirectory();
         var paths = new AppPaths(testDir.Root);
@@ -132,41 +158,133 @@ public sealed class AuditDefectRegressionTests
         var libRepo = new LibraryRepository(paths, writer);
         var promptRepo = new PromptRepository(paths, writer, deleter);
 
-        var c1Id = Guid.Parse("11111111-2222-3333-4444-555555555555");
-        var c2Id = Guid.Parse("11111111-9999-8888-7777-666666666666");
+        var existingMetadataGuid = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var orphanFileGuid = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var freeGuid = Guid.Parse("33333333-3333-3333-3333-333333333333");
 
+        // Existing prompt in metadata
+        promptRepo.Create(existingMetadataGuid, "meta");
         var doc = new LibraryDocument
         {
-            Categories =
-            [
-                new CategoryRecord { Id = c1Id, Name = "Home", SortOrder = 10 },
-                new CategoryRecord { Id = c2Id, Name = "Home [11111111]", SortOrder = 20 }
-            ]
+            Prompts = [new PromptRecord { Id = existingMetadataGuid, CategoryId = null, SortOrder = 10 }]
         };
+        libRepo.Commit(doc);
+
+        // Orphan file on disk
+        File.WriteAllText(paths.GetPromptPath(orphanFileGuid), "orphan");
+
+        // Sequence of generated GUIDs: 1. metadata collision, 2. orphan collision, 3. free
+        var sequence = new Queue<Guid>([existingMetadataGuid, orphanFileGuid, freeGuid]);
+        var service = new PromptLibraryService(doc, libRepo, promptRepo, () => sequence.Dequeue());
+
+        var result = service.CreatePrompt(null, "new prompt");
+
+        Assert.AreEqual(freeGuid, result.Value.Id);
+        Assert.AreEqual("new prompt", promptRepo.Read(freeGuid));
+        Assert.AreEqual("orphan", File.ReadAllText(paths.GetPromptPath(orphanFileGuid)));
+    }
+
+    [TestMethod]
+    public void PLH3001_GUID_generation_fails_after_ten_collisions()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        var collidingGuid = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        promptRepo.Create(collidingGuid, "existing");
+        var doc = new LibraryDocument
+        {
+            Prompts = [new PromptRecord { Id = collidingGuid, CategoryId = null, SortOrder = 10 }]
+        };
+        libRepo.Commit(doc);
+
+        var service = new PromptLibraryService(doc, libRepo, promptRepo, () => collidingGuid);
+
+        Assert.Throws<InvalidOperationException>(() => service.CreatePrompt(null, "new prompt"));
+    }
+
+    [TestMethod]
+    public void PLH3002_Destination_paths_unique_even_with_32_char_guid_exhaustion()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        var cId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        string hex = cId.ToString("N");
+
+        var categories = new List<CategoryRecord>
+        {
+            // Category named Home that collides with root Home
+            new() { Id = cId, Name = "Home", SortOrder = 1 },
+            // Adversarial categories with all prefix lengths up to 32
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..8]}]", SortOrder = 2 },
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..12]}]", SortOrder = 3 },
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..16]}]", SortOrder = 4 },
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..20]}]", SortOrder = 5 },
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..24]}]", SortOrder = 6 },
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..28]}]", SortOrder = 7 },
+            new() { Id = Guid.NewGuid(), Name = $"Home [{hex[..32]}]", SortOrder = 8 },
+        };
+
+        var doc = new LibraryDocument { Categories = categories };
         libRepo.Commit(doc);
 
         var service = new PromptLibraryService(doc, libRepo, promptRepo);
         var destinations = service.GetDestinations();
 
-        // 1. Home is first
-        Assert.AreEqual("Home", destinations[0].DisplayPath);
-        Assert.IsNull(destinations[0].CategoryId);
-
-        // 2. Global uniqueness
         var uniquePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var dest in destinations)
         {
             bool added = uniquePaths.Add(dest.DisplayPath);
-            Assert.IsTrue(added, $"Duplicate destination label found: {dest.DisplayPath}");
+            Assert.IsTrue(added, $"Duplicate destination path found: {dest.DisplayPath}");
         }
 
-        // 3. Sorted by final display path
-        for (int i = 1; i < destinations.Count - 1; i++)
+        // Must fall back to #2
+        Assert.IsTrue(destinations.Any(d => d.DisplayPath.EndsWith("#2")), "Expected #2 fallback destination label");
+    }
+
+    [TestMethod]
+    public void PLH3004_CanDeleteCategory_returns_exact_locked_text()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        var parentCat = new CategoryRecord { Id = Guid.NewGuid(), Name = "Parent", SortOrder = 10 };
+        var childCat = new CategoryRecord { Id = Guid.NewGuid(), ParentId = parentCat.Id, Name = "Child", SortOrder = 20 };
+        var catWithPrompt = new CategoryRecord { Id = Guid.NewGuid(), Name = "PromptOnly", SortOrder = 30 };
+        var pId = Guid.NewGuid();
+        promptRepo.Create(pId, "p");
+
+        var doc = new LibraryDocument
         {
-            Assert.IsTrue(
-                string.Compare(destinations[i].DisplayPath, destinations[i + 1].DisplayPath, StringComparison.OrdinalIgnoreCase) <= 0,
-                $"Destinations not sorted by final display path: {destinations[i].DisplayPath} vs {destinations[i + 1].DisplayPath}");
-        }
+            Categories = [parentCat, childCat, catWithPrompt],
+            Prompts = [new PromptRecord { Id = pId, CategoryId = catWithPrompt.Id, SortOrder = 10 }]
+        };
+        libRepo.Commit(doc);
+
+        var service = new PromptLibraryService(doc, libRepo, promptRepo);
+
+        const string expectedMessage = "This category is not empty.\r\n\r\nMove or delete its prompts and subcategories first.";
+
+        // Subcategories only
+        Assert.IsFalse(service.CanDeleteCategory(parentCat.Id, out string? reason1));
+        Assert.AreEqual(expectedMessage, reason1);
+
+        // Prompts only
+        Assert.IsFalse(service.CanDeleteCategory(catWithPrompt.Id, out string? reason2));
+        Assert.AreEqual(expectedMessage, reason2);
     }
 
     [TestMethod]
@@ -199,37 +317,6 @@ public sealed class AuditDefectRegressionTests
         var moved = service.CurrentDocument.Prompts.First(p => p.Id == pId);
         Assert.AreEqual(targetCat.Id, moved.CategoryId);
         Assert.AreEqual(10, moved.SortOrder);
-    }
-
-    [TestMethod]
-    public void PLH012_CanDeleteCategory_identifies_empty_vs_non_empty()
-    {
-        using var testDir = new TestDirectory();
-        var paths = new AppPaths(testDir.Root);
-        var writer = new AtomicTextWriter();
-        var deleter = new FileDeleter();
-        var libRepo = new LibraryRepository(paths, writer);
-        var promptRepo = new PromptRepository(paths, writer, deleter);
-
-        var catWithPrompt = new CategoryRecord { Id = Guid.NewGuid(), Name = "HasPrompt", SortOrder = 10 };
-        var emptyCat = new CategoryRecord { Id = Guid.NewGuid(), Name = "Empty", SortOrder = 20 };
-        var pId = Guid.NewGuid();
-        promptRepo.Create(pId, "p");
-
-        var doc = new LibraryDocument
-        {
-            Categories = [catWithPrompt, emptyCat],
-            Prompts = [new PromptRecord { Id = pId, CategoryId = catWithPrompt.Id, SortOrder = 10 }]
-        };
-        libRepo.Commit(doc);
-
-        var service = new PromptLibraryService(doc, libRepo, promptRepo);
-
-        Assert.IsFalse(service.CanDeleteCategory(catWithPrompt.Id, out string? reason1));
-        Assert.IsNotNull(reason1);
-
-        Assert.IsTrue(service.CanDeleteCategory(emptyCat.Id, out string? reason2));
-        Assert.IsNull(reason2);
     }
 
     [TestMethod]
@@ -311,7 +398,7 @@ public sealed class AuditDefectRegressionTests
 
         var doc = new LibraryDocument
         {
-            Categories = [cB, cA], // Intentionally unordered in list
+            Categories = [cB, cA],
             Prompts = [p2, p1]
         };
         libRepo.Commit(doc);

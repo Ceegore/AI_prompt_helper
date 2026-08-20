@@ -87,13 +87,19 @@ public partial class App : Application
 
     private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        MessageBox.Show(
-            $"An unexpected error occurred and Prompt Helper must close:\n\n{e.Exception.Message}",
-            "Prompt Helper Fatal Error",
-            MessageBoxButton.OK,
-            MessageBoxImage.Error);
-        // Do not swallow unknown fatal bugs; shutdown safely (PLH2-002)
-        Shutdown();
+        try
+        {
+            MessageBox.Show(
+                $"An unexpected error occurred and Prompt Helper must close:\n\n{e.Exception.Message}",
+                "Prompt Helper Fatal Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            e.Handled = true;
+            Shutdown();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

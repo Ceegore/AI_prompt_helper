@@ -8,16 +8,19 @@ public sealed class PromptLibraryService
 {
     private readonly LibraryRepository _libraryRepo;
     private readonly PromptRepository _promptRepo;
+    private readonly Func<Guid> _guidGenerator;
     private LibraryDocument _document;
 
     public PromptLibraryService(
         LibraryDocument initialDocument,
         LibraryRepository libraryRepo,
-        PromptRepository promptRepo)
+        PromptRepository promptRepo,
+        Func<Guid>? guidGenerator = null)
     {
         ArgumentNullException.ThrowIfNull(initialDocument);
         _libraryRepo = libraryRepo ?? throw new ArgumentNullException(nameof(libraryRepo));
         _promptRepo = promptRepo ?? throw new ArgumentNullException(nameof(promptRepo));
+        _guidGenerator = guidGenerator ?? Guid.NewGuid;
 
         LibraryValidator.Validate(initialDocument);
         _document = LibraryDocumentCloner.Clone(initialDocument);
@@ -69,7 +72,7 @@ public sealed class PromptLibraryService
 
         var newCategory = new CategoryRecord
         {
-            Id = Guid.NewGuid(),
+            Id = _guidGenerator(),
             ParentId = parentId,
             Name = trimmedName,
             SortOrder = nextSortOrder
@@ -124,19 +127,9 @@ public sealed class PromptLibraryService
         bool hasSubcategories = _document.Categories.Any(c => c.ParentId == categoryId);
         bool hasPrompts = _document.Prompts.Any(p => p.CategoryId == categoryId);
 
-        if (hasSubcategories && hasPrompts)
+        if (hasSubcategories || hasPrompts)
         {
-            reason = "This category is not empty.\n\nMove or delete its prompts and subcategories first.";
-            return false;
-        }
-        if (hasSubcategories)
-        {
-            reason = "This category has subcategories.\n\nMove or delete its subcategories first.";
-            return false;
-        }
-        if (hasPrompts)
-        {
-            reason = "This category contains prompts.\n\nMove or delete its prompts first.";
+            reason = "This category is not empty.\r\n\r\nMove or delete its prompts and subcategories first.";
             return false;
         }
 
@@ -404,7 +397,7 @@ public sealed class PromptLibraryService
             categoryPaths.Add((cat.Id, pathStr));
         }
 
-        // Global uniqueness enforcement (PLH-007)
+        // Global uniqueness enforcement (PLH-007, PLH3-002)
         var usedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Home" };
         var rawGroupCounts = categoryPaths
             .GroupBy(r => r.RawPath, StringComparer.OrdinalIgnoreCase)
@@ -429,13 +422,21 @@ public sealed class PromptLibraryService
                     suffixLen = Math.Min(32, suffixLen + 4);
                     candidatePath = $"{rawPath} [{guidHex[..suffixLen]}]";
                 }
+
+                // PLH3-002: Terminal suffix fallback numbering if full 32-char GUID label is also occupied
+                int counter = 2;
+                string fullGuidCandidate = candidatePath;
+                while (usedPaths.Contains(candidatePath))
+                {
+                    candidatePath = $"{fullGuidCandidate} #{counter++}";
+                }
             }
 
             usedPaths.Add(candidatePath);
             disambiguatedCategories.Add(new DestinationRecord(catId, candidatePath));
         }
 
-        // PLH2-006: Sort final disambiguated categories by complete DisplayPath (OrdinalIgnoreCase) then by CategoryId
+        // Sort final disambiguated categories by complete DisplayPath (OrdinalIgnoreCase) then by CategoryId
         var sortedCategories = disambiguatedCategories
             .OrderBy(c => c.DisplayPath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(c => c.CategoryId)
@@ -458,7 +459,7 @@ public sealed class PromptLibraryService
     {
         for (int attempt = 0; attempt < 10; attempt++)
         {
-            var candidateGuid = Guid.NewGuid();
+            var candidateGuid = _guidGenerator();
             if (!candidate.Prompts.Any(p => p.Id == candidateGuid) && !_promptRepo.Exists(candidateGuid))
             {
                 return candidateGuid;

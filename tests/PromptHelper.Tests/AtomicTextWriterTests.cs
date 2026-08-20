@@ -71,4 +71,27 @@ public sealed class AtomicTextWriterTests
         var tmpFiles = Directory.GetFiles(testDir.Root, "*.tmp");
         Assert.AreEqual(0, tmpFiles.Length);
     }
+
+    [TestMethod]
+    public void Failed_write_does_not_modify_existing_target()
+    {
+        using var testDir = new TestDirectory();
+        var writer = new AtomicTextWriter();
+        string file = Path.Combine(testDir.Root, "locked_target.txt");
+
+        writer.Write(file, "ORIGINAL UNMODIFIED CONTENT");
+
+        // Hold file locked preventing replacement/deletion
+        using (var lockStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Throws<IOException>(() => writer.Write(file, "NEW CORRUPTED CONTENT"));
+        }
+
+        // Assert original content is completely intact
+        Assert.AreEqual("ORIGINAL UNMODIFIED CONTENT", File.ReadAllText(file));
+
+        // Assert temporary file cleanup occurred
+        var tmpFiles = Directory.GetFiles(testDir.Root, "*.tmp");
+        Assert.AreEqual(0, tmpFiles.Length);
+    }
 }
