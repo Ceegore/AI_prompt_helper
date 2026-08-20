@@ -34,6 +34,7 @@
                 <Button x:Name="ActionButton"
                         Content="Delete"
                         Style="{StaticResource DangerButtonStyle}"
+                        IsDefault="True"
                         Click="ActionButton_Click"/>
             </StackPanel>
         </StackPanel>

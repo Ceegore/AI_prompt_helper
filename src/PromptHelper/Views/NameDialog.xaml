@@ -34,6 +34,7 @@
                 <Button x:Name="ActionButton"
                         Content="Save"
                         Style="{StaticResource PrimaryButtonStyle}"
+                        IsDefault="True"
                         Click="ActionButton_Click"/>
             </StackPanel>
         </StackPanel>
