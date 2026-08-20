@@ -104,24 +104,86 @@ public sealed class PublishedLifecycleAndGuiFlowRegressionTests
         var promptRepo = new PromptRepository(paths, writer, deleter);
 
         var pId = Guid.NewGuid();
+        var destinationId = Guid.NewGuid();
+
         var doc = new LibraryDocument
         {
-            Prompts = [new PromptRecord { Id = pId, CategoryId = null, SortOrder = 10 }]
+            Categories =
+            [
+                new CategoryRecord
+                {
+                    Id = destinationId,
+                    ParentId = null,
+                    Name = "Destination",
+                    SortOrder = 10
+                }
+            ],
+            Prompts =
+            [
+                new PromptRecord
+                {
+                    Id = pId,
+                    CategoryId = null,
+                    SortOrder = 10
+                }
+            ]
         };
         libRepo.Commit(doc);
 
         var service = new PromptLibraryService(doc, libRepo, promptRepo);
 
-        // Verify unavailable status
+        // Verify unavailable status on Home
         var prompts = service.GetPrompts(null);
         Assert.AreEqual(1, prompts.Count);
         Assert.IsFalse(prompts[0].IsContentAvailable);
         Assert.IsNotNull(prompts[0].LoadError);
 
-        // Unavailable prompt can be moved and deleted
-        service.MovePrompt(pId, null);
+        // Unavailable prompt can be moved to another category (PLH8-002)
+        service.MovePrompt(pId, destinationId);
+        var moved = service.CurrentDocument.Prompts.Single(p => p.Id == pId);
+        Assert.AreEqual(destinationId, moved.CategoryId);
+
+        var destinationPrompts = service.GetPrompts(destinationId);
+        Assert.AreEqual(1, destinationPrompts.Count);
+        Assert.AreEqual(pId, destinationPrompts[0].Id);
+        Assert.IsFalse(destinationPrompts[0].IsContentAvailable);
+        Assert.IsNotNull(destinationPrompts[0].LoadError);
+
+        // Unavailable prompt can be deleted
         service.DeletePrompt(pId);
-        Assert.AreEqual(0, service.CurrentDocument.Prompts.Count);
+        Assert.IsFalse(service.CurrentDocument.Prompts.Any(p => p.Id == pId));
+    }
+
+    [TestMethod]
+    public void Unavailable_prompt_cannot_be_duplicated()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        var pId = Guid.NewGuid();
+        var doc = new LibraryDocument
+        {
+            Prompts =
+            [
+                new PromptRecord
+                {
+                    Id = pId,
+                    CategoryId = null,
+                    SortOrder = 10
+                }
+            ]
+        };
+        libRepo.Commit(doc);
+
+        var service = new PromptLibraryService(doc, libRepo, promptRepo);
+
+        // Duplicating an unavailable prompt throws InvalidOperationException
+        var ex = Assert.Throws<InvalidOperationException>(() => service.DuplicatePrompt(pId, null));
+        Assert.IsTrue(ex.Message.Contains("content file could not be read"));
     }
 
     [TestMethod]
