@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using PromptHelper.Services;
@@ -59,8 +60,20 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog() == true)
         {
-            var result = _viewModel.CreateCategory(dialog.ResultName);
-            ShowWarningIfPresent(result.Warning);
+            try
+            {
+                var result = _viewModel.CreateCategory(dialog.ResultName);
+                ShowWarningIfPresent(result.Warning);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Failed to create category:\n\n{ex.Message}",
+                    "Category Creation Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
     }
 
@@ -83,8 +96,20 @@ public partial class MainWindow : Window
 
             if (dialog.ShowDialog() == true)
             {
-                var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
-                ShowWarningIfPresent(result.Warning);
+                try
+                {
+                    var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
+                    ShowWarningIfPresent(result.Warning);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        this,
+                        $"Failed to rename category:\n\n{ex.Message}",
+                        "Category Rename Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
             }
         }
     }
@@ -93,6 +118,18 @@ public partial class MainWindow : Window
     {
         if (sender is FrameworkElement fe && fe.DataContext is CategoryItemViewModel cat)
         {
+            // PLH-012: Pre-check emptiness before asking for irreversible destructive confirmation
+            if (!_viewModel.CanDeleteCategory(cat.Id, out string? blockReason))
+            {
+                MessageBox.Show(
+                    this,
+                    blockReason,
+                    "Cannot Delete Category",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
             var confirmDialog = new ConfirmDeleteDialog(
                 "Delete Category",
                 $"Delete category \"{cat.Name}\"?",
@@ -108,14 +145,14 @@ public partial class MainWindow : Window
                     var result = _viewModel.DeleteCategory(cat.Id);
                     ShowWarningIfPresent(result.Warning);
                 }
-                catch (InvalidOperationException ex)
+                catch (Exception ex)
                 {
                     MessageBox.Show(
                         this,
-                        ex.Message,
-                        "Cannot Delete Category",
+                        $"Failed to delete category:\n\n{ex.Message}",
+                        "Delete Error",
                         MessageBoxButton.OK,
-                        MessageBoxImage.Information);
+                        MessageBoxImage.Error);
                 }
             }
         }
@@ -123,15 +160,36 @@ public partial class MainWindow : Window
 
     private void AddPromptButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new PromptEditorDialog("Create Prompt", string.Empty)
+        string promptText = string.Empty;
+        while (true)
         {
-            Owner = this
-        };
+            var dialog = new PromptEditorDialog("Create Prompt", promptText)
+            {
+                Owner = this
+            };
 
-        if (dialog.ShowDialog() == true)
-        {
-            var result = _viewModel.CreatePrompt(dialog.ResultText);
-            ShowWarningIfPresent(result.Warning);
+            if (dialog.ShowDialog() != true)
+            {
+                break;
+            }
+
+            promptText = dialog.ResultText;
+            try
+            {
+                var result = _viewModel.CreatePrompt(promptText);
+                ShowWarningIfPresent(result.Warning);
+                break;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Failed to save new prompt:\n\n{ex.Message}",
+                    "Save Prompt Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                // Loop continues with promptText preserved so user work is not lost (PLH-001)
+            }
         }
     }
 
@@ -139,10 +197,10 @@ public partial class MainWindow : Window
     {
         if (sender is FrameworkElement fe && fe.DataContext is PromptCardViewModel card)
         {
-            string rawContent;
+            string promptText;
             try
             {
-                rawContent = _viewModel.GetPromptContent(card.Id);
+                promptText = _viewModel.GetPromptContent(card.Id);
             }
             catch (Exception ex)
             {
@@ -155,15 +213,35 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var dialog = new PromptEditorDialog("Edit Prompt", rawContent)
+            while (true)
             {
-                Owner = this
-            };
+                var dialog = new PromptEditorDialog("Edit Prompt", promptText)
+                {
+                    Owner = this
+                };
 
-            if (dialog.ShowDialog() == true)
-            {
-                var result = _viewModel.EditPrompt(card.Id, dialog.ResultText);
-                ShowWarningIfPresent(result.Warning);
+                if (dialog.ShowDialog() != true)
+                {
+                    break;
+                }
+
+                promptText = dialog.ResultText;
+                try
+                {
+                    var result = _viewModel.EditPrompt(card.Id, promptText);
+                    ShowWarningIfPresent(result.Warning);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        this,
+                        $"Failed to save edited prompt:\n\n{ex.Message}",
+                        "Save Prompt Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    // Loop continues with promptText preserved so user work is not lost (PLH-001)
+                }
             }
         }
     }
@@ -182,8 +260,20 @@ public partial class MainWindow : Window
 
             if (confirmDialog.ShowDialog() == true)
             {
-                var result = _viewModel.DeletePrompt(card.Id);
-                ShowWarningIfPresent(result.Warning);
+                try
+                {
+                    var result = _viewModel.DeletePrompt(card.Id);
+                    ShowWarningIfPresent(result.Warning);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        this,
+                        $"Failed to delete prompt:\n\n{ex.Message}",
+                        "Delete Prompt Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
             }
         }
     }
@@ -204,15 +294,27 @@ public partial class MainWindow : Window
 
             if (dialog.ShowDialog() == true)
             {
-                if (dialog.CopyInsteadOfMove)
+                try
                 {
-                    var result = _viewModel.DuplicatePrompt(card.Id, dialog.DestinationCategoryId);
-                    ShowWarningIfPresent(result.Warning);
+                    if (dialog.CopyInsteadOfMove)
+                    {
+                        var result = _viewModel.DuplicatePrompt(card.Id, dialog.DestinationCategoryId);
+                        ShowWarningIfPresent(result.Warning);
+                    }
+                    else
+                    {
+                        var result = _viewModel.MovePrompt(card.Id, dialog.DestinationCategoryId);
+                        ShowWarningIfPresent(result.Warning);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    var result = _viewModel.MovePrompt(card.Id, dialog.DestinationCategoryId);
-                    ShowWarningIfPresent(result.Warning);
+                    MessageBox.Show(
+                        this,
+                        $"Failed to {(dialog.CopyInsteadOfMove ? "duplicate" : "move")} prompt:\n\n{ex.Message}",
+                        "Move/Duplicate Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
                 }
             }
         }

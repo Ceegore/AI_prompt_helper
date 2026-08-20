@@ -8,6 +8,7 @@ public sealed class PromptLibraryService
 {
     private readonly LibraryRepository _libraryRepo;
     private readonly PromptRepository _promptRepo;
+    private LibraryDocument _document;
 
     public PromptLibraryService(
         LibraryDocument initialDocument,
@@ -19,224 +20,187 @@ public sealed class PromptLibraryService
         _promptRepo = promptRepo ?? throw new ArgumentNullException(nameof(promptRepo));
 
         LibraryValidator.Validate(initialDocument);
-        CurrentDocument = initialDocument;
+        _document = LibraryDocumentCloner.Clone(initialDocument);
     }
 
-    public LibraryDocument CurrentDocument { get; private set; }
+    public LibraryDocument CurrentDocument => LibraryDocumentCloner.Clone(_document);
 
-    #region Category Operations
+    #region Categories
 
-    public OperationResult<CategoryRecord> CreateCategory(Guid? parentId, string rawName)
+    public IReadOnlyList<CategoryRecord> GetCategories(Guid? parentId)
     {
-        ArgumentNullException.ThrowIfNull(rawName);
-        string trimmedName = rawName.Trim();
+        return _document.Categories
+            .Where(c => c.ParentId == parentId)
+            .OrderBy(c => c.SortOrder)
+            .ToList();
+    }
 
-        ValidateParentExists(parentId);
-        ValidateSiblingCategoryNameUniqueness(parentId, trimmedName, null);
+    public OperationResult<CategoryRecord> CreateCategory(Guid? parentId, string name)
+    {
+        string trimmedName = (name ?? string.Empty).Trim();
 
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        Guid categoryId = Guid.NewGuid();
-        long sortOrder = CalculateNextCategorySortOrder(candidate, parentId);
+        var candidate = LibraryDocumentCloner.Clone(_document);
+
+        if (parentId.HasValue && !candidate.Categories.Any(c => c.Id == parentId.Value))
+        {
+            throw new InvalidOperationException($"Parent category does not exist: {parentId.Value}");
+        }
+
+        var existingNames = candidate.Categories
+            .Where(c => c.ParentId == parentId)
+            .Select(c => c.Name);
+
+        string? validationError = LibraryValidator.ValidateCategoryNameInput(trimmedName, existingNames);
+        if (validationError != null)
+        {
+            throw new InvalidOperationException(validationError);
+        }
+
+        long nextSortOrder = CalculateNextCategorySortOrder(candidate, parentId);
 
         var newCategory = new CategoryRecord
         {
-            Id = categoryId,
+            Id = Guid.NewGuid(),
             ParentId = parentId,
             Name = trimmedName,
-            SortOrder = sortOrder
+            SortOrder = nextSortOrder
         };
 
         candidate.Categories.Add(newCategory);
         LibraryValidator.Validate(candidate);
 
         CommitResult commitResult = _libraryRepo.Commit(candidate);
-        CurrentDocument = candidate;
+        _document = candidate;
 
         return new OperationResult<CategoryRecord>(newCategory, commitResult.Warning);
     }
 
-    public OperationResult RenameCategory(Guid categoryId, string newRawName)
+    public OperationResult RenameCategory(Guid categoryId, string newName)
     {
-        ArgumentNullException.ThrowIfNull(newRawName);
-        string trimmedName = newRawName.Trim();
+        string trimmedName = (newName ?? string.Empty).Trim();
 
-        CategoryRecord existing = GetCategoryOrThrow(categoryId);
-        ValidateSiblingCategoryNameUniqueness(existing.ParentId, trimmedName, categoryId);
+        var candidate = LibraryDocumentCloner.Clone(_document);
+        var target = candidate.Categories.FirstOrDefault(c => c.Id == categoryId)
+                     ?? throw new InvalidOperationException($"Category does not exist: {categoryId}");
 
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        var target = candidate.Categories.First(c => c.Id == categoryId);
+        var existingNames = candidate.Categories
+            .Where(c => c.Id != categoryId && c.ParentId == target.ParentId)
+            .Select(c => c.Name);
+
+        string? validationError = LibraryValidator.ValidateCategoryNameInput(trimmedName, existingNames);
+        if (validationError != null)
+        {
+            throw new InvalidOperationException(validationError);
+        }
+
         target.Name = trimmedName;
-
         LibraryValidator.Validate(candidate);
+
         CommitResult commitResult = _libraryRepo.Commit(candidate);
-        CurrentDocument = candidate;
+        _document = candidate;
 
         return new OperationResult(commitResult.Warning);
     }
 
+    public bool CanDeleteCategory(Guid categoryId, out string? reason)
+    {
+        bool hasSubcategories = _document.Categories.Any(c => c.ParentId == categoryId);
+        bool hasPrompts = _document.Prompts.Any(p => p.CategoryId == categoryId);
+
+        if (hasSubcategories && hasPrompts)
+        {
+            reason = "This category is not empty.\n\nMove or delete its prompts and subcategories first.";
+            return false;
+        }
+        if (hasSubcategories)
+        {
+            reason = "This category has subcategories.\n\nMove or delete its subcategories first.";
+            return false;
+        }
+        if (hasPrompts)
+        {
+            reason = "This category contains prompts.\n\nMove or delete its prompts first.";
+            return false;
+        }
+
+        reason = null;
+        return true;
+    }
+
     public OperationResult DeleteCategory(Guid categoryId)
     {
-        CategoryRecord existing = GetCategoryOrThrow(categoryId);
+        var candidate = LibraryDocumentCloner.Clone(_document);
+        var target = candidate.Categories.FirstOrDefault(c => c.Id == categoryId)
+                     ?? throw new InvalidOperationException($"Category does not exist: {categoryId}");
 
-        // Reject if has child categories or prompts
-        if (CurrentDocument.Categories.Any(c => c.ParentId == categoryId))
+        if (!CanDeleteCategory(categoryId, out string? blockReason))
         {
-            throw new InvalidOperationException("This category is not empty. Move or delete its subcategories first.");
+            throw new InvalidOperationException(blockReason);
         }
 
-        if (CurrentDocument.Prompts.Any(p => p.CategoryId == categoryId))
-        {
-            throw new InvalidOperationException("This category is not empty. Move or delete its prompts first.");
-        }
-
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        candidate.Categories.RemoveAll(c => c.Id == categoryId);
-
+        candidate.Categories.Remove(target);
         LibraryValidator.Validate(candidate);
+
         CommitResult commitResult = _libraryRepo.Commit(candidate);
-        CurrentDocument = candidate;
+        _document = candidate;
 
         return new OperationResult(commitResult.Warning);
     }
 
     #endregion
 
-    #region Prompt Operations
+    #region Prompts
+
+    public IReadOnlyList<PromptDisplayRecord> GetPrompts(Guid? categoryId)
+    {
+        var prompts = _document.Prompts
+            .Where(p => p.CategoryId == categoryId)
+            .OrderBy(p => p.SortOrder)
+            .ToList();
+
+        var results = new List<PromptDisplayRecord>(prompts.Count);
+        foreach (var p in prompts)
+        {
+            string content = string.Empty;
+            bool isAvailable = false;
+            string? loadError = null;
+
+            try
+            {
+                content = _promptRepo.Read(p.Id);
+                isAvailable = true;
+            }
+            catch (Exception ex)
+            {
+                loadError = ex.Message;
+            }
+
+            results.Add(new PromptDisplayRecord(p.Id, content, isAvailable, loadError));
+        }
+
+        return results;
+    }
 
     public OperationResult<PromptRecord> CreatePrompt(Guid? categoryId, string content)
     {
-        ArgumentNullException.ThrowIfNull(content);
-        ValidateParentExists(categoryId);
+        var candidate = LibraryDocumentCloner.Clone(_document);
 
-        Guid promptId = GenerateUniquePromptGuid();
-        _promptRepo.Create(promptId, content);
-
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        long sortOrder = CalculateNextPromptSortOrder(candidate, categoryId);
-
-        var newPrompt = new PromptRecord
+        if (categoryId.HasValue && !candidate.Categories.Any(c => c.Id == categoryId.Value))
         {
-            Id = promptId,
-            CategoryId = categoryId,
-            SortOrder = sortOrder
-        };
-
-        candidate.Prompts.Add(newPrompt);
-        LibraryValidator.Validate(candidate);
-
-        CommitResult commitResult;
-        try
-        {
-            commitResult = _libraryRepo.Commit(candidate);
-        }
-        catch
-        {
-            try
-            {
-                _promptRepo.DeleteIfExists(promptId);
-            }
-            catch
-            {
-                // Best effort orphan cleanup
-            }
-
-            throw;
+            throw new InvalidOperationException($"Category does not exist: {categoryId.Value}");
         }
 
-        CurrentDocument = candidate;
-        return new OperationResult<PromptRecord>(newPrompt, commitResult.Warning);
-    }
-
-    public OperationResult EditPrompt(Guid promptId, string content)
-    {
-        ArgumentNullException.ThrowIfNull(content);
-        GetPromptOrThrow(promptId);
-
-        if (!_promptRepo.Exists(promptId))
-        {
-            throw new FileNotFoundException("Prompt file does not exist.", _promptRepo.ToString());
-        }
-
-        _promptRepo.Update(promptId, content);
-        return new OperationResult(null);
-    }
-
-    public OperationResult DeletePrompt(Guid promptId)
-    {
-        GetPromptOrThrow(promptId);
-
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        candidate.Prompts.RemoveAll(p => p.Id == promptId);
-        LibraryValidator.Validate(candidate);
-
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
-        CurrentDocument = candidate;
-
-        if (!commitResult.BackupSynchronized)
-        {
-            // Primary committed, backup failed -> retain .md file to prevent backup restore corruption
-            return new OperationResult(commitResult.Warning);
-        }
-
-        try
-        {
-            _promptRepo.DeleteIfExists(promptId);
-            return new OperationResult(null);
-        }
-        catch (Exception)
-        {
-            return new OperationResult(
-                "The prompt was removed from the library, but its old .md file could not be deleted. " +
-                "The file was left in the data folder.");
-        }
-    }
-
-    public OperationResult MovePrompt(Guid promptId, Guid? destinationCategoryId)
-    {
-        PromptRecord existing = GetPromptOrThrow(promptId);
-        ValidateParentExists(destinationCategoryId);
-
-        if (existing.CategoryId == destinationCategoryId)
-        {
-            return new OperationResult(null);
-        }
-
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        var target = candidate.Prompts.First(p => p.Id == promptId);
-        target.CategoryId = destinationCategoryId;
-        target.SortOrder = CalculateNextPromptSortOrder(candidate, destinationCategoryId);
-
-        LibraryValidator.Validate(candidate);
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
-        CurrentDocument = candidate;
-
-        return new OperationResult(commitResult.Warning);
-    }
-
-    public OperationResult<PromptRecord> DuplicatePrompt(Guid sourcePromptId, Guid? destinationCategoryId)
-    {
-        GetPromptOrThrow(sourcePromptId);
-        ValidateParentExists(destinationCategoryId);
-
-        if (!_promptRepo.Exists(sourcePromptId))
-        {
-            throw new InvalidOperationException("Cannot duplicate unavailable prompt.");
-        }
-
-        string sourceContent = _promptRepo.Read(sourcePromptId);
-        Guid newPromptId = GenerateUniquePromptGuid();
-
-        _promptRepo.Create(newPromptId, sourceContent);
-
-        var candidate = LibraryDocumentCloner.Clone(CurrentDocument);
-        long sortOrder = CalculateNextPromptSortOrder(candidate, destinationCategoryId);
+        var newPromptId = Guid.NewGuid();
+        long nextSortOrder = CalculateNextPromptSortOrder(candidate, categoryId, null);
 
         var newPrompt = new PromptRecord
         {
             Id = newPromptId,
-            CategoryId = destinationCategoryId,
-            SortOrder = sortOrder
+            CategoryId = categoryId,
+            SortOrder = nextSortOrder
         };
+
+        _promptRepo.Create(newPromptId, content);
 
         candidate.Prompts.Add(newPrompt);
         LibraryValidator.Validate(candidate);
@@ -254,232 +218,240 @@ public sealed class PromptLibraryService
             }
             catch
             {
-                // Best effort cleanup
+                // Best effort rollback
             }
-
             throw;
         }
 
-        CurrentDocument = candidate;
+        _document = candidate;
         return new OperationResult<PromptRecord>(newPrompt, commitResult.Warning);
+    }
+
+    public OperationResult EditPrompt(Guid promptId, string content)
+    {
+        var target = _document.Prompts.FirstOrDefault(p => p.Id == promptId)
+                     ?? throw new InvalidOperationException($"Prompt does not exist in library: {promptId}");
+
+        _promptRepo.Update(promptId, content);
+        return new OperationResult(null);
+    }
+
+    public OperationResult DeletePrompt(Guid promptId)
+    {
+        var candidate = LibraryDocumentCloner.Clone(_document);
+        var target = candidate.Prompts.FirstOrDefault(p => p.Id == promptId)
+                     ?? throw new InvalidOperationException($"Prompt does not exist: {promptId}");
+
+        candidate.Prompts.Remove(target);
+        LibraryValidator.Validate(candidate);
+
+        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        _document = candidate;
+
+        string? combinedWarning = commitResult.Warning;
+
+        if (commitResult.BackupSynchronized)
+        {
+            try
+            {
+                _promptRepo.DeleteIfExists(promptId);
+            }
+            catch (Exception ex)
+            {
+                string deleteWarning = $"Prompt was removed from the library, but its file could not be deleted from disk: {ex.Message}";
+                combinedWarning = combinedWarning != null
+                    ? $"{combinedWarning}\r\n\r\n{deleteWarning}"
+                    : deleteWarning;
+            }
+        }
+        else
+        {
+            string backupWarning = "Prompt was removed from the primary library, but its safety backup could not be updated. Its .md file has been preserved to prevent potential corrupt recovery.";
+            combinedWarning = combinedWarning != null
+                ? $"{combinedWarning}\r\n\r\n{backupWarning}"
+                : backupWarning;
+        }
+
+        return new OperationResult(combinedWarning);
+    }
+
+    public OperationResult MovePrompt(Guid promptId, Guid? destinationCategoryId)
+    {
+        var candidate = LibraryDocumentCloner.Clone(_document);
+        var target = candidate.Prompts.FirstOrDefault(p => p.Id == promptId)
+                     ?? throw new InvalidOperationException($"Prompt does not exist: {promptId}");
+
+        if (destinationCategoryId.HasValue && !candidate.Categories.Any(c => c.Id == destinationCategoryId.Value))
+        {
+            throw new InvalidOperationException($"Destination category does not exist: {destinationCategoryId.Value}");
+        }
+
+        if (target.CategoryId == destinationCategoryId)
+        {
+            return new OperationResult(null);
+        }
+
+        long nextSortOrder = CalculateNextPromptSortOrder(candidate, destinationCategoryId, promptId);
+        target.CategoryId = destinationCategoryId;
+        target.SortOrder = nextSortOrder;
+
+        LibraryValidator.Validate(candidate);
+
+        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        _document = candidate;
+
+        return new OperationResult(commitResult.Warning);
+    }
+
+    public OperationResult<PromptRecord> DuplicatePrompt(Guid promptId, Guid? destinationCategoryId)
+    {
+        var target = _document.Prompts.FirstOrDefault(p => p.Id == promptId)
+                     ?? throw new InvalidOperationException($"Prompt does not exist: {promptId}");
+
+        string content;
+        try
+        {
+            content = _promptRepo.Read(promptId);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Cannot duplicate prompt because its content file could not be read: {ex.Message}", ex);
+        }
+
+        return CreatePrompt(destinationCategoryId, content);
     }
 
     #endregion
 
-    #region Query and Navigation
+    #region Navigation & Destinations
 
-    public IReadOnlyList<CategoryRecord> GetCategories(Guid? parentId)
+    public IReadOnlyList<BreadcrumbRecord> GetBreadcrumbs(Guid? currentCategoryId)
     {
-        return CurrentDocument.Categories
-            .Where(c => c.ParentId == parentId)
-            .OrderBy(c => c.SortOrder)
-            .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(c => c.Id)
-            .ToList();
-    }
-
-    public IReadOnlyList<PromptDisplayRecord> GetPrompts(Guid? categoryId)
-    {
-        var prompts = CurrentDocument.Prompts
-            .Where(p => p.CategoryId == categoryId)
-            .OrderBy(p => p.SortOrder)
-            .ThenBy(p => p.Id)
-            .ToList();
-
-        var displayList = new List<PromptDisplayRecord>(prompts.Count);
-        foreach (var prompt in prompts)
+        var items = new List<BreadcrumbRecord>
         {
-            try
-            {
-                if (_promptRepo.Exists(prompt.Id))
-                {
-                    string content = _promptRepo.Read(prompt.Id);
-                    displayList.Add(new PromptDisplayRecord(prompt.Id, content, true, null));
-                }
-                else
-                {
-                    displayList.Add(new PromptDisplayRecord(prompt.Id, string.Empty, false, "Prompt file not found."));
-                }
-            }
-            catch (Exception ex)
-            {
-                displayList.Add(new PromptDisplayRecord(prompt.Id, string.Empty, false, ex.Message));
-            }
-        }
-
-        return displayList;
-    }
-
-    public IReadOnlyList<(Guid? CategoryId, string Name)> GetBreadcrumbs(Guid? categoryId)
-    {
-        var breadcrumbs = new List<(Guid? CategoryId, string Name)>
-        {
-            (null, "Home")
+            new(null, "Home")
         };
 
-        if (!categoryId.HasValue)
+        if (!currentCategoryId.HasValue)
         {
-            return breadcrumbs;
+            return items;
         }
 
-        var categoriesById = CurrentDocument.Categories.ToDictionary(c => c.Id);
-        var chain = new List<CategoryRecord>();
-        Guid? current = categoryId;
+        var path = new List<BreadcrumbRecord>();
+        Guid? nextId = currentCategoryId;
 
-        while (current.HasValue)
+        while (nextId.HasValue)
         {
-            if (categoriesById.TryGetValue(current.Value, out var cat))
-            {
-                chain.Add(cat);
-                current = cat.ParentId;
-            }
-            else
+            var cat = _document.Categories.FirstOrDefault(c => c.Id == nextId.Value);
+            if (cat == null)
             {
                 break;
             }
+
+            path.Add(new BreadcrumbRecord(cat.Id, cat.Name));
+            nextId = cat.ParentId;
         }
 
-        chain.Reverse();
-        foreach (var cat in chain)
-        {
-            breadcrumbs.Add((cat.Id, cat.Name));
-        }
-
-        return breadcrumbs;
+        path.Reverse();
+        items.AddRange(path);
+        return items;
     }
 
     public IReadOnlyList<DestinationRecord> GetDestinations()
     {
-        var rawDestinations = new List<(Guid? Id, string Path)>
-        {
-            (null, "Home")
-        };
+        var categoryPaths = new List<(Guid CategoryId, string RawPath)>();
 
-        var categoriesById = CurrentDocument.Categories.ToDictionary(c => c.Id);
-
-        foreach (var category in CurrentDocument.Categories)
+        foreach (var cat in _document.Categories)
         {
-            var parts = new List<string>();
-            CategoryRecord? current = category;
-            while (current != null)
+            var segments = new List<string>();
+            var curr = cat;
+            while (curr != null)
             {
-                parts.Add(current.Name);
-                current = current.ParentId.HasValue && categoriesById.TryGetValue(current.ParentId.Value, out var parent)
-                    ? parent
+                segments.Add(curr.Name);
+                curr = curr.ParentId.HasValue
+                    ? _document.Categories.FirstOrDefault(c => c.Id == curr.ParentId.Value)
                     : null;
             }
 
-            parts.Reverse();
-            string path = string.Join(" > ", parts);
-            rawDestinations.Add((category.Id, path));
+            segments.Reverse();
+            string pathStr = string.Join(" > ", segments);
+            categoryPaths.Add((cat.Id, pathStr));
         }
 
-        // Detect collisions case-insensitively
-        var grouped = rawDestinations.GroupBy(d => d.Path, StringComparer.OrdinalIgnoreCase).ToList();
-        var result = new List<DestinationRecord>();
+        // Sort categories alphabetically by path
+        var sortedCategories = categoryPaths
+            .OrderBy(c => c.RawPath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        foreach (var group in grouped)
+        // Global uniqueness enforcement (PLH-007)
+        var usedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Home" };
+        var results = new List<DestinationRecord>(sortedCategories.Count + 1)
         {
-            var list = group.ToList();
-            if (list.Count == 1)
+            new(null, "Home")
+        };
+
+        var rawGroupCounts = sortedCategories
+            .GroupBy(r => r.RawPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (catId, rawPath) in sortedCategories)
+        {
+            string candidatePath = rawPath;
+            bool isColliding = string.Equals(rawPath, "Home", StringComparison.OrdinalIgnoreCase) ||
+                               rawGroupCounts[rawPath] > 1;
+
+            if (isColliding || usedPaths.Contains(candidatePath))
             {
-                result.Add(new DestinationRecord(list[0].Id, list[0].Path));
-            }
-            else
-            {
-                foreach (var item in list)
+                string guidHex = catId.ToString("N");
+                int suffixLen = 8;
+                candidatePath = $"{rawPath} [{guidHex[..suffixLen]}]";
+
+                while (usedPaths.Contains(candidatePath) && suffixLen < 32)
                 {
-                    if (!item.Id.HasValue)
-                    {
-                        result.Add(new DestinationRecord(null, item.Path));
-                    }
-                    else
-                    {
-                        string suffix = item.Id.Value.ToString("N")[..8];
-                        result.Add(new DestinationRecord(item.Id, $"{item.Path} [{suffix}]"));
-                    }
+                    suffixLen = Math.Min(32, suffixLen + 4);
+                    candidatePath = $"{rawPath} [{guidHex[..suffixLen]}]";
                 }
             }
+
+            usedPaths.Add(candidatePath);
+            results.Add(new DestinationRecord(catId, candidatePath));
         }
 
-        // Sort Home first, others by display path
-        var home = result.First(r => !r.CategoryId.HasValue);
-        var others = result.Where(r => r.CategoryId.HasValue).OrderBy(r => r.DisplayPath, StringComparer.OrdinalIgnoreCase);
-
-        var finalOrder = new List<DestinationRecord> { home };
-        finalOrder.AddRange(others);
-        return finalOrder;
+        return results;
     }
 
     #endregion
 
-    #region Helper Methods
+    #region Helpers
 
-    private CategoryRecord GetCategoryOrThrow(Guid id)
+    private long CalculateNextCategorySortOrder(LibraryDocument document, Guid? parentId)
     {
-        var category = CurrentDocument.Categories.FirstOrDefault(c => c.Id == id);
-        if (category == null)
+        var siblings = document.Categories.Where(c => c.ParentId == parentId).ToList();
+        if (siblings.Count == 0)
         {
-            throw new InvalidOperationException($"Category not found: {id}");
+            return 10;
         }
 
-        return category;
-    }
-
-    private PromptRecord GetPromptOrThrow(Guid id)
-    {
-        var prompt = CurrentDocument.Prompts.FirstOrDefault(p => p.Id == id);
-        if (prompt == null)
+        long maxSort = siblings.Max(c => c.SortOrder);
+        if (maxSort > long.MaxValue - 10)
         {
-            throw new InvalidOperationException($"Prompt not found: {id}");
-        }
-
-        return prompt;
-    }
-
-    private void ValidateParentExists(Guid? parentId)
-    {
-        if (parentId.HasValue && !CurrentDocument.Categories.Any(c => c.Id == parentId.Value))
-        {
-            throw new InvalidOperationException($"Parent category does not exist: {parentId.Value}");
-        }
-    }
-
-    private void ValidateSiblingCategoryNameUniqueness(Guid? parentId, string trimmedName, Guid? excludeCategoryId)
-    {
-        string? error = LibraryValidator.ValidateCategoryNameInput(
-            trimmedName,
-            CurrentDocument.Categories
-                .Where(c => c.ParentId == parentId && (!excludeCategoryId.HasValue || c.Id != excludeCategoryId.Value))
-                .Select(c => c.Name));
-
-        if (error != null)
-        {
-            throw new InvalidOperationException(error);
-        }
-    }
-
-    private Guid GenerateUniquePromptGuid()
-    {
-        for (int i = 0; i < 10; i++)
-        {
-            Guid candidate = Guid.NewGuid();
-            if (!CurrentDocument.Prompts.Any(p => p.Id == candidate) && !_promptRepo.Exists(candidate))
+            var ordered = siblings.OrderBy(c => c.SortOrder).ToList();
+            long newSort = 10;
+            foreach (var s in ordered)
             {
-                return candidate;
+                s.SortOrder = newSort;
+                newSort += 10;
             }
+            return newSort;
         }
 
-        throw new InvalidOperationException("Failed to generate unique prompt GUID after 10 attempts.");
+        return maxSort + 10;
     }
 
-    private static long CalculateNextCategorySortOrder(LibraryDocument doc, Guid? parentId)
+    private long CalculateNextPromptSortOrder(LibraryDocument document, Guid? categoryId, Guid? excludePromptId)
     {
-        var siblings = doc.Categories
-            .Where(c => c.ParentId == parentId)
-            .OrderBy(c => c.SortOrder)
-            .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(c => c.Id)
+        var siblings = document.Prompts
+            .Where(p => p.CategoryId == categoryId && (!excludePromptId.HasValue || p.Id != excludePromptId.Value))
             .ToList();
 
         if (siblings.Count == 0)
@@ -487,49 +459,20 @@ public sealed class PromptLibraryService
             return 10;
         }
 
-        long max = siblings.Max(c => c.SortOrder);
-        if (max > long.MaxValue - 10)
+        long maxSort = siblings.Max(p => p.SortOrder);
+        if (maxSort > long.MaxValue - 10)
         {
-            long current = 10;
-            foreach (var sibling in siblings)
+            var ordered = siblings.OrderBy(p => p.SortOrder).ToList();
+            long newSort = 10;
+            foreach (var s in ordered)
             {
-                sibling.SortOrder = current;
-                current += 10;
+                s.SortOrder = newSort;
+                newSort += 10;
             }
-
-            return current;
+            return newSort;
         }
 
-        return max + 10;
-    }
-
-    private static long CalculateNextPromptSortOrder(LibraryDocument doc, Guid? categoryId)
-    {
-        var siblings = doc.Prompts
-            .Where(p => p.CategoryId == categoryId)
-            .OrderBy(p => p.SortOrder)
-            .ThenBy(p => p.Id)
-            .ToList();
-
-        if (siblings.Count == 0)
-        {
-            return 10;
-        }
-
-        long max = siblings.Max(p => p.SortOrder);
-        if (max > long.MaxValue - 10)
-        {
-            long current = 10;
-            foreach (var sibling in siblings)
-            {
-                sibling.SortOrder = current;
-                current += 10;
-            }
-
-            return current;
-        }
-
-        return max + 10;
+        return maxSort + 10;
     }
 
     #endregion

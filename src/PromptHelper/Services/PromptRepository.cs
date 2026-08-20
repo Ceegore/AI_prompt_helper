@@ -56,14 +56,16 @@ public sealed class PromptRepository
 
     public IReadOnlyList<string> EnumeratePromptFiles()
     {
-        if (!Directory.Exists(_paths.PromptsDirectory))
+        try
+        {
+            return Directory.EnumerateFiles(
+                _paths.PromptsDirectory,
+                "*.md",
+                SearchOption.TopDirectoryOnly).ToList();
+        }
+        catch (DirectoryNotFoundException)
         {
             return [];
         }
-
-        return Directory.EnumerateFiles(
-            _paths.PromptsDirectory,
-            "*.md",
-            SearchOption.TopDirectoryOnly).ToList();
     }
 }

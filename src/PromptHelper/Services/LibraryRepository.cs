@@ -88,7 +88,15 @@ public sealed class LibraryRepository
 
     public static LibraryDocument InspectAndDeserialize(string json)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        if (json == null)
+        {
+            throw new ArgumentNullException(nameof(json));
+        }
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            throw new JsonException("Library JSON is empty or whitespace.");
+        }
 
         using (var doc = JsonDocument.Parse(json))
         {

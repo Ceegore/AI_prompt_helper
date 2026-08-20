@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using PromptHelper.Models;
 using PromptHelper.Services;
 using PromptHelper.ViewModels;
@@ -13,43 +14,65 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        var paths = new AppPaths();
-        paths.EnsureRootDirectory();
+        DispatcherUnhandledException += App_DispatcherUnhandledException;
 
-        _appLock = AppInstanceLock.TryAcquire(paths.LockPath);
-        if (_appLock == null)
-        {
-            MessageBox.Show(
-                "Another instance of Prompt Helper is already running and using the library.",
-                "Prompt Helper",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            Shutdown();
-            return;
-        }
-
-        paths.EnsureDataDirectories();
-
-        var writer = new AtomicTextWriter();
-        var deleter = new FileDeleter();
-        var libraryRepo = new LibraryRepository(paths, writer);
-        var promptRepo = new PromptRepository(paths, writer, deleter);
-        var startupService = new LibraryStartupService(paths, libraryRepo, promptRepo, deleter, writer);
-
-        StartupResult startupResult;
         try
         {
-            startupResult = startupService.LoadOrInitialize();
-        }
-        catch (UnsupportedLibrarySchemaException ex)
-        {
-            MessageBox.Show(
-                $"The library file was created by a newer version of Prompt Helper (schema version {ex.SchemaVersion}) and cannot be opened.",
-                "Unsupported Library Schema",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-            Shutdown();
-            return;
+            var paths = new AppPaths();
+            paths.EnsureRootDirectory();
+
+            _appLock = AppInstanceLock.TryAcquire(paths.LockPath);
+            if (_appLock == null)
+            {
+                MessageBox.Show(
+                    "Another instance of Prompt Helper is already running and using the library.",
+                    "Prompt Helper",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                Shutdown();
+                return;
+            }
+
+            paths.EnsureDataDirectories();
+
+            var writer = new AtomicTextWriter();
+            var deleter = new FileDeleter();
+            var libraryRepo = new LibraryRepository(paths, writer);
+            var promptRepo = new PromptRepository(paths, writer, deleter);
+            var startupService = new LibraryStartupService(paths, libraryRepo, promptRepo, deleter, writer);
+
+            StartupResult startupResult;
+            try
+            {
+                startupResult = startupService.LoadOrInitialize();
+            }
+            catch (UnsupportedLibrarySchemaException ex)
+            {
+                MessageBox.Show(
+                    $"The library file was created by a newer version of Prompt Helper (schema version {ex.SchemaVersion}) and cannot be opened.",
+                    "Unsupported Library Schema",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                Shutdown();
+                return;
+            }
+
+            var libraryService = new PromptLibraryService(startupResult.Document, libraryRepo, promptRepo);
+            var clipboardService = new ClipboardService();
+            var mainViewModel = new MainViewModel(libraryService, promptRepo, paths.RootDirectory);
+
+            var mainWindow = new MainWindow(mainViewModel, clipboardService);
+            MainWindow = mainWindow;
+            mainWindow.Show();
+
+            if (!string.IsNullOrEmpty(startupResult.Warning))
+            {
+                MessageBox.Show(
+                    startupResult.Warning,
+                    "Prompt Helper Recovery Notice",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
         catch (Exception ex)
         {
@@ -59,25 +82,17 @@ public partial class App : Application
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             Shutdown();
-            return;
         }
+    }
 
-        var libraryService = new PromptLibraryService(startupResult.Document, libraryRepo, promptRepo);
-        var clipboardService = new ClipboardService();
-        var mainViewModel = new MainViewModel(libraryService, promptRepo, paths.RootDirectory);
-
-        var mainWindow = new MainWindow(mainViewModel, clipboardService);
-        MainWindow = mainWindow;
-        mainWindow.Show();
-
-        if (!string.IsNullOrEmpty(startupResult.Warning))
-        {
-            MessageBox.Show(
-                startupResult.Warning,
-                "Prompt Helper Recovery Notice",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-        }
+    private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        MessageBox.Show(
+            $"An unexpected error occurred:\n\n{e.Exception.Message}",
+            "Prompt Helper Error",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        e.Handled = true;
     }
 
     protected override void OnExit(ExitEventArgs e)

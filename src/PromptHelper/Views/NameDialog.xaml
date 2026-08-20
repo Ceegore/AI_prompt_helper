@@ -17,7 +17,6 @@
                        Margin="0,0,0,16"/>
             <TextBox x:Name="NameInputTextBox"
                      Style="{StaticResource ModernTextBoxStyle}"
-                     MaxLength="80"
                      KeyDown="NameInputTextBox_KeyDown"
                      Margin="0,0,0,8"/>
             <TextBlock x:Name="ErrorTextBlock"

@@ -88,6 +88,11 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasChildCategories));
     }
 
+    public bool CanDeleteCategory(Guid categoryId, out string? reason)
+    {
+        return _service.CanDeleteCategory(categoryId, out reason);
+    }
+
     public OperationResult<CategoryRecord> CreateCategory(string name)
     {
         var result = _service.CreateCategory(CurrentCategoryId, name);

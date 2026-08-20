@@ -50,17 +50,18 @@ public sealed class LibraryStartupService
         if (primaryResult is MetadataReadResult.Valid primaryValid)
         {
             // Valid primary always wins
+            string? backupWarning = null;
             try
             {
                 _libraryRepo.SynchronizeBackup(primaryValid.Document);
             }
-            catch
+            catch (Exception)
             {
-                // Best effort backup sync
+                backupWarning = "The library was loaded from library.json, but its safety backup could not be synchronized.";
             }
 
             TryRemoveStaleMarker();
-            return new StartupResult(primaryValid.Document, false, null);
+            return new StartupResult(primaryValid.Document, false, backupWarning);
         }
 
         if (primaryResult is MetadataReadResult.Corrupt primaryCorrupt)
@@ -68,9 +69,16 @@ public sealed class LibraryStartupService
             if (backupResult is MetadataReadResult.Valid backupValid)
             {
                 _libraryRepo.TryCreateCorruptRecoveryCopy(primaryCorrupt.RawContent);
-                _libraryRepo.Commit(backupValid.Document);
+                var commitResult = _libraryRepo.Commit(backupValid.Document);
                 TryRemoveStaleMarker();
-                return new StartupResult(backupValid.Document, true, RecoveryWarning);
+
+                string warning = RecoveryWarning;
+                if (!commitResult.BackupSynchronized && commitResult.Warning != null)
+                {
+                    warning += "\r\n\r\n" + commitResult.Warning;
+                }
+
+                return new StartupResult(backupValid.Document, true, warning);
             }
 
             throw new InvalidDataException("Primary library metadata is corrupt and no valid backup is available.");
@@ -84,9 +92,16 @@ public sealed class LibraryStartupService
 
         if (backupResult is MetadataReadResult.Valid backupValidFromMissing)
         {
-            _libraryRepo.Commit(backupValidFromMissing.Document);
+            var commitResult = _libraryRepo.Commit(backupValidFromMissing.Document);
             TryRemoveStaleMarker();
-            return new StartupResult(backupValidFromMissing.Document, true, RecoveryWarning);
+
+            string warning = RecoveryWarning;
+            if (!commitResult.BackupSynchronized && commitResult.Warning != null)
+            {
+                warning += "\r\n\r\n" + commitResult.Warning;
+            }
+
+            return new StartupResult(backupValidFromMissing.Document, true, warning);
         }
 
         if (backupResult is MetadataReadResult.Corrupt)
@@ -120,10 +135,10 @@ public sealed class LibraryStartupService
                 _promptRepo.Create(kvp.Key, kvp.Value);
             }
 
-            _libraryRepo.Commit(defaultPkg.Document);
+            var commitResult = _libraryRepo.Commit(defaultPkg.Document);
             TryRemoveStaleMarker();
 
-            return new StartupResult(defaultPkg.Document, false, null);
+            return new StartupResult(defaultPkg.Document, false, commitResult.Warning);
         }
         else
         {
@@ -155,10 +170,10 @@ public sealed class LibraryStartupService
                 }
             }
 
-            _libraryRepo.Commit(defaultPkg.Document);
+            var commitResult = _libraryRepo.Commit(defaultPkg.Document);
             TryRemoveStaleMarker();
 
-            return new StartupResult(defaultPkg.Document, false, null);
+            return new StartupResult(defaultPkg.Document, false, commitResult.Warning);
         }
     }
 
@@ -179,19 +194,18 @@ public sealed class LibraryStartupService
 
     private static MetadataReadResult ReadMetadataState(string path)
     {
-        if (!File.Exists(path))
-        {
-            return new MetadataReadResult.Missing();
-        }
-
         string raw;
         try
         {
             raw = File.ReadAllText(path);
         }
-        catch (Exception ex) when (ex is not (JsonException or InvalidDataException))
+        catch (FileNotFoundException)
         {
-            throw;
+            return new MetadataReadResult.Missing();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new MetadataReadResult.Missing();
         }
 
         try

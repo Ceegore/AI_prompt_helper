@@ -51,46 +51,54 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Breadcrumb Navigation -->
-            <ItemsControl Grid.Row="0" ItemsSource="{Binding Breadcrumbs}" Margin="0,0,0,16">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center"/>
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate DataType="{x:Type vm:BreadcrumbItemViewModel}">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <!-- Clickable ancestor item -->
-                            <Button x:Name="AncestorButton"
-                                    Content="{Binding Name}"
-                                    Style="{StaticResource BreadcrumbButtonStyle}"
-                                    Click="BreadcrumbButton_Click"/>
-                            <!-- Separator -->
-                            <TextBlock x:Name="AncestorSeparator"
-                                       Text=" › "
-                                       FontSize="14"
-                                       Foreground="{StaticResource SubtleTextBrush}"
-                                       VerticalAlignment="Center"/>
-                            <!-- Non-clickable current item -->
-                            <TextBlock x:Name="CurrentText"
-                                       Text="{Binding Name}"
-                                       FontSize="14"
-                                       FontWeight="SemiBold"
-                                       Foreground="{StaticResource TextPrimaryBrush}"
-                                       VerticalAlignment="Center"
-                                       Visibility="Collapsed"/>
-                        </StackPanel>
-                        <DataTemplate.Triggers>
-                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                                <Setter TargetName="AncestorButton" Property="Visibility" Value="Collapsed"/>
-                                <Setter TargetName="AncestorSeparator" Property="Visibility" Value="Collapsed"/>
-                                <Setter TargetName="CurrentText" Property="Visibility" Value="Visible"/>
-                            </DataTrigger>
-                        </DataTemplate.Triggers>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <!-- Breadcrumb Navigation with Horizontal Scroll -->
+            <ScrollViewer Grid.Row="0"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          Focusable="False"
+                          Margin="0,0,0,16">
+                <ItemsControl ItemsSource="{Binding Breadcrumbs}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:BreadcrumbItemViewModel}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <!-- Clickable ancestor item -->
+                                <Button x:Name="AncestorButton"
+                                        Content="{Binding Name}"
+                                        ToolTip="{Binding Name}"
+                                        Style="{StaticResource BreadcrumbButtonStyle}"
+                                        Click="BreadcrumbButton_Click"/>
+                                <!-- Separator -->
+                                <TextBlock x:Name="AncestorSeparator"
+                                           Text=" › "
+                                           FontSize="14"
+                                           Foreground="{StaticResource SubtleTextBrush}"
+                                           VerticalAlignment="Center"/>
+                                <!-- Non-clickable current item -->
+                                <TextBlock x:Name="CurrentText"
+                                           Text="{Binding Name}"
+                                           ToolTip="{Binding Name}"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                           VerticalAlignment="Center"
+                                           Visibility="Collapsed"/>
+                            </StackPanel>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                    <Setter TargetName="AncestorButton" Property="Visibility" Value="Collapsed"/>
+                                    <Setter TargetName="AncestorSeparator" Property="Visibility" Value="Collapsed"/>
+                                    <Setter TargetName="CurrentText" Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
 
             <!-- Categories Header -->
             <Grid Grid.Row="1" Margin="0,0,0,10">
@@ -130,12 +138,15 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
 
-                                    <!-- Open Category Button -->
+                                    <!-- Open Category Button with Ellipsis Text -->
                                     <Button Grid.Column="0"
-                                            Content="{Binding Name}"
                                             Style="{StaticResource CategoryOpenButtonStyle}"
                                             Click="OpenCategoryButton_Click"
-                                            ToolTip="Open category"/>
+                                            ToolTip="{Binding Name}">
+                                        <TextBlock Text="{Binding Name}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"/>
+                                    </Button>
 
                                     <!-- Action Buttons -->
                                     <StackPanel Grid.Column="1"

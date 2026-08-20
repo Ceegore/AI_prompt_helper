@@ -29,3 +29,7 @@ public sealed record PromptDisplayRecord(
 public sealed record DestinationRecord(
     Guid? CategoryId,
     string DisplayPath);
+
+public sealed record BreadcrumbRecord(
+    Guid? CategoryId,
+    string Name);
