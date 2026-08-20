@@ -38,6 +38,7 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<BreadcrumbItemViewModel> Breadcrumbs { get; }
     public ObservableCollection<CategoryItemViewModel> ChildCategories { get; }
     public ObservableCollection<PromptCardViewModel> Prompts { get; }
+    public ObservableCollection<RecentPromptViewModel> RecentPrompts { get; } = new();
 
     public bool HasPrompts => Prompts.Count > 0;
     public bool HasNoPrompts => Prompts.Count == 0;
@@ -78,6 +79,7 @@ public sealed class MainViewModel : ObservableObject
         {
             Prompts.Add(new PromptCardViewModel(
                 prompt.Id,
+                prompt.Title,
                 prompt.Content,
                 prompt.IsContentAvailable,
                 prompt.LoadError));
@@ -86,6 +88,59 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasPrompts));
         OnPropertyChanged(nameof(HasNoPrompts));
         OnPropertyChanged(nameof(HasChildCategories));
+    }
+
+    public void RecordSuccessfulPromptCopy(
+        Guid promptId,
+        string headline,
+        string currentContent)
+    {
+        var existing = RecentPrompts.FirstOrDefault(x => x.Id == promptId);
+        if (existing != null)
+        {
+            RecentPrompts.Remove(existing);
+        }
+
+        string excerpt = TextUtilities.CreateCompactPreview(currentContent);
+        var item = existing ?? new RecentPromptViewModel(
+            promptId,
+            headline,
+            excerpt);
+
+        item.RefreshDisplay(headline, excerpt);
+
+        RecentPrompts.Insert(0, item);
+
+        while (RecentPrompts.Count > 3)
+        {
+            RecentPrompts.RemoveAt(RecentPrompts.Count - 1);
+        }
+    }
+
+    public void RemoveRecentPrompt(Guid promptId)
+    {
+        var existing = RecentPrompts.FirstOrDefault(x => x.Id == promptId);
+        if (existing != null)
+        {
+            RecentPrompts.Remove(existing);
+        }
+    }
+
+    public void RefreshRecentPromptDisplay(Guid promptId)
+    {
+        var existing = RecentPrompts.FirstOrDefault(x => x.Id == promptId);
+        if (existing == null)
+        {
+            return;
+        }
+
+        var matchingCard = Prompts.FirstOrDefault(p => p.Id == promptId);
+        if (matchingCard != null)
+        {
+            existing.RefreshDisplay(
+                matchingCard.PreviewTitle,
+                TextUtilities.CreateCompactPreview(matchingCard.Content));
+        }
     }
 
     public bool CanDeleteCategory(Guid categoryId, out string? reason)
@@ -114,24 +169,32 @@ public sealed class MainViewModel : ObservableObject
         return result;
     }
 
-    public OperationResult<PromptRecord> CreatePrompt(string content)
+    public OperationResult<PromptRecord> CreatePrompt(string content, string? title)
     {
-        var result = _service.CreatePrompt(CurrentCategoryId, content);
+        var result = _service.CreatePrompt(CurrentCategoryId, content, title);
         Refresh();
         return result;
     }
 
-    public OperationResult EditPrompt(Guid promptId, string content)
+    public OperationResult<PromptRecord> CreatePrompt(string content)
+        => CreatePrompt(content, null);
+
+    public OperationResult EditPrompt(Guid promptId, string content, string? title)
     {
-        var result = _service.EditPrompt(promptId, content);
+        var result = _service.EditPrompt(promptId, content, title);
         Refresh();
+        RefreshRecentPromptDisplay(promptId);
         return result;
     }
+
+    public OperationResult EditPrompt(Guid promptId, string content)
+        => EditPrompt(promptId, content, null);
 
     public OperationResult DeletePrompt(Guid promptId)
     {
         var result = _service.DeletePrompt(promptId);
         Refresh();
+        RemoveRecentPrompt(promptId);
         return result;
     }
 

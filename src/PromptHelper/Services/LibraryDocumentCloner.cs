@@ -27,7 +27,8 @@ public static class LibraryDocumentCloner
                 {
                     Id = x.Id,
                     CategoryId = x.CategoryId,
-                    SortOrder = x.SortOrder
+                    SortOrder = x.SortOrder,
+                    Title = x.Title
                 })
                 .ToList()
         };

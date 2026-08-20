@@ -117,6 +117,24 @@ public static class LibraryValidator
                     throw new InvalidDataException($"Prompt '{prompt.Id}' references nonexistent category: {prompt.CategoryId.Value}");
                 }
             }
+
+            if (prompt.Title != null)
+            {
+                if (string.IsNullOrWhiteSpace(prompt.Title))
+                {
+                    throw new InvalidDataException($"Prompt '{prompt.Id}' title cannot be whitespace only; use null for automatic title.");
+                }
+
+                if (prompt.Title != prompt.Title.Trim())
+                {
+                    throw new InvalidDataException($"Prompt '{prompt.Id}' title must be trimmed.");
+                }
+
+                if (prompt.Title.Any(char.IsControl))
+                {
+                    throw new InvalidDataException($"Prompt '{prompt.Id}' title cannot contain control characters.");
+                }
+            }
         }
     }
 

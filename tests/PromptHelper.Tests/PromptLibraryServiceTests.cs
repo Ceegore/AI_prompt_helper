@@ -677,5 +677,106 @@ public sealed class PromptLibraryServiceTests
         Assert.IsTrue(destinations.Any(dest => dest.DisplayPath == "A > B > C > D > E > F"));
     }
 
+    #region Headline and Title Tests
+
+    [TestMethod]
+    public void Create_prompt_with_explicit_title_persists_title()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, promptRepo, _, _) = CreateTestContext(testDir.Root);
+
+        var prompt = service.CreatePrompt(null, "First line of content\nSecond line", "Custom Headline").Value;
+
+        Assert.AreEqual("Custom Headline", prompt.Title);
+        Assert.AreEqual("Custom Headline", service.CurrentDocument.Prompts.Single(p => p.Id == prompt.Id).Title);
+
+        var displayRecords = service.GetPrompts(null);
+        Assert.AreEqual("Custom Headline", displayRecords.Single(p => p.Id == prompt.Id).Title);
+    }
+
+    [TestMethod]
+    public void Create_prompt_with_blank_title_normalizes_to_null()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, _, _, _) = CreateTestContext(testDir.Root);
+
+        var prompt = service.CreatePrompt(null, "First line", "   ").Value;
+
+        Assert.IsNull(prompt.Title);
+        Assert.IsNull(service.CurrentDocument.Prompts.Single(p => p.Id == prompt.Id).Title);
+    }
+
+    [TestMethod]
+    public void Edit_prompt_with_new_title_and_content_updates_both()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, promptRepo, _, _) = CreateTestContext(testDir.Root);
+
+        var prompt = service.CreatePrompt(null, "Old content", "Old Title").Value;
+        service.EditPrompt(prompt.Id, "New content", "New Title");
+
+        Assert.AreEqual("New content", promptRepo.Read(prompt.Id));
+        Assert.AreEqual("New Title", service.CurrentDocument.Prompts.Single(p => p.Id == prompt.Id).Title);
+    }
+
+    [TestMethod]
+    public void Edit_prompt_clearing_title_reverts_to_null()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, _, _, _) = CreateTestContext(testDir.Root);
+
+        var prompt = service.CreatePrompt(null, "Content", "Initial Title").Value;
+        service.EditPrompt(prompt.Id, "Content", "  ");
+
+        Assert.IsNull(service.CurrentDocument.Prompts.Single(p => p.Id == prompt.Id).Title);
+    }
+
+    [TestMethod]
+    public void Duplicate_prompt_preserves_custom_title()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, _, _, _) = CreateTestContext(testDir.Root);
+
+        var prompt = service.CreatePrompt(null, "Content", "Special Title").Value;
+        var dup = service.DuplicatePrompt(prompt.Id, null).Value;
+
+        Assert.AreEqual("Special Title", dup.Title);
+        Assert.AreEqual("Special Title", service.CurrentDocument.Prompts.Single(p => p.Id == dup.Id).Title);
+    }
+
+    [TestMethod]
+    public void Move_prompt_preserves_custom_title()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, _, _, _) = CreateTestContext(testDir.Root);
+
+        var cat = service.CreateCategory(null, "Folder").Value;
+        var prompt = service.CreatePrompt(null, "Content", "Preserved Title").Value;
+
+        service.MovePrompt(prompt.Id, cat.Id);
+
+        var updated = service.CurrentDocument.Prompts.Single(p => p.Id == prompt.Id);
+        Assert.AreEqual(cat.Id, updated.CategoryId);
+        Assert.AreEqual("Preserved Title", updated.Title);
+    }
+
+    [TestMethod]
+    public void Edit_prompt_rolls_back_body_on_commit_failure()
+    {
+        using var testDir = new TestDirectory();
+        var (service, _, _, promptRepo, faultWriter, _) = CreateTestContext(testDir.Root);
+
+        var prompt = service.CreatePrompt(null, "Original Body", "Original Title").Value;
+
+        faultWriter.ShouldFail = (path, _) => path.EndsWith("library.json");
+
+        Assert.Throws<IOException>(() => service.EditPrompt(prompt.Id, "Mutated Body", "Mutated Title"));
+
+        Assert.AreEqual("Original Body", promptRepo.Read(prompt.Id));
+        Assert.AreEqual("Original Title", service.CurrentDocument.Prompts.Single(p => p.Id == prompt.Id).Title);
+    }
+
+    #endregion
+
     #endregion
 }

@@ -12,4 +12,6 @@ public sealed class PromptRecord
 
     [JsonRequired]
     public long SortOrder { get; set; }
+
+    public string? Title { get; set; }
 }

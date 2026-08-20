@@ -238,4 +238,55 @@ public sealed class PublishedLifecycleAndGuiFlowRegressionTests
         File.WriteAllText(paths.LibraryPath, "{\"schemaVersion\":999,\"categories\":[],\"prompts\":[]}");
         Assert.Throws<UnsupportedLibrarySchemaException>(() => startup.LoadOrInitialize());
     }
+
+    [TestMethod]
+    public void Full_E2E_Title_CRUD_Migration_and_Restart_Persistence()
+    {
+        using var testDir1 = new TestDirectory();
+        using var testDir2 = new TestDirectory();
+
+        var paths1 = new AppPaths(testDir1.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo1 = new LibraryRepository(paths1, writer);
+        var promptRepo1 = new PromptRepository(paths1, writer, deleter);
+        var startup1 = new LibraryStartupService(paths1, libRepo1, promptRepo1, deleter, writer);
+
+        var initResult = startup1.LoadOrInitialize();
+        var service1 = new PromptLibraryService(initResult.Document, libRepo1, promptRepo1);
+
+        // 1. Create prompt with custom headline
+        var prompt = service1.CreatePrompt(null, "Line 1 Content\nLine 2 Content", "Custom Headline").Value;
+        Assert.AreEqual("Custom Headline", prompt.Title);
+
+        // 2. Edit prompt title
+        service1.EditPrompt(prompt.Id, "Line 1 Modified\nLine 2 Content", "Updated Headline");
+        var updated = service1.GetPrompts(null).Single(p => p.Id == prompt.Id);
+        Assert.AreEqual("Updated Headline", updated.Title);
+        Assert.AreEqual("Line 1 Modified\nLine 2 Content", promptRepo1.Read(prompt.Id));
+
+        // 3. Migrate data to second directory
+        var migration = new DataFolderMigrationService();
+        var migrationResult = migration.PrepareTarget(testDir1.Root, testDir2.Root);
+        Assert.IsTrue(migrationResult.Copied);
+
+        // 4. Save settings pointing to second directory
+        string settingsPath = Path.Combine(testDir1.Root, "settings.json");
+        var settingsRepo = new AppSettingsRepository(writer, settingsPath);
+        settingsRepo.Save(new AppSettings { SchemaVersion = 1, DataRootPath = testDir2.Root });
+
+        // 5. Start from second directory using settings
+        string effectiveRoot = settingsRepo.GetEffectiveDataRoot();
+        var paths2 = new AppPaths(effectiveRoot);
+        var libRepo2 = new LibraryRepository(paths2, writer);
+        var promptRepo2 = new PromptRepository(paths2, writer, deleter);
+        var startup2 = new LibraryStartupService(paths2, libRepo2, promptRepo2, deleter, writer);
+
+        var migratedStartup = startup2.LoadOrInitialize();
+        var service2 = new PromptLibraryService(migratedStartup.Document, libRepo2, promptRepo2);
+
+        var migratedPrompt = service2.GetPrompts(null).Single(p => p.Id == prompt.Id);
+        Assert.AreEqual("Updated Headline", migratedPrompt.Title);
+        Assert.AreEqual("Line 1 Modified\nLine 2 Content", promptRepo2.Read(prompt.Id));
+    }
 }

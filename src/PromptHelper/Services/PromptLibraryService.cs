@@ -186,13 +186,13 @@ public sealed class PromptLibraryService
                 loadError = ex.Message;
             }
 
-            results.Add(new PromptDisplayRecord(p.Id, content, isAvailable, loadError));
+            results.Add(new PromptDisplayRecord(p.Id, p.Title, content, isAvailable, loadError));
         }
 
         return results;
     }
 
-    public OperationResult<PromptRecord> CreatePrompt(Guid? categoryId, string content)
+    public OperationResult<PromptRecord> CreatePrompt(Guid? categoryId, string content, string? title)
     {
         var candidate = LibraryDocumentCloner.Clone(_document);
 
@@ -203,12 +203,14 @@ public sealed class PromptLibraryService
 
         var newPromptId = GenerateUniquePromptGuid(candidate);
         long nextSortOrder = CalculateNextPromptSortOrder(candidate, categoryId, null);
+        string? normalizedTitle = NormalizePromptTitle(title);
 
         var newPrompt = new PromptRecord
         {
             Id = newPromptId,
             CategoryId = categoryId,
-            SortOrder = nextSortOrder
+            SortOrder = nextSortOrder,
+            Title = normalizedTitle
         };
 
         _promptRepo.Create(newPromptId, content);
@@ -240,20 +242,53 @@ public sealed class PromptLibraryService
         {
             Id = newPrompt.Id,
             CategoryId = newPrompt.CategoryId,
-            SortOrder = newPrompt.SortOrder
+            SortOrder = newPrompt.SortOrder,
+            Title = newPrompt.Title
         };
 
         return new OperationResult<PromptRecord>(returnedPrompt, commitResult.Warning);
     }
 
-    public OperationResult EditPrompt(Guid promptId, string content)
+    public OperationResult<PromptRecord> CreatePrompt(Guid? categoryId, string content)
+        => CreatePrompt(categoryId, content, null);
+
+    public OperationResult EditPrompt(Guid promptId, string content, string? title)
     {
         var target = _document.Prompts.FirstOrDefault(p => p.Id == promptId)
                      ?? throw new InvalidOperationException($"Prompt does not exist in library: {promptId}");
 
+        string oldContent = _promptRepo.Read(promptId);
+        var candidate = LibraryDocumentCloner.Clone(_document);
+        var candidateTarget = candidate.Prompts.Single(p => p.Id == promptId);
+        candidateTarget.Title = NormalizePromptTitle(title);
+        LibraryValidator.Validate(candidate);
+
         _promptRepo.Update(promptId, content);
-        return new OperationResult(null);
+
+        CommitResult commitResult;
+        try
+        {
+            commitResult = _libraryRepo.Commit(candidate);
+        }
+        catch
+        {
+            try
+            {
+                _promptRepo.Update(promptId, oldContent);
+            }
+            catch
+            {
+                // Best effort rollback; do not hide original exception
+            }
+            throw;
+        }
+
+        _document = candidate;
+        return new OperationResult(commitResult.Warning);
     }
+
+    public OperationResult EditPrompt(Guid promptId, string content)
+        => EditPrompt(promptId, content, null);
 
     public OperationResult DeletePrompt(Guid promptId)
     {
@@ -337,7 +372,7 @@ public sealed class PromptLibraryService
             throw new InvalidOperationException($"Cannot duplicate prompt because its content file could not be read: {ex.Message}", ex);
         }
 
-        return CreatePrompt(destinationCategoryId, content);
+        return CreatePrompt(destinationCategoryId, content, target.Title);
     }
 
     #endregion
@@ -525,6 +560,12 @@ public sealed class PromptLibraryService
         }
 
         return maxSort + 10;
+    }
+
+    private static string? NormalizePromptTitle(string? input)
+    {
+        string trimmed = (input ?? string.Empty).Trim();
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     #endregion

@@ -12,23 +12,31 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly ClipboardService _clipboardService;
+    private readonly AppSettingsRepository _settingsRepo;
+    private readonly DataFolderMigrationService _migrationService;
 
-    public MainWindow(MainViewModel viewModel, ClipboardService clipboardService)
+    public MainWindow(
+        MainViewModel viewModel,
+        ClipboardService clipboardService,
+        AppSettingsRepository? settingsRepo = null,
+        DataFolderMigrationService? migrationService = null)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _clipboardService = clipboardService ?? throw new ArgumentNullException(nameof(clipboardService));
+        _settingsRepo = settingsRepo ?? new AppSettingsRepository();
+        _migrationService = migrationService ?? new DataFolderMigrationService();
 
         DataContext = _viewModel;
     }
 
-    private void HelpButton_Click(object sender, RoutedEventArgs e)
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        var helpDialog = new HelpDialog(_viewModel.DataFolderPath)
+        var dialog = new SettingsDialog(_viewModel.DataFolderPath, _settingsRepo, _migrationService)
         {
             Owner = this
         };
-        helpDialog.ShowDialog();
+        dialog.ShowDialog();
     }
 
     private void BreadcrumbButton_Click(object sender, RoutedEventArgs e)
@@ -78,82 +86,115 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RenameCategoryButton_Click(object sender, RoutedEventArgs e)
+    private void CategoryActionsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is CategoryItemViewModel cat)
+        if (sender is Button button && button.ContextMenu != null)
         {
-            var existingNames = _viewModel.ChildCategories
-                .Where(c => c.Id != cat.Id)
-                .Select(c => c.Name);
+            button.ContextMenu.PlacementTarget = button;
+            button.ContextMenu.IsOpen = true;
+        }
+    }
 
-            var dialog = new NameDialog(
-                "Rename Category",
-                "Save",
-                cat.Name,
-                name => LibraryValidator.ValidateCategoryNameInput(name, existingNames))
-            {
-                Owner = this
-            };
+    private static bool TryGetCategoryFromMenuItem(object sender, out CategoryItemViewModel? category)
+    {
+        category = null;
+        if (sender is MenuItem menuItem &&
+            menuItem.Parent is ContextMenu contextMenu &&
+            contextMenu.PlacementTarget is FrameworkElement fe &&
+            fe.DataContext is CategoryItemViewModel cat)
+        {
+            category = cat;
+            return true;
+        }
+        return false;
+    }
 
-            if (dialog.ShowDialog() == true)
+    private void RenameCategoryMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryGetCategoryFromMenuItem(sender, out var cat) && cat != null)
+        {
+            RenameCategory(cat);
+        }
+    }
+
+    private void DeleteCategoryMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryGetCategoryFromMenuItem(sender, out var cat) && cat != null)
+        {
+            DeleteCategory(cat);
+        }
+    }
+
+    private void RenameCategory(CategoryItemViewModel cat)
+    {
+        var existingNames = _viewModel.ChildCategories
+            .Where(c => c.Id != cat.Id)
+            .Select(c => c.Name);
+
+        var dialog = new NameDialog(
+            "Rename Category",
+            "Save",
+            cat.Name,
+            name => LibraryValidator.ValidateCategoryNameInput(name, existingNames))
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            try
             {
-                try
-                {
-                    var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
-                    ShowWarningIfPresent(result.Warning);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-                {
-                    MessageBox.Show(
-                        this,
-                        $"Failed to rename category:\n\n{ex.Message}",
-                        "Category Rename Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
+                var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
+                ShowWarningIfPresent(result.Warning);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Failed to rename category:\n\n{ex.Message}",
+                    "Category Rename Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
         }
     }
 
-    private void DeleteCategoryButton_Click(object sender, RoutedEventArgs e)
+    private void DeleteCategory(CategoryItemViewModel cat)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is CategoryItemViewModel cat)
+        if (!_viewModel.CanDeleteCategory(cat.Id, out string? blockReason))
         {
-            if (!_viewModel.CanDeleteCategory(cat.Id, out string? blockReason))
+            MessageBox.Show(
+                this,
+                blockReason,
+                "Cannot Delete Category",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        var confirmDialog = new ConfirmDeleteDialog(
+            "Delete Category",
+            $"Delete category \"{cat.Name}\"?",
+            "Delete")
+        {
+            Owner = this
+        };
+
+        if (confirmDialog.ShowDialog() == true)
+        {
+            try
+            {
+                var result = _viewModel.DeleteCategory(cat.Id);
+                ShowWarningIfPresent(result.Warning);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
             {
                 MessageBox.Show(
                     this,
-                    blockReason,
-                    "Cannot Delete Category",
+                    $"Failed to delete category:\n\n{ex.Message}",
+                    "Delete Error",
                     MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                return;
-            }
-
-            var confirmDialog = new ConfirmDeleteDialog(
-                "Delete Category",
-                $"Delete category \"{cat.Name}\"?",
-                "Delete")
-            {
-                Owner = this
-            };
-
-            if (confirmDialog.ShowDialog() == true)
-            {
-                try
-                {
-                    var result = _viewModel.DeleteCategory(cat.Id);
-                    ShowWarningIfPresent(result.Warning);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-                {
-                    MessageBox.Show(
-                        this,
-                        $"Failed to delete category:\n\n{ex.Message}",
-                        "Delete Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
+                    MessageBoxImage.Error);
             }
         }
     }
@@ -161,9 +202,10 @@ public partial class MainWindow : Window
     private void AddPromptButton_Click(object sender, RoutedEventArgs e)
     {
         string promptText = string.Empty;
+        string headlineText = string.Empty;
         while (true)
         {
-            var dialog = new PromptEditorDialog("Create Prompt", promptText)
+            var dialog = new PromptEditorDialog("Create Prompt", promptText, headlineText)
             {
                 Owner = this
             };
@@ -174,9 +216,10 @@ public partial class MainWindow : Window
             }
 
             promptText = dialog.ResultText;
+            headlineText = dialog.ResultHeadline ?? string.Empty;
             try
             {
-                var result = _viewModel.CreatePrompt(promptText);
+                var result = _viewModel.CreatePrompt(promptText, dialog.ResultHeadline);
                 ShowWarningIfPresent(result.Warning);
                 break;
             }
@@ -213,9 +256,11 @@ public partial class MainWindow : Window
                 return;
             }
 
+            string headlineText = card.EditableHeadline;
+
             while (true)
             {
-                var dialog = new PromptEditorDialog("Edit Prompt", promptText)
+                var dialog = new PromptEditorDialog("Edit Prompt", promptText, headlineText)
                 {
                     Owner = this
                 };
@@ -226,9 +271,10 @@ public partial class MainWindow : Window
                 }
 
                 promptText = dialog.ResultText;
+                headlineText = dialog.ResultHeadline ?? string.Empty;
                 try
                 {
-                    var result = _viewModel.EditPrompt(card.Id, promptText);
+                    var result = _viewModel.EditPrompt(card.Id, promptText, dialog.ResultHeadline);
                     ShowWarningIfPresent(result.Warning);
                     break;
                 }
@@ -320,6 +366,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private string CopyPromptToClipboard(Guid promptId, string effectiveHeadline)
+    {
+        string textToCopy = _viewModel.GetPromptContent(promptId);
+        _clipboardService.CopyText(textToCopy);
+        _viewModel.RecordSuccessfulPromptCopy(promptId, effectiveHeadline, textToCopy);
+        return textToCopy;
+    }
+
     private async void CopyPromptButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is PromptCardViewModel card)
@@ -331,10 +385,8 @@ public partial class MainWindow : Window
 
             try
             {
-                string textToCopy = _viewModel.GetPromptContent(card.Id);
-                _clipboardService.CopyText(textToCopy);
-
                 card.IsCopying = true;
+                CopyPromptToClipboard(card.Id, card.PreviewTitle);
                 card.CopyButtonText = "Copied ✓";
 
                 await Task.Delay(900);
@@ -346,6 +398,41 @@ public partial class MainWindow : Window
             {
                 card.CopyButtonText = "Copy";
                 card.IsCopying = false;
+
+                MessageBox.Show(
+                    this,
+                    ex.Message,
+                    "Clipboard Copy Failed",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+    }
+
+    private async void RecentPromptCopyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is RecentPromptViewModel recent)
+        {
+            if (recent.IsCopying)
+            {
+                return;
+            }
+
+            try
+            {
+                recent.IsCopying = true;
+                CopyPromptToClipboard(recent.Id, recent.Headline);
+                recent.CopyButtonText = "Copied ✓";
+
+                await Task.Delay(900);
+
+                recent.CopyButtonText = "Copy";
+                recent.IsCopying = false;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
+            {
+                recent.CopyButtonText = "Copy";
+                recent.IsCopying = false;
 
                 MessageBox.Show(
                     this,

@@ -22,9 +22,16 @@ public sealed record OperationResult<T>(
 
 public sealed record PromptDisplayRecord(
     Guid Id,
+    string? Title,
     string Content,
     bool IsContentAvailable,
     string? LoadError);
+
+public sealed record DataFolderChangeResult(
+    string NormalizedTargetRoot,
+    bool ExistingLibraryFound,
+    bool Copied,
+    string? Warning = null);
 
 public sealed record DestinationRecord(
     Guid? CategoryId,

@@ -37,8 +37,18 @@ public sealed class PromptRepository
         }
     }
 
-    public string Read(Guid id) =>
-        File.ReadAllText(_paths.GetPromptPath(id));
+    public string Read(Guid id)
+    {
+        string path = _paths.GetPromptPath(id);
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new FileNotFoundException("Prompt file does not exist.", path);
+        }
+    }
 
     public void Create(Guid id, string content)
     {

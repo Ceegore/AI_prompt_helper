@@ -8,10 +8,12 @@
         MinWidth="900"
         MinHeight="600"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource AppBackgroundBrush}">
+        Background="{StaticResource AppBackgroundBrush}"
+        Icon="/PromptHelper;component/Assets/PromptHelper.ico">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="64"/>
+            <RowDefinition Height="56"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -29,19 +31,75 @@
                     <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <Button x:Name="HelpButton"
-                        Content="?"
+                <Button x:Name="SettingsButton"
+                        Content="🔧"
                         Style="{StaticResource IconButtonStyle}"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
-                        ToolTip="Help"
-                        AutomationProperties.Name="Help"
-                        Click="HelpButton_Click"/>
+                        ToolTip="Tools and settings"
+                        AutomationProperties.Name="Tools and settings"
+                        Click="SettingsButton_Click"/>
             </Grid>
         </Border>
 
+        <!-- Recent Copies Quick Bar (Session only) -->
+        <Border Grid.Row="1"
+                Background="{StaticResource AppBackgroundBrush}"
+                Padding="32,5">
+            <ItemsControl ItemsSource="{Binding RecentPrompts}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Columns="3"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:RecentPromptViewModel}">
+                        <Border Style="{StaticResource RecentPromptTileStyle}"
+                                Margin="0,0,10,0"
+                                Height="46">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Grid Grid.Column="0" Margin="0,0,8,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0"
+                                               Text="{Binding Headline}"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="1"
+                                               Text="{Binding Excerpt}"
+                                               FontSize="10.5"
+                                               Foreground="{StaticResource SubtleTextBrush}"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Button Grid.Column="1"
+                                        Content="{Binding CopyButtonText}"
+                                        Style="{StaticResource CompactCopyButtonStyle}"
+                                        Click="RecentPromptCopyButton_Click"
+                                        ToolTip="Copy prompt"
+                                        AutomationProperties.Name="Copy recent prompt"/>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+
         <!-- Main Body -->
-        <Grid Grid.Row="1" Margin="32,20,32,24">
+        <Grid Grid.Row="2" Margin="32,16,32,24">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
@@ -148,21 +206,26 @@
                                                    VerticalAlignment="Center"/>
                                     </Button>
 
-                                    <!-- Action Buttons -->
+                                    <!-- Action Button (Wrench overlay) -->
                                     <StackPanel Grid.Column="1"
                                                 Orientation="Horizontal"
                                                 VerticalAlignment="Center"
                                                 Margin="0,0,8,0">
-                                        <Button Content="✎"
+                                        <Button x:Name="CategoryActionsButton"
+                                                Content="🔧"
                                                 Style="{StaticResource IconButtonStyle}"
-                                                ToolTip="Rename category"
-                                                AutomationProperties.Name="Rename category"
-                                                Click="RenameCategoryButton_Click"/>
-                                        <Button Content="×"
-                                                Style="{StaticResource IconButtonStyle}"
-                                                ToolTip="Delete category"
-                                                AutomationProperties.Name="Delete category"
-                                                Click="DeleteCategoryButton_Click"/>
+                                                ToolTip="Category actions"
+                                                AutomationProperties.Name="Category actions"
+                                                Click="CategoryActionsButton_Click">
+                                            <Button.ContextMenu>
+                                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                    <MenuItem Header="✎ Rename"
+                                                              Click="RenameCategoryMenuItem_Click"/>
+                                                    <MenuItem Header="× Delete"
+                                                              Click="DeleteCategoryMenuItem_Click"/>
+                                                </ContextMenu>
+                                            </Button.ContextMenu>
+                                        </Button>
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -191,7 +254,7 @@
                         Click="AddPromptButton_Click"/>
             </Grid>
 
-            <!-- Prompts List Box -->
+            <!-- Prompts List Box (3-Cards-Per-Row Grid) -->
             <Grid Grid.Row="5">
                 <!-- Empty state message -->
                 <TextBlock Text="No prompts in this category."
@@ -211,16 +274,13 @@
                     </TextBlock.Style>
                 </TextBlock>
 
-                <!-- Virtualizing ListBox -->
+                <!-- Prompt Grid ListBox -->
                 <ListBox ItemsSource="{Binding Prompts}"
-                         ItemContainerStyle="{StaticResource FlatListBoxItemStyle}"
+                         ItemContainerStyle="{StaticResource PromptGridListBoxItemStyle}"
                          Background="Transparent"
                          BorderThickness="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         ScrollViewer.CanContentScroll="True"
-                         VirtualizingPanel.IsVirtualizing="True"
-                         VirtualizingPanel.VirtualizationMode="Recycling">
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListBox.Style>
                         <Style TargetType="ListBox">
                             <Setter Property="Visibility" Value="Visible"/>
@@ -231,59 +291,82 @@
                             </Style.Triggers>
                         </Style>
                     </ListBox.Style>
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="3"/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
                     <ListBox.ItemTemplate>
                         <DataTemplate DataType="{x:Type vm:PromptCardViewModel}">
-                            <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,16">
+                            <Border Style="{StaticResource CardBorderStyle}"
+                                    ToolTipService.InitialShowDelay="500"
+                                    ToolTipService.ShowDuration="60000">
+                                <Border.ToolTip>
+                                    <ToolTip MaxWidth="700"
+                                             MaxHeight="480"
+                                             Padding="0">
+                                        <Border Background="{StaticResource SurfaceBrush}"
+                                                BorderBrush="{StaticResource BorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="8"
+                                                Padding="14">
+                                            <ScrollViewer MaxHeight="440"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <TextBlock Text="{Binding DisplayText}"
+                                                           FontFamily="{StaticResource MonospaceFontFamily}"
+                                                           FontSize="13"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                                           TextWrapping="Wrap"/>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </ToolTip>
+                                </Border.ToolTip>
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
 
-                                    <!-- Top Card Bar -->
-                                    <Grid Grid.Row="0" Margin="0,0,0,12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
+                                    <!-- Headline -->
+                                    <TextBlock Grid.Row="0"
+                                               Text="{Binding PreviewTitle}"
+                                               FontSize="14"
+                                               FontWeight="Bold"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               TextTrimming="CharacterEllipsis"
+                                               Margin="0,0,0,10"/>
 
-                                        <!-- Derived Preview Title -->
-                                        <TextBlock Grid.Column="0"
-                                                   Text="{Binding PreviewTitle}"
-                                                   FontSize="15"
-                                                   FontWeight="Bold"
-                                                   Foreground="{StaticResource TextPrimaryBrush}"
-                                                   VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Margin="0,0,16,0"/>
+                                    <!-- Action Buttons -->
+                                    <UniformGrid Grid.Row="1"
+                                                 Columns="4"
+                                                 Margin="0,0,0,10">
+                                        <Button Content="Delete"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                Click="DeletePromptButton_Click"/>
+                                        <Button Content="Edit"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                IsEnabled="{Binding IsContentAvailable}"
+                                                Click="EditPromptButton_Click"/>
+                                        <Button Content="Move"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                Click="MovePromptButton_Click"/>
+                                        <Button Content="{Binding CopyButtonText}"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                IsEnabled="{Binding IsContentAvailable}"
+                                                Click="CopyPromptButton_Click"/>
+                                    </UniformGrid>
 
-                                        <!-- Action Buttons -->
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Button Content="Delete"
-                                                    Style="{StaticResource SecondaryButtonStyle}"
-                                                    Click="DeletePromptButton_Click"
-                                                    Margin="0,0,8,0"/>
-                                            <Button Content="Edit"
-                                                    Style="{StaticResource SecondaryButtonStyle}"
-                                                    IsEnabled="{Binding IsContentAvailable}"
-                                                    Click="EditPromptButton_Click"
-                                                    Margin="0,0,8,0"/>
-                                            <Button Content="Move"
-                                                    Style="{StaticResource SecondaryButtonStyle}"
-                                                    Click="MovePromptButton_Click"
-                                                    Margin="0,0,8,0"/>
-                                            <Button Content="{Binding CopyButtonText}"
-                                                    Style="{StaticResource PrimaryButtonStyle}"
-                                                    IsEnabled="{Binding IsContentAvailable}"
-                                                    Click="CopyPromptButton_Click"
-                                                    MinWidth="78"/>
-                                        </StackPanel>
-                                    </Grid>
-
-                                    <!-- Prompt Content -->
-                                    <TextBox Grid.Row="1"
-                                             Text="{Binding DisplayText, Mode=OneWay}"
-                                             Style="{StaticResource PromptDisplayTextBoxStyle}"/>
+                                    <!-- Short Prompt Preview -->
+                                    <TextBlock Grid.Row="2"
+                                               Text="{Binding DisplayText}"
+                                               FontFamily="{StaticResource MonospaceFontFamily}"
+                                               FontSize="12"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               TextWrapping="Wrap"
+                                               MaxHeight="110"
+                                               ClipToBounds="True"/>
                                 </Grid>
                             </Border>
                         </DataTemplate>

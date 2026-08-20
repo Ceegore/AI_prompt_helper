@@ -18,7 +18,11 @@ public partial class App : Application
 
         try
         {
-            var paths = new AppPaths();
+            var writer = new AtomicTextWriter();
+            var settingsRepo = new AppSettingsRepository(writer);
+            string effectiveDataRoot = settingsRepo.GetEffectiveDataRoot();
+
+            var paths = new AppPaths(effectiveDataRoot);
             paths.EnsureRootDirectory();
 
             _appLock = AppInstanceLock.TryAcquire(paths.LockPath);
@@ -35,7 +39,6 @@ public partial class App : Application
 
             paths.EnsureDataDirectories();
 
-            var writer = new AtomicTextWriter();
             var deleter = new FileDeleter();
             var libraryRepo = new LibraryRepository(paths, writer);
             var promptRepo = new PromptRepository(paths, writer, deleter);
@@ -59,9 +62,10 @@ public partial class App : Application
 
             var libraryService = new PromptLibraryService(startupResult.Document, libraryRepo, promptRepo);
             var clipboardService = new ClipboardService();
+            var migrationService = new DataFolderMigrationService();
             var mainViewModel = new MainViewModel(libraryService, promptRepo, paths.RootDirectory);
 
-            var mainWindow = new MainWindow(mainViewModel, clipboardService);
+            var mainWindow = new MainWindow(mainViewModel, clipboardService, settingsRepo, migrationService);
             MainWindow = mainWindow;
             mainWindow.Show();
 

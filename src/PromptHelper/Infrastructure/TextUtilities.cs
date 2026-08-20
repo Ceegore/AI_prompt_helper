@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace PromptHelper.Infrastructure;
 
@@ -31,5 +32,16 @@ public static class TextUtilities
         int endIndex = starts[kept];
 
         return value[..endIndex] + "…";
+    }
+
+    public static string CreateCompactPreview(string? content, int maxTextElements = 160)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return string.Empty;
+        }
+
+        string normalized = Regex.Replace(content, @"\s+", " ").Trim();
+        return TruncateWithEllipsis(normalized, maxTextElements);
     }
 }

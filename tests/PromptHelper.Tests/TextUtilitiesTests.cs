@@ -56,4 +56,33 @@ public sealed class TextUtilitiesTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             TextUtilities.TruncateWithEllipsis("Hello", 1));
     }
+
+    [TestMethod]
+    public void CreateCompactPreview_NullOrWhitespace_ReturnsEmpty()
+    {
+        Assert.AreEqual(string.Empty, TextUtilities.CreateCompactPreview(null));
+        Assert.AreEqual(string.Empty, TextUtilities.CreateCompactPreview("   \r\n\t  "));
+    }
+
+    [TestMethod]
+    public void CreateCompactPreview_NormalizesNewlinesAndTabs()
+    {
+        string input = "Line 1\r\n\tLine 2\n   Line   3";
+        string expected = "Line 1 Line 2 Line 3";
+        string result = TextUtilities.CreateCompactPreview(input);
+
+        Assert.AreEqual(expected, result);
+        // Ensure original string was unmodified
+        Assert.IsTrue(input.Contains("\r\n"));
+    }
+
+    [TestMethod]
+    public void CreateCompactPreview_TruncatesLongTextWithEllipsis()
+    {
+        string input = new('a', 200);
+        string result = TextUtilities.CreateCompactPreview(input, 50);
+
+        Assert.AreEqual(50, TextUtilities.GetTextElementCount(result));
+        Assert.IsTrue(result.EndsWith("…"));
+    }
 }

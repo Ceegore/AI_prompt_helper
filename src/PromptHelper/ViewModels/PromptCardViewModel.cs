@@ -8,20 +8,25 @@ public sealed class PromptCardViewModel : ObservableObject
     private string _copyButtonText = "Copy";
     private bool _isCopying;
 
-    public PromptCardViewModel(Guid id, string content, bool isContentAvailable, string? loadError)
+    public PromptCardViewModel(Guid id, string? customTitle, string content, bool isContentAvailable, string? loadError)
     {
         Id = id;
+        CustomTitle = string.IsNullOrWhiteSpace(customTitle) ? null : customTitle.Trim();
         Content = content;
         IsContentAvailable = isContentAvailable;
         LoadError = loadError;
-        PreviewTitle = ComputePreviewTitle(content, isContentAvailable);
+        PreviewTitle = CustomTitle is not null
+            ? TextUtilities.TruncateWithEllipsis(CustomTitle, 80)
+            : ComputePreviewTitle(content, isContentAvailable);
     }
 
     public Guid Id { get; }
+    public string? CustomTitle { get; }
     public string Content { get; }
     public bool IsContentAvailable { get; }
     public string? LoadError { get; }
     public string PreviewTitle { get; }
+    public string EditableHeadline => CustomTitle ?? PreviewTitle;
 
     public string DisplayText => IsContentAvailable
         ? Content
