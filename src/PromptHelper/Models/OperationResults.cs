@@ -40,3 +40,11 @@ public sealed record DestinationRecord(
 public sealed record BreadcrumbRecord(
     Guid? CategoryId,
     string Name);
+
+public sealed record SettingsLoadResult(
+    AppSettings Settings,
+    bool RecoveredFromBackup,
+    string? Warning);
+
+public sealed record SettingsSaveResult(
+    string? Warning);

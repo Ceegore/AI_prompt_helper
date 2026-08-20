@@ -54,28 +54,35 @@ public partial class SettingsDialog : Window
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        string normalizedCurrent = Path.GetFullPath(_currentDataFolder.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string normalizedSelected = Path.GetFullPath((_selectedDataFolder ?? string.Empty).Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (string.Equals(normalizedCurrent, normalizedSelected, StringComparison.OrdinalIgnoreCase))
-        {
-            DialogResult = false;
-            Close();
-            return;
-        }
-
         try
         {
+            string normalizedCurrent = Path.GetFullPath(_currentDataFolder.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string normalizedSelected = Path.GetFullPath((_selectedDataFolder ?? string.Empty).Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (string.Equals(normalizedCurrent, normalizedSelected, StringComparison.OrdinalIgnoreCase))
+            {
+                RestartRequired = false;
+                DialogResult = true;
+                Close();
+                return;
+            }
+
             var result = _migrationService.PrepareTarget(_currentDataFolder, _selectedDataFolder ?? string.Empty);
-            _settingsRepo.Save(new AppSettings
+            var saveResult = _settingsRepo.Save(new AppSettings
             {
                 SchemaVersion = 1,
                 DataRootPath = result.NormalizedTargetRoot
             });
 
+            string successMessage = "The data folder has been saved.\r\n\r\nPrompt Helper will use it the next time the application starts.\r\n\r\nThe previous data folder was left unchanged as a safety copy.";
+            if (!string.IsNullOrEmpty(saveResult.Warning))
+            {
+                successMessage += $"\r\n\r\nWarning: {saveResult.Warning}";
+            }
+
             MessageBox.Show(
                 this,
-                "The data folder has been saved.\r\n\r\nPrompt Helper will use it the next time the application starts.\r\n\r\nThe previous data folder was left unchanged as a safety copy.",
+                successMessage,
                 "Data Folder Saved",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -84,7 +91,7 @@ public partial class SettingsDialog : Window
             DialogResult = true;
             Close();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or InvalidDataException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException or InvalidDataException or ArgumentException or NotSupportedException or InvalidOperationException)
         {
             MessageBox.Show(
                 this,

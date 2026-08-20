@@ -106,21 +106,29 @@ Wenn du sofort loslegen möchtest:
 2. `PromptHelper.exe` starten.
 3. Mit **+ Add** eine Kategorie anlegen.
 4. Kategorie öffnen.
-5. Mit **+ Prompt** einen Prompt erstellen.
+5. Mit **+ Prompt** einen Prompt erstellen (mit optionaler Headline und Zeilenumbruch-Vorschau via **Wrap long lines**).
 6. Im Editor auf **Save** klicken.
-7. Beim Prompt auf **Copy** klicken.
+7. Beim Prompt auf **Copy** klicken (wird auch in die Quick-Bar der letzten Kopien übernommen).
 8. In deinem AI-Tool `Strg + V` drücken.
 9. Mit **Edit** änderst du einen Prompt.
 10. Mit **Move** verschiebst du ihn.
 11. Mit **Move → Copy instead of move** duplizierst du ihn.
+12. Oben rechts über das Schraubenschlüssel-Symbol **🔧 Tools and settings** kannst du den Datenordner anpassen.
 
-Die wichtigsten Daten liegen standardmäßig hier:
+Die Prompt-Bibliothek liegt standardmäßig hier:
 
 ```text
 %LOCALAPPDATA%\PromptHelper
 ```
 
-Für ein echtes Backup immer den **gesamten Datenordner** sichern.
+Die Bootstrap-Konfiguration liegt dauerhaft unter:
+
+```text
+%LOCALAPPDATA%\PromptHelper\settings.json
+%LOCALAPPDATA%\PromptHelper\settings.backup.json
+```
+
+Für ein echtes Backup immer den **gesamten aktiven Datenordner** sichern (Pfad siehe Tools & Settings).
 
 ---
 
@@ -263,7 +271,7 @@ Du kannst sie später:
 
 Das ist einer der wichtigsten Punkte.
 
-Prompt Helper hat zwei getrennte Orte:
+Prompt Helper hat getrennte Orte:
 
 ## Programmordner
 
@@ -289,6 +297,15 @@ Standard:
 %LOCALAPPDATA%\PromptHelper
 ```
 
+Über das Schraubenschlüssel-Symbol **Tools and settings** oben rechts kannst du einen beliebigen anderen Datenordner auf deiner Festplatte auswählen. Beim Speichern wird der bisherige Datenbestand sicher in den neuen Zielordner kopiert (sofern dort nicht bereits eine Prompt-Helper-Bibliothek liegt). Die Änderung wird nach einem Neustart von Prompt Helper aktiv.
+
+Die Bootstrap-Konfiguration (wo sich der aktive Datenordner befindet) verbleibt immer fest unter:
+
+```text
+%LOCALAPPDATA%\PromptHelper\settings.json
+%LOCALAPPDATA%\PromptHelper\settings.backup.json
+```
+
 Diese Trennung bedeutet:
 
 ```text
@@ -309,7 +326,7 @@ Datenordner neu anlegen müssen
 
 # 6. Das Hauptfenster
 
-Das Hauptfenster besitzt vier wesentliche Bereiche.
+Das Hauptfenster besitzt folgende wesentliche Bereiche.
 
 ---
 
@@ -318,31 +335,34 @@ Das Hauptfenster besitzt vier wesentliche Bereiche.
 Oben links:
 
 ```text
-[P] Prompt Helper
+Prompt Helper
 ```
 
 Oben rechts:
 
 ```text
-?
+🔧
 ```
 
-Der `?`-Button öffnet den Hilfe-Dialog.
+Der `🔧`-Button öffnet den Dialog **Tools & Settings**.
 
 ---
 
-## 6.2 Hilfe-Dialog
+## 6.2 Tools & Settings Dialog
 
 Klicke oben rechts auf:
 
 ```text
-?
+🔧
 ```
 
 Der Dialog zeigt unter anderem:
 
-- den lokalen Datenordner,
-- die laufende Programmversion.
+- den aktuellen Datenordner (**Data folder**),
+- einen **Browse…**-Button zur Auswahl eines neuen Speicherorts,
+- die laufende Programmversion,
+- praktische Bedienhinweise,
+- die Autorenzeile `Made by CeeGore`.
 
 Besonders hilfreich:
 
@@ -350,11 +370,25 @@ Besonders hilfreich:
 Data folder:
 ```
 
-Wenn du nicht weißt, wo deine Daten gespeichert sind, ist dies der sicherste Weg, den exakten Pfad nachzuschauen.
+Hier siehst du exakt, wo deine Prompts und Kategorien gespeichert sind. Wenn du einen neuen Ordner auswählst und auf **Save** klickst, wird dein Datenbestand dorthin migriert. Ein Neustart von Prompt Helper übernimmt den neuen Pfad.
 
 ---
 
-## 6.3 Breadcrumb-Navigation
+## 6.3 Quick-Bar der letzten Kopien (Recent Prompts)
+
+Direkt unter der Kopfzeile befindet sich eine praktische Schnellauswahlleiste:
+
+- Zeigt bis zu **3** zuletzt erfolgreich kopierte Prompts nebeneinander an.
+- Beginnt bei jedem Start von Prompt Helper leer (rein sitzungsbasiert, wird nicht auf Festplatte gespeichert).
+- Neueste Kopie erscheint links (Position 1).
+- Beim erneuten Kopieren eines bereits vorhandenen Prompts rückt dieser an die erste Stelle.
+- Jede Kachel enthält die Headline, einen kurzen Textauszug und einen kleinen **Copy**-Button.
+- Beim Löschen eines Prompts wird er automatisch auch aus der Schnellauswahlleiste entfernt.
+- Beim Bearbeiten eines Prompts aktualisieren sich Headline und Auszug in der Leiste in Echtzeit.
+
+---
+
+## 6.4 Breadcrumb-Navigation
 
 Beispiel:
 
@@ -394,7 +428,7 @@ führt zur obersten Ebene.
 
 ---
 
-## 6.4 Categories
+## 6.5 Categories
 
 Unter **Categories** siehst du die Unterkategorien der aktuellen Ebene.
 
@@ -408,21 +442,21 @@ Jede Kategorie besitzt:
 
 ```text
 Kategoriename
-✎
-×
+🔧 (Aktionsmenü)
 ```
 
 Bedeutung:
 
 - Klick auf den Namen → Kategorie öffnen
-- `✎` → umbenennen
-- `×` → löschen
+- Klick auf `🔧` öffnet ein Kontextmenü:
+  - `✎ Rename` → Kategorie umbenennen
+  - `× Delete` → leere Kategorie löschen
 
 ---
 
-## 6.5 Prompts
+## 6.6 Prompts (3-Spalten-Raster)
 
-Unter **Prompts** siehst du die Prompts der aktuellen Ebene.
+Unter **Prompts** siehst du die Prompts der aktuellen Ebene in einem übersichtlichen Raster von **3 Karten pro Zeile**.
 
 Rechts:
 
@@ -430,40 +464,24 @@ Rechts:
 + Prompt
 ```
 
-Eine Prompt-Karte besitzt:
+Eine Prompt-Karte besitzt eine 4-spaltige Aktionsleiste:
 
 ```text
-Delete
-Edit
-Move
-Copy
+Delete | Edit | Move | Copy
 ```
+
+Darunter befindet sich eine kurze, kompakte Textvorschau.
 
 ---
 
-## 6.6 Prompt-Inhalt auf der Karte
+## 6.7 Vollständige Vorschau per Hover (Tooltip)
 
-Die Prompt-Karte zeigt einen **read-only** Inhaltsbereich.
+Wenn du mit dem Mauszeiger ca. **0,5 Sekunden** über einer Prompt-Karte verweilst:
 
-Das bedeutet:
-
-```text
-Text ansehen / scrollen
-→ ja
-
-direkt auf der Karte bearbeiten
-→ nein
-```
-
-Zum Bearbeiten immer:
-
-```text
-Edit
-```
-
-verwenden.
-
-Bei längeren Prompts besitzt der Kartenbereich eine eigene vertikale Scrollmöglichkeit. Der sichtbare Ausschnitt ist nicht die Speichergrenze des Prompts.
+- Öffnet sich automatisch ein scrollbares Vorschaufenster mit dem **vollständigen Prompt-Text**.
+- Zeilenumbrüche und Formatierungen bleiben exakt erhalten.
+- Schnelles Überfliegen mit der Maus löst keine störenden Tooltips aus.
+- Unabhängig von der gekürzten Vorschau auf der Karte kopiert der **Copy**-Button immer den **vollständigen** Prompt in die Zwischenablage.
 
 ---
 
@@ -627,15 +645,16 @@ Home › Arbeit › E-Mails
 # 7.6 Kategorie umbenennen
 
 1. Suche die Kategorie.
-2. Klicke:
+2. Klicke auf das Schraubenschlüssel-Symbol:
 
 ```text
-✎
+🔧
 ```
 
-3. Der Dialog **Rename Category** öffnet sich.
-4. Ändere den Namen.
-5. Klicke **Save** oder drücke `Enter`.
+3. Wähle im Menü **✎ Rename**.
+4. Der Dialog **Rename Category** öffnet sich.
+5. Ändere den Namen.
+6. Klicke **Save** oder drücke `Enter`.
 
 Unterkategorien und Prompts bleiben erhalten.
 
@@ -656,7 +675,7 @@ Nicht leer bedeutet:
 2. Öffne `Arbeit`.
 3. Erstelle `E-Mails`.
 4. Gehe zurück zu `Home`.
-5. Klicke bei `Arbeit` auf `×`.
+5. Klicke bei `Arbeit` auf `🔧` und wähle `× Delete`.
 
 ## Erwartetes Ergebnis
 
@@ -675,7 +694,7 @@ Move or delete its prompts and subcategories first.
 # 7.8 Leere Kategorie löschen
 
 1. Erstelle eine leere Kategorie `Alt`.
-2. Klicke `×`.
+2. Klicke auf `🔧` und wähle `× Delete`.
 3. **Delete Category** öffnet sich.
 4. Klicke **Delete**.
 
@@ -707,8 +726,10 @@ Home › Arbeit › E-Mails
 ```
 
 3. Der Dialog **Create Prompt** öffnet sich.
-4. Gib den Text ein.
-5. Klicke:
+4. **Headline (optional):** Du kannst eine eigene Überschrift für die Prompt-Karte vergeben. Wenn du das Feld leer lässt, wird die Überschrift automatisch aus der ersten Textzeile generiert.
+5. **Wrap long lines:** Setze bei Bedarf den Haken, um lange Zeilen im Editor visuell umzubrechen. Dies dient nur der besseren Lesbarkeit im Editor und verändert den gespeicherten Prompt-Text niemals.
+6. Gib deinen Prompt-Text ein.
+7. Klicke:
 
 ```text
 Save
@@ -717,6 +738,9 @@ Save
 ## Beispiel
 
 ```text
+Headline: E-Mail Assistent
+
+Prompt-Text:
 E-MAIL – Professionelle Antwort erstellen
 
 Formuliere aus den folgenden Stichpunkten eine kurze professionelle E-Mail.
@@ -729,32 +753,22 @@ Anforderungen:
 
 ## Erwartetes Ergebnis
 
-Der Editor schließt sich und eine neue Prompt-Karte erscheint.
+Der Editor schließt sich und eine neue Prompt-Karte im 3-Spalten-Raster erscheint.
 
 ---
 
-# 8.2 Wie der Kartentitel entsteht
+# 8.2 Wie der Kartentitel entsteht (Headline und Automatik-Modus)
 
-Prompts besitzen keinen separaten Namens- oder Titelwert.
+Prompt Helper bietet zwei Modi für den Kartentitel:
 
-Der Kartentitel wird automatisch aus der **ersten nicht-leeren Zeile** erzeugt.
+1. **Benutzerdefinierte Headline:** Wenn du im Feld `Headline` einen eigenen Titel eingegeben hast, wird dieser auf der Karte angezeigt.
+2. **Automatischer Modus:** Wenn das Feld `Headline` leer gelassen wird, erzeugt Prompt Helper die Überschrift automatisch aus der **ersten nicht-leeren Zeile** des Prompt-Texts.
 
-Beispiel:
+### Wichtiges Verhalten beim Bearbeiten:
 
-```text
-E-MAIL – Professionelle Antwort erstellen
-
-ROLE
-...
-```
-
-Kartentitel:
-
-```text
-E-MAIL – Professionelle Antwort erstellen
-```
-
-Bei einer sehr langen ersten Zeile wird die Anzeige gekürzt.
+- **Automatisch vorausgefüllter Titel:** Öffnest du einen Prompt im automatischen Modus zur Bearbeitung, wird die bisherige automatische Überschrift im Headline-Feld vorausgefüllt angezeigt. Wenn du dieses Feld **nicht veränderst**, bleibt der Prompt im automatischen Modus. Änderst du später die erste Zeile des Textes, passt sich die Überschrift weiterhin automatisch an!
+- **Manuelles Festlegen:** Sobald du das Headline-Feld explizit abänderst und speicherst, wird deine Eingabe als feste benutzerdefinierte Headline gespeichert.
+- **Zurück zum Automatik-Modus:** Löschst du das Headline-Feld komplett leer, wechselt der Prompt wieder in den automatischen Modus.
 
 ---
 
@@ -781,11 +795,10 @@ Kartentitel:
 # 8.4 Prompt bearbeiten
 
 1. Beim Prompt **Edit** klicken.
-2. Der vollständige Inhalt öffnet sich.
-3. Text ändern.
-4. **Save**.
-
-Wenn du die erste nicht-leere Zeile änderst, ändert sich auch der Kartentitel.
+2. Der vollständige Inhalt und die Headline öffnen sich im Editor.
+3. Text oder Headline ändern.
+4. Bei Bedarf **Wrap long lines** aktivieren, um überlange Zeilen lesbar umzubrechen.
+5. **Save** klicken.
 
 ---
 
@@ -1198,13 +1211,22 @@ Damit kannst du auch bei tiefer Verschachtelung zu übergeordneten Kategorien zu
 
 # 14. Datenablage im Detail
 
-Standard:
+Standardmäßiger Datenordner:
 
 ```text
 %LOCALAPPDATA%\PromptHelper
 ```
 
-Öffnen:
+Diesen Ordner kannst du über das Schraubenschlüssel-Symbol oben rechts (**🔧 Tools and settings**) einsehen oder auf einen benutzerdefinierten Pfad ändern.
+
+Die feste Bootstrap-Konfiguration liegt immer unter:
+
+```text
+%LOCALAPPDATA%\PromptHelper\settings.json
+%LOCALAPPDATA%\PromptHelper\settings.backup.json
+```
+
+Öffnen des Standardordners:
 
 1. `Windows + R`
 2. eingeben:
@@ -1214,13 +1236,6 @@ Standard:
 ```
 
 3. `Enter`
-
-Alternativ über:
-
-```text
-?
-→ Data folder
-```
 
 ---
 
@@ -1408,22 +1423,20 @@ gesamten PromptHelper-Datenordner kopieren
 
 1. Prompt Helper normal schließen.
 2. Prüfe im Task-Manager, dass kein `PromptHelper`-Prozess mehr läuft.
-3. `Windows + R`.
-4. Eingeben:
-
-```text
-%LOCALAPPDATA%
-```
-
-5. `PromptHelper` suchen.
-6. Gesamten Ordner kopieren.
-7. An sicheren Ort einfügen.
+3. Öffne den **aktuellen Datenordner**.
+   - Standard: `%LOCALAPPDATA%\PromptHelper`
+   - Bei benutzerdefiniertem Speicherort: Den in **Tools & Settings** konfigurierten Ordner öffnen.
+4. Den gesamten Prompt-Helper-Datenordner kopieren (enthält `library.json`, `library.backup.json` und den Unterordner `prompts\`).
+5. An einem sicheren Ort einfügen.
 
 Beispiel:
 
 ```text
 Dokumente\PromptHelper-Backups\PromptHelper-2026-08-20
 ```
+
+> **Hinweis zur Bootstrap-Einstellung:**
+> Wenn du einen benutzerdefinierten Datenordner verwendest, liegt deine Prompt-Bibliothek in diesem Zielordner. Die kleine Datei `%LOCALAPPDATA%\PromptHelper\settings.json` (und `settings.backup.json`) speichert lediglich, wo sich dieser Datenordner befindet. Für dein inhaltliches Backup ist der konfigurierte Datenordner maßgeblich.
 
 ---
 
@@ -2045,14 +2058,9 @@ Wenn später eine neue Prompt-Helper-Version erscheint:
 ## Sicherer Ablauf
 
 1. Prompt Helper schließen.
-2. vollständiges Backup erstellen:
-
-```text
-%LOCALAPPDATA%\PromptHelper
-```
-
-3. neue Release-ZIP herunterladen.
-4. neue ZIP in **neuen Programmordner** entpacken.
+2. Vollständiges Backup des aktuellen Datenordners erstellen (siehe Abschnitt 15).
+3. Neue Release-ZIP herunterladen.
+4. Neue ZIP in **neuen Programmordner** entpacken.
 
 Beispiel:
 
@@ -2060,14 +2068,21 @@ Beispiel:
 Apps\PromptHelper-0.1.1
 ```
 
-5. neue EXE starten.
-6. über `?` Version prüfen.
-7. wichtige Kategorien und Prompts testen.
-8. alten Programmordner erst löschen, wenn alles funktioniert.
+5. Neue EXE starten.
+6. Über das Schraubenschlüssel-Symbol **🔧 Tools and settings** die Version und den Datenpfad prüfen.
+7. Wichtige Kategorien und Prompts testen.
+8. Alten Programmordner erst löschen, wenn alles funktioniert.
 
 ---
 
-# 22.1 Daten nicht in den Programmordner kopieren
+# 22.1 Downgrade-Warnung (Wichtig bei Nutzung von Headlines)
+
+> **Wichtiger Hinweis zur Abwärtskompatibilität:**
+> Sobald du in deiner Bibliothek benutzerdefinierte Prompt-Headlines vergeben hast, bearbeite diese Bibliothek **nicht mehr mit älteren Versionen von Prompt Helper**, die noch keine Unterstützung für Headlines besitzen. Ältere Versionen könnten die neuen Titel beim erneuten Speichern der Metadaten verwerfen.
+
+---
+
+# 22.2 Daten nicht in den Programmordner kopieren
 
 Die eigentliche Bibliothek bleibt unter:
 

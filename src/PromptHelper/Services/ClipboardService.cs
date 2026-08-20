@@ -3,7 +3,7 @@ using System.Windows;
 
 namespace PromptHelper.Services;
 
-public sealed class ClipboardService
+public sealed class ClipboardService : IClipboardService
 {
     public void CopyText(string text)
     {

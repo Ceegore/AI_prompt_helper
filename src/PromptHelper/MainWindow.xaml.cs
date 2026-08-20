@@ -11,23 +11,34 @@ namespace PromptHelper;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
-    private readonly ClipboardService _clipboardService;
+    private readonly IClipboardService _clipboardService;
+    private readonly PromptCopyCoordinator _copyCoordinator;
     private readonly AppSettingsRepository _settingsRepo;
     private readonly DataFolderMigrationService _migrationService;
 
     public MainWindow(
         MainViewModel viewModel,
-        ClipboardService clipboardService,
+        IClipboardService clipboardService,
         AppSettingsRepository? settingsRepo = null,
         DataFolderMigrationService? migrationService = null)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _clipboardService = clipboardService ?? throw new ArgumentNullException(nameof(clipboardService));
+        _copyCoordinator = new PromptCopyCoordinator(_viewModel, _clipboardService);
         _settingsRepo = settingsRepo ?? new AppSettingsRepository();
         _migrationService = migrationService ?? new DataFolderMigrationService();
-
         DataContext = _viewModel;
+
+        try
+        {
+            var iconUri = new Uri("pack://application:,,,/PromptHelper;component/Assets/PromptHelper.ico", UriKind.Absolute);
+            Icon = System.Windows.Media.Imaging.BitmapFrame.Create(iconUri);
+        }
+        catch
+        {
+            // Optional icon resource if not yet packaged
+        }
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -203,9 +214,10 @@ public partial class MainWindow : Window
     {
         string promptText = string.Empty;
         string headlineText = string.Empty;
+        bool headlineAutomatic = true;
         while (true)
         {
-            var dialog = new PromptEditorDialog("Create Prompt", promptText, headlineText)
+            var dialog = new PromptEditorDialog("Create Prompt", promptText, headlineText, headlineAutomatic)
             {
                 Owner = this
             };
@@ -216,7 +228,8 @@ public partial class MainWindow : Window
             }
 
             promptText = dialog.ResultText;
-            headlineText = dialog.ResultHeadline ?? string.Empty;
+            headlineText = dialog.ResultHeadlineEditorText;
+            headlineAutomatic = dialog.ResultUsesAutomaticHeadline;
             try
             {
                 var result = _viewModel.CreatePrompt(promptText, dialog.ResultHeadline);
@@ -257,10 +270,11 @@ public partial class MainWindow : Window
             }
 
             string headlineText = card.EditableHeadline;
+            bool headlineAutomatic = card.CustomTitle is null;
 
             while (true)
             {
-                var dialog = new PromptEditorDialog("Edit Prompt", promptText, headlineText)
+                var dialog = new PromptEditorDialog("Edit Prompt", promptText, headlineText, headlineAutomatic)
                 {
                     Owner = this
                 };
@@ -271,7 +285,8 @@ public partial class MainWindow : Window
                 }
 
                 promptText = dialog.ResultText;
-                headlineText = dialog.ResultHeadline ?? string.Empty;
+                headlineText = dialog.ResultHeadlineEditorText;
+                headlineAutomatic = dialog.ResultUsesAutomaticHeadline;
                 try
                 {
                     var result = _viewModel.EditPrompt(card.Id, promptText, dialog.ResultHeadline);
@@ -368,10 +383,7 @@ public partial class MainWindow : Window
 
     private string CopyPromptToClipboard(Guid promptId, string effectiveHeadline)
     {
-        string textToCopy = _viewModel.GetPromptContent(promptId);
-        _clipboardService.CopyText(textToCopy);
-        _viewModel.RecordSuccessfulPromptCopy(promptId, effectiveHeadline, textToCopy);
-        return textToCopy;
+        return _copyCoordinator.Copy(promptId, effectiveHeadline);
     }
 
     private async void CopyPromptButton_Click(object sender, RoutedEventArgs e)

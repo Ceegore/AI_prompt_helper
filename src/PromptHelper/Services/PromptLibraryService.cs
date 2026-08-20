@@ -203,7 +203,7 @@ public sealed class PromptLibraryService
 
         var newPromptId = GenerateUniquePromptGuid(candidate);
         long nextSortOrder = CalculateNextPromptSortOrder(candidate, categoryId, null);
-        string? normalizedTitle = NormalizePromptTitle(title);
+        string? normalizedTitle = NormalizeAndValidatePromptTitle(title);
 
         var newPrompt = new PromptRecord
         {
@@ -213,10 +213,10 @@ public sealed class PromptLibraryService
             Title = normalizedTitle
         };
 
-        _promptRepo.Create(newPromptId, content);
-
         candidate.Prompts.Add(newPrompt);
         LibraryValidator.Validate(candidate);
+
+        _promptRepo.Create(newPromptId, content);
 
         CommitResult commitResult;
         try
@@ -260,7 +260,7 @@ public sealed class PromptLibraryService
         string oldContent = _promptRepo.Read(promptId);
         var candidate = LibraryDocumentCloner.Clone(_document);
         var candidateTarget = candidate.Prompts.Single(p => p.Id == promptId);
-        candidateTarget.Title = NormalizePromptTitle(title);
+        candidateTarget.Title = NormalizeAndValidatePromptTitle(title);
         LibraryValidator.Validate(candidate);
 
         _promptRepo.Update(promptId, content);
@@ -288,7 +288,12 @@ public sealed class PromptLibraryService
     }
 
     public OperationResult EditPrompt(Guid promptId, string content)
-        => EditPrompt(promptId, content, null);
+    {
+        var current = _document.Prompts.FirstOrDefault(p => p.Id == promptId)
+            ?? throw new InvalidOperationException($"Prompt does not exist in library: {promptId}");
+
+        return EditPrompt(promptId, content, current.Title);
+    }
 
     public OperationResult DeletePrompt(Guid promptId)
     {
@@ -562,10 +567,21 @@ public sealed class PromptLibraryService
         return maxSort + 10;
     }
 
-    private static string? NormalizePromptTitle(string? input)
+    private static string? NormalizeAndValidatePromptTitle(string? input)
     {
         string trimmed = (input ?? string.Empty).Trim();
-        return trimmed.Length == 0 ? null : trimmed;
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        if (trimmed.Any(char.IsControl))
+        {
+            throw new InvalidOperationException(
+                "Headline cannot contain line breaks, tabs, or other control characters.");
+        }
+
+        return trimmed;
     }
 
     #endregion

@@ -8,8 +8,7 @@
         MinWidth="900"
         MinHeight="600"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource AppBackgroundBrush}"
-        Icon="/PromptHelper;component/Assets/PromptHelper.ico">
+        Background="{StaticResource AppBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="64"/>

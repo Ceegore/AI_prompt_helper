@@ -188,7 +188,18 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public OperationResult EditPrompt(Guid promptId, string content)
-        => EditPrompt(promptId, content, null);
+    {
+        var currentCard = Prompts.FirstOrDefault(p => p.Id == promptId);
+        if (currentCard != null)
+        {
+            return EditPrompt(promptId, content, currentCard.CustomTitle);
+        }
+
+        var result = _service.EditPrompt(promptId, content);
+        Refresh();
+        RefreshRecentPromptDisplay(promptId);
+        return result;
+    }
 
     public OperationResult DeletePrompt(Guid promptId)
     {

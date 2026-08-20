@@ -1,6 +1,6 @@
+using System;
 using System.IO;
-using System.Text.RegularExpressions;
-using System.Threading;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -15,54 +15,16 @@ namespace PromptHelper.Tests;
 [TestClass]
 public sealed class Cruu1ComprehensiveVerificationTests
 {
-    private static void RunOnStaThread(Action action)
-    {
-        Exception? exception = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                if (Application.Current == null)
-                {
-                    _ = new Application();
-                }
-
-                if (Application.Current!.Resources.MergedDictionaries.Count == 0)
-                {
-                    Application.Current.Resources.MergedDictionaries.Add(new ResourceDictionary
-                    {
-                        Source = new Uri("pack://application:,,,/PromptHelper;component/Styles/Theme.xaml", UriKind.Absolute)
-                    });
-                }
-
-                action();
-            }
-            catch (Exception ex)
-            {
-                exception = ex;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-
-        if (exception != null)
-        {
-            throw new AggregateException("STA Thread Action Failed", exception);
-        }
-    }
-
     #region Feature 1 — Optional Editor Line Wrapping
 
     [TestMethod]
     public void Feature1_EditorDialog_WrapCheckbox_IsUncheckedByDefault_And_VisualOnly()
     {
-        RunOnStaThread(() =>
+        WpfTestHost.Invoke(() =>
         {
             string originalText = "Line 1 with a very long sentence that exceeds typical dialog widths.\r\nLine 2 with \ttabs and spaces.\nLine 3.";
             var dialog = new PromptEditorDialog("Create Prompt", originalText, "Headline");
 
-            // Find EditorTextBox and CheckBox
             var textBox = (TextBox)dialog.FindName("EditorTextBox");
             var checkBox = (CheckBox)dialog.FindName("WrapLinesCheckBox");
 
@@ -184,6 +146,136 @@ public sealed class Cruu1ComprehensiveVerificationTests
         Assert.AreEqual("Line 1 Auto Title", card.PreviewTitle);
     }
 
+    [TestMethod]
+    public void CRUU2_005_Automatic_headline_prefill_untouched_remains_null_after_edit()
+    {
+        WpfTestHost.Invoke(() =>
+        {
+            var dialog = new PromptEditorDialog(
+                "Edit Prompt",
+                "Line 1 Body\nLine 2 Body",
+                "Line 1 Body",
+                initialHeadlineWasAutomatic: true);
+
+            // Trigger save without editing HeadlineTextBox
+            var saveButton = (Button)dialog.FindName("SaveButton");
+            Assert.IsNotNull(saveButton);
+
+            // Execute save logic
+            var editorTextBox = (TextBox)dialog.FindName("EditorTextBox");
+            editorTextBox.Text = "Line 1 Body Modified\nLine 2 Body";
+
+            var saveClickMethod = typeof(PromptEditorDialog).GetMethod("SaveButton_Click",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            saveClickMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
+
+            Assert.IsTrue(dialog.ResultUsesAutomaticHeadline);
+            Assert.IsNull(dialog.ResultHeadline);
+            Assert.AreEqual("Line 1 Body", dialog.ResultHeadlineEditorText);
+            Assert.AreEqual("Line 1 Body Modified\nLine 2 Body", dialog.ResultText);
+        });
+    }
+
+    [TestMethod]
+    public void CRUU2_005_User_edited_headline_becomes_custom_title_after_edit()
+    {
+        WpfTestHost.Invoke(() =>
+        {
+            var dialog = new PromptEditorDialog(
+                "Edit Prompt",
+                "Line 1 Body\nLine 2 Body",
+                "Line 1 Body",
+                initialHeadlineWasAutomatic: true);
+
+            var headlineTextBox = (TextBox)dialog.FindName("HeadlineTextBox");
+            headlineTextBox.Text = "Explicitly Pinned Title";
+
+            var saveButton = (Button)dialog.FindName("SaveButton");
+            var saveClickMethod = typeof(PromptEditorDialog).GetMethod("SaveButton_Click",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            saveClickMethod?.Invoke(dialog, [saveButton, new RoutedEventArgs()]);
+
+            Assert.IsFalse(dialog.ResultUsesAutomaticHeadline);
+            Assert.AreEqual("Explicitly Pinned Title", dialog.ResultHeadline);
+        });
+    }
+
+    [TestMethod]
+    public void CRUU2_004_Legacy_EditPrompt_overload_preserves_custom_title()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+        var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
+        var initResult = startup.LoadOrInitialize();
+        var service = new PromptLibraryService(initResult.Document, libRepo, promptRepo);
+        var vm = new MainViewModel(service, promptRepo, paths.RootDirectory);
+
+        var p = service.CreatePrompt(null, "Old Body", "Pinned Custom Title").Value;
+
+        // Legacy service overload
+        service.EditPrompt(p.Id, "New Body");
+        Assert.AreEqual("Pinned Custom Title", service.GetPrompts(null).Single(x => x.Id == p.Id).Title);
+        Assert.AreEqual("New Body", promptRepo.Read(p.Id));
+
+        // Legacy view model overload
+        vm.Refresh();
+        vm.EditPrompt(p.Id, "Newest Body");
+        var card = vm.Prompts.Single(x => x.Id == p.Id);
+        Assert.AreEqual("Pinned Custom Title", card.CustomTitle);
+        Assert.AreEqual("Newest Body", promptRepo.Read(p.Id));
+    }
+
+    [TestMethod]
+    public void CRUU2_002_Create_prompt_invalid_control_character_title_does_not_create_orphan_file()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+        var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
+        var initResult = startup.LoadOrInitialize();
+        var service = new PromptLibraryService(initResult.Document, libRepo, promptRepo);
+
+        string promptsDir = Path.Combine(testDir.Root, "prompts");
+        int fileCountBefore = Directory.Exists(promptsDir) ? Directory.GetFiles(promptsDir, "*.md").Length : 0;
+        int promptCountBefore = service.GetPrompts(null).Count;
+
+        Assert.Throws<InvalidOperationException>(() =>
+            service.CreatePrompt(null, "Body text", "Bad\nHeadline"));
+
+        Assert.AreEqual(promptCountBefore, service.GetPrompts(null).Count);
+        int fileCountAfter = Directory.Exists(promptsDir) ? Directory.GetFiles(promptsDir, "*.md").Length : 0;
+        Assert.AreEqual(fileCountBefore, fileCountAfter);
+    }
+
+    [TestMethod]
+    public void CRUU2_006_Edit_prompt_invalid_title_does_not_change_body_or_metadata()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var libRepo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+        var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
+        var initResult = startup.LoadOrInitialize();
+        var service = new PromptLibraryService(initResult.Document, libRepo, promptRepo);
+
+        var prompt = service.CreatePrompt(null, "Old Body", "Old Title").Value;
+
+        Assert.Throws<InvalidOperationException>(() =>
+            service.EditPrompt(prompt.Id, "New Body", "Bad\tTitle"));
+
+        Assert.AreEqual("Old Body", promptRepo.Read(prompt.Id));
+        Assert.AreEqual("Old Title", service.GetPrompts(null).Single(p => p.Id == prompt.Id).Title);
+    }
+
     #endregion
 
     #region Feature 3 — Three-Column Grid & Delayed Hover Tooltip
@@ -191,7 +283,7 @@ public sealed class Cruu1ComprehensiveVerificationTests
     [TestMethod]
     public void Feature3_ThemeResources_Contain_PromptGrid_And_Compact_Styles()
     {
-        RunOnStaThread(() =>
+        WpfTestHost.Invoke(() =>
         {
             var appDict = new ResourceDictionary
             {
@@ -218,7 +310,7 @@ public sealed class Cruu1ComprehensiveVerificationTests
     [TestMethod]
     public void Feature4_SettingsDialog_Contains_Exact_Author_Attribution_And_Title()
     {
-        RunOnStaThread(() =>
+        WpfTestHost.Invoke(() =>
         {
             using var testDir = new TestDirectory();
             var writer = new AtomicTextWriter();
@@ -229,13 +321,9 @@ public sealed class Cruu1ComprehensiveVerificationTests
 
             Assert.AreEqual("Tools & Settings — Prompt Helper", dialog.Title);
 
-            // Verify the XAML contains the exact text "Made by CeeGore"
-            string xamlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "..", "src", "PromptHelper", "Views", "SettingsDialog.xaml");
-            if (File.Exists(xamlPath))
-            {
-                string xamlContent = File.ReadAllText(xamlPath);
-                Assert.IsTrue(xamlContent.Contains("Made by CeeGore"), "SettingsDialog.xaml must contain exact string 'Made by CeeGore'");
-            }
+            string xamlPath = RepositoryTestPaths.RequireFile("src", "PromptHelper", "Views", "SettingsDialog.xaml");
+            string xamlContent = File.ReadAllText(xamlPath);
+            Assert.IsTrue(xamlContent.Contains("Made by CeeGore"), "SettingsDialog.xaml must contain exact string 'Made by CeeGore'");
         });
     }
 
@@ -256,13 +344,35 @@ public sealed class Cruu1ComprehensiveVerificationTests
 
         var migration = new DataFolderMigrationService();
 
-        // Same path with different case or trailing slashes
         string pathWithSlash = testDir.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         string pathUpper = testDir.Root.ToUpperInvariant();
 
         var result = migration.PrepareTarget(pathWithSlash, pathUpper);
         Assert.IsFalse(result.Copied);
         Assert.IsFalse(result.ExistingLibraryFound);
+    }
+
+    [TestMethod]
+    public void CRUU2_003_Configured_custom_root_missing_does_not_create_directory_or_defaults()
+    {
+        using var temp = new TestDirectory();
+        string missing = Path.Combine(temp.Root, "DoesNotExist");
+
+        Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
+            DataRootBootstrapValidator.ValidateConfiguredRoot(missing));
+
+        Assert.IsFalse(Directory.Exists(missing));
+    }
+
+    [TestMethod]
+    public void CRUU2_003_Configured_existing_empty_root_is_not_treated_as_first_run()
+    {
+        using var temp = new TestDirectory();
+
+        Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
+            DataRootBootstrapValidator.ValidateConfiguredRoot(temp.Root));
+
+        Assert.IsFalse(File.Exists(Path.Combine(temp.Root, "library.json")));
     }
 
     #endregion
@@ -272,15 +382,12 @@ public sealed class Cruu1ComprehensiveVerificationTests
     [TestMethod]
     public void Feature5_MainWindow_Has_CategoryActionsButton_With_ContextMenu()
     {
-        string xamlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "..", "src", "PromptHelper", "MainWindow.xaml");
-        if (File.Exists(xamlPath))
-        {
-            string xamlContent = File.ReadAllText(xamlPath);
-            Assert.IsTrue(xamlContent.Contains("x:Name=\"CategoryActionsButton\""));
-            Assert.IsTrue(xamlContent.Contains("Content=\"🔧\""));
-            Assert.IsTrue(xamlContent.Contains("Header=\"✎ Rename\""));
-            Assert.IsTrue(xamlContent.Contains("Header=\"× Delete\""));
-        }
+        string xamlPath = RepositoryTestPaths.RequireFile("src", "PromptHelper", "MainWindow.xaml");
+        string xamlContent = File.ReadAllText(xamlPath);
+        Assert.IsTrue(xamlContent.Contains("x:Name=\"CategoryActionsButton\""));
+        Assert.IsTrue(xamlContent.Contains("Content=\"🔧\""));
+        Assert.IsTrue(xamlContent.Contains("Header=\"✎ Rename\""));
+        Assert.IsTrue(xamlContent.Contains("Header=\"× Delete\""));
     }
 
     #endregion
@@ -341,18 +448,72 @@ public sealed class Cruu1ComprehensiveVerificationTests
 
     #endregion
 
-    #region Feature 7 — Application Icon Script Verification
+    #region Feature 7 — Application Icon Script Verification & MainWindow Smoke Test
 
     [TestMethod]
     public void Feature7_GenerateAppIcon_Script_Exists_And_Validates_Parameters()
     {
-        string scriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "..", "tools", "GenerateAppIcon.ps1");
-        Assert.IsTrue(File.Exists(scriptPath), "tools/GenerateAppIcon.ps1 must exist");
-
+        string scriptPath = RepositoryTestPaths.RequireFile("tools", "GenerateAppIcon.ps1");
         string scriptContent = File.ReadAllText(scriptPath);
         Assert.IsTrue(scriptContent.Contains("PromptHelperLogo.svg"));
         Assert.IsTrue(scriptContent.Contains("PromptHelper.ico"));
         Assert.IsTrue(scriptContent.Contains("magick"));
+    }
+
+    [TestMethod]
+    public void MainWindow_constructs_with_all_required_resources()
+    {
+        WpfTestHost.Invoke(() =>
+        {
+            using var temp = new TestDirectory();
+            var paths = new AppPaths(temp.Root);
+            paths.EnsureRootDirectory();
+            paths.EnsureDataDirectories();
+
+            var writer = new AtomicTextWriter();
+            var deleter = new FileDeleter();
+            var libRepo = new LibraryRepository(paths, writer);
+            var promptRepo = new PromptRepository(paths, writer, deleter);
+            var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
+            var init = startup.LoadOrInitialize();
+            var service = new PromptLibraryService(init.Document, libRepo, promptRepo);
+            var vm = new MainViewModel(service, promptRepo, temp.Root);
+
+            string settingsPath = Path.Combine(temp.Root, "settings.json");
+            var settingsRepo = new AppSettingsRepository(writer, settingsPathOverride: settingsPath);
+            var fakeClipboard = new FakeClipboardService();
+            var migrationService = new DataFolderMigrationService();
+
+            var window = new MainWindow(
+                vm,
+                fakeClipboard,
+                settingsRepo,
+                migrationService);
+
+            try
+            {
+                Assert.IsNotNull(window);
+                Assert.AreSame(vm, window.DataContext);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [TestMethod]
+    public void UsageGuide_does_not_document_removed_help_and_category_controls()
+    {
+        string guidePath = RepositoryTestPaths.RequireFile(
+            "Prompt_Helper_Nutzungsguide_DE_v2_FINAL.md");
+
+        string guide = File.ReadAllText(guidePath);
+
+        Assert.IsFalse(guide.Contains("Der `?`-Button öffnet den Hilfe-Dialog."));
+        StringAssert.Contains(guide, "Tools");
+        StringAssert.Contains(guide, "Headline");
+        StringAssert.Contains(guide, "Wrap long lines");
     }
 
     #endregion

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using PromptHelper.Models;
@@ -20,7 +21,28 @@ public partial class App : Application
         {
             var writer = new AtomicTextWriter();
             var settingsRepo = new AppSettingsRepository(writer);
-            string effectiveDataRoot = settingsRepo.GetEffectiveDataRoot();
+            var settingsResult = settingsRepo.LoadOrRecover();
+            var settings = settingsResult.Settings;
+
+            string effectiveDataRoot = settingsRepo.GetEffectiveDataRoot(settings);
+
+            if (!string.IsNullOrWhiteSpace(settings.DataRootPath))
+            {
+                try
+                {
+                    DataRootBootstrapValidator.ValidateConfiguredRoot(effectiveDataRoot);
+                }
+                catch (ConfiguredDataFolderUnavailableException ex)
+                {
+                    MessageBox.Show(
+                        $"The configured Prompt Helper data folder is unavailable:\n{ex.DataFolderPath}\n\nPrompt Helper did not create a new library there, so your existing data was not overwritten.\nReconnect/restore the folder or repair the configured data-folder setting before continuing.",
+                        "Configured Data Folder Unavailable",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    Shutdown();
+                    return;
+                }
+            }
 
             var paths = new AppPaths(effectiveDataRoot);
             paths.EnsureRootDirectory();
@@ -68,6 +90,15 @@ public partial class App : Application
             var mainWindow = new MainWindow(mainViewModel, clipboardService, settingsRepo, migrationService);
             MainWindow = mainWindow;
             mainWindow.Show();
+
+            if (settingsResult.RecoveredFromBackup && !string.IsNullOrEmpty(settingsResult.Warning))
+            {
+                MessageBox.Show(
+                    settingsResult.Warning,
+                    "Settings Recovery Notice",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
 
             if (!string.IsNullOrEmpty(startupResult.Warning))
             {

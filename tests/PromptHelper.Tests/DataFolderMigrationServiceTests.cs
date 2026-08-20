@@ -169,4 +169,27 @@ public sealed class DataFolderMigrationServiceTests
         // Ensure target library.json was rolled back / deleted
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
     }
+
+    [TestMethod]
+    public void PrepareTarget_descendant_target_throws_InvalidOperationException()
+    {
+        using var sourceDir = new TestDirectory();
+        SeedValidLibrary(sourceDir.Root, out _);
+
+        string nestedTarget = Path.Combine(sourceDir.Root, "Nested", "Target");
+
+        var migration = new DataFolderMigrationService();
+        Assert.Throws<InvalidOperationException>(() => migration.PrepareTarget(sourceDir.Root, nestedTarget));
+    }
+
+    [TestMethod]
+    public void PrepareTarget_source_missing_library_throws_before_modifying_target()
+    {
+        using var sourceDir = new TestDirectory();
+        using var targetDir = new TestDirectory();
+
+        var migration = new DataFolderMigrationService();
+        Assert.Throws<InvalidDataException>(() => migration.PrepareTarget(sourceDir.Root, targetDir.Root));
+        Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
+    }
 }
