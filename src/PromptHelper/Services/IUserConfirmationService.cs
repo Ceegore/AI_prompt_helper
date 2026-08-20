@@ -6,6 +6,8 @@ public interface IUserConfirmationService
 {
     bool Confirm(string message, string title);
     bool ConfirmExistingLibrarySwitch(string targetPath, string? warning);
+    void ShowInformation(string message, string title);
+    void ShowWarning(string message, string title);
 }
 
 public sealed class WpfUserConfirmationService : IUserConfirmationService
@@ -41,5 +43,29 @@ public sealed class WpfUserConfirmationService : IUserConfirmationService
         }
 
         return Confirm(message, "Switch to Existing Library");
+    }
+
+    public void ShowInformation(string message, string title)
+    {
+        if (_owner != null)
+        {
+            MessageBox.Show(_owner, message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        else
+        {
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    public void ShowWarning(string message, string title)
+    {
+        if (_owner != null)
+        {
+            MessageBox.Show(_owner, message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        else
+        {
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 }

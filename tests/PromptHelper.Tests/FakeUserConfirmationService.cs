@@ -12,6 +12,8 @@ internal sealed class FakeUserConfirmationService : IUserConfirmationService
     public string? LastMessage { get; private set; }
     public string? LastTitle { get; private set; }
     public int PromptCount { get; private set; }
+    public int InfoCount { get; private set; }
+    public int WarningCount { get; private set; }
 
     public bool Confirm(string message, string title)
     {
@@ -29,5 +31,20 @@ internal sealed class FakeUserConfirmationService : IUserConfirmationService
         PromptCount++;
         OnConfirm?.Invoke();
         return ConfirmationResult;
+    }
+
+    public void ShowInformation(string message, string title)
+    {
+        LastMessage = message;
+        LastTitle = title;
+        InfoCount++;
+    }
+
+    public void ShowWarning(string message, string title)
+    {
+        LastMessage = message;
+        LastTitle = title;
+        LastWarning = message;
+        WarningCount++;
     }
 }

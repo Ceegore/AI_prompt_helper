@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Services;
@@ -59,8 +60,8 @@ public sealed class ManagedDataRootPolicyTests
 
         var policy = new ManagedDataRootPolicy(fakeResolver);
 
-        // Disjointness check should treat alias and real as same root (no exception)
-        policy.ValidateDisjointOrSame(realRoot, aliasRoot);
+        var relationship = policy.ValidateTransition(realRoot, aliasRoot);
+        Assert.IsTrue(relationship.SamePhysicalRoot);
     }
 
     [TestMethod]
@@ -78,5 +79,105 @@ public sealed class ManagedDataRootPolicyTests
 
         Assert.Throws<InvalidDataException>(() =>
             policy.ValidateConfiguredRootForStartup(aliasIntoBootstrap, bootstrap));
+    }
+
+    [TestMethod]
+    public void CRUU5_006_Resolver_IO_failure_aborts_transition()
+    {
+        var resolver = new FakePhysicalPathResolver
+        {
+            Failure = new IOException("Injected path resolution IO failure")
+        };
+
+        var policy = new ManagedDataRootPolicy(resolver);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            policy.ValidateTransition(@"C:\Data\Current", @"C:\Data\Target"));
+    }
+
+    [TestMethod]
+    public void CRUU5_006_Resolver_Unauthorized_failure_aborts_transition()
+    {
+        var resolver = new FakePhysicalPathResolver
+        {
+            Failure = new UnauthorizedAccessException("Injected access denied")
+        };
+
+        var policy = new ManagedDataRootPolicy(resolver);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            policy.ValidateTransition(@"C:\Data\Current", @"C:\Data\Target"));
+    }
+
+    [TestMethod]
+    public void CRUU5_006_Resolver_Win32_failure_aborts_transition()
+    {
+        var resolver = new FakePhysicalPathResolver
+        {
+            Failure = new Win32Exception(5, "Access is denied")
+        };
+
+        var policy = new ManagedDataRootPolicy(resolver);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            policy.ValidateTransition(@"C:\Data\Current", @"C:\Data\Target"));
+    }
+
+    [TestMethod]
+    public void CRUU5_007_Alias_resolving_to_volume_root_is_rejected()
+    {
+        var resolver = new FakePhysicalPathResolver();
+        string alias = @"C:\Aliases\LooksSafe";
+        string current = @"C:\Data\Active";
+        string bootstrap = @"C:\Users\Test\AppData\Local\PromptHelper";
+
+        resolver.AddMapping(alias, @"D:\");
+        resolver.AddMapping(current, current);
+        resolver.AddMapping(bootstrap, bootstrap);
+
+        var policy = new ManagedDataRootPolicy(resolver);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            policy.ValidateTransition(
+                current,
+                alias,
+                bootstrap));
+    }
+
+    [TestMethod]
+    public void CRUU5_007_Physical_UNC_share_root_alias_rejected()
+    {
+        var resolver = new FakePhysicalPathResolver();
+        string alias = @"C:\Aliases\UncShare";
+        string current = @"C:\Data\Active";
+        string bootstrap = @"C:\Users\Test\AppData\Local\PromptHelper";
+
+        resolver.AddMapping(alias, @"\\server\share");
+        resolver.AddMapping(current, current);
+        resolver.AddMapping(bootstrap, bootstrap);
+
+        var policy = new ManagedDataRootPolicy(resolver);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            policy.ValidateTransition(
+                current,
+                alias,
+                bootstrap));
+    }
+
+    [TestMethod]
+    public void CRUU5_007_Startup_rejects_physical_volume_alias()
+    {
+        var resolver = new FakePhysicalPathResolver();
+        string alias = @"C:\Aliases\PointsToVolume";
+        string bootstrap = @"C:\Users\Test\AppData\Local\PromptHelper";
+
+        resolver.AddMapping(alias, @"E:\");
+        resolver.AddMapping(bootstrap, bootstrap);
+
+        var policy = new ManagedDataRootPolicy(resolver);
+
+        Assert.Throws<InvalidDataException>(() =>
+            policy.ValidateConfiguredRootForStartup(alias, bootstrap));
     }
 }

@@ -1,11 +1,16 @@
 using System;
 using System.IO;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text.Json;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 
 namespace PromptHelper.Services;
+
+public sealed record SettingsPrimaryWriteToken(
+    bool Exists,
+    byte[]? Sha256);
 
 public sealed class AppSettingsRepository
 {
@@ -54,6 +59,67 @@ public sealed class AppSettingsRepository
 
     public string SettingsPath => _settingsPath;
     public string BackupPath => _backupPath;
+
+    public SettingsPrimaryWriteToken CapturePrimaryWriteToken()
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(_settingsPath);
+            return new SettingsPrimaryWriteToken(
+                Exists: true,
+                Sha256: SHA256.HashData(bytes));
+        }
+        catch (FileNotFoundException)
+        {
+            return new SettingsPrimaryWriteToken(false, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new SettingsPrimaryWriteToken(false, null);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            throw new SettingsReadException(_settingsPath, ex);
+        }
+    }
+
+    public SettingsSaveResult SaveIfPrimaryUnchanged(
+        AppSettings settings,
+        SettingsPrimaryWriteToken expected)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+
+        SettingsPrimaryWriteToken actual = CapturePrimaryWriteToken();
+
+        if (!WriteTokensEqual(expected, actual))
+        {
+            throw new InvalidOperationException(
+                "Prompt Helper settings changed while the data-folder transition " +
+                "was in progress. Nothing was committed. Reopen Tools & Settings and retry.");
+        }
+
+        return Save(settings);
+    }
+
+    private static bool WriteTokensEqual(
+        SettingsPrimaryWriteToken expected,
+        SettingsPrimaryWriteToken actual)
+    {
+        if (expected.Exists != actual.Exists)
+        {
+            return false;
+        }
+
+        if (!expected.Exists)
+        {
+            return true;
+        }
+
+        return expected.Sha256 is not null &&
+               actual.Sha256 is not null &&
+               expected.Sha256.AsSpan().SequenceEqual(actual.Sha256);
+    }
 
     public SettingsLoadResult LoadOrRecover()
     {
@@ -198,6 +264,21 @@ public sealed class AppSettingsRepository
                 $"Cannot save unsupported settings schema version: {settings.SchemaVersion}.");
         }
 
+        SettingsReadState primaryBefore = ReadState(_settingsPath);
+
+        if (primaryBefore is SettingsReadState.FutureSchema futurePrimary)
+        {
+            throw new UnsupportedSettingsSchemaException(futurePrimary.Version);
+        }
+
+        if (primaryBefore is SettingsReadState.Unreadable unreadablePrimary)
+        {
+            throw new SettingsReadException(_settingsPath, unreadablePrimary.Error);
+        }
+
+        // Capture backup state before primary mutation.
+        SettingsReadState backupBefore = ReadState(_backupPath);
+
         settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
         string json = JsonSerializer.Serialize(settings, JsonOptions);
 
@@ -209,7 +290,20 @@ public sealed class AppSettingsRepository
 
         _writer.Write(_settingsPath, json);
 
-        string? warning = null;
+        if (backupBefore is SettingsReadState.FutureSchema futureBackup)
+        {
+            return new SettingsSaveResult(
+                $"The setting was saved, but settings.backup.json uses newer schema " +
+                $"{futureBackup.Version}. The newer backup was preserved and was not overwritten.");
+        }
+
+        if (backupBefore is SettingsReadState.Unreadable unreadableBackup)
+        {
+            return new SettingsSaveResult(
+                "The setting was saved, but settings.backup.json could not be inspected " +
+                $"or synchronized: {unreadableBackup.Error.Message}");
+        }
+
         try
         {
             string? backupDir = Path.GetDirectoryName(_backupPath);
@@ -217,14 +311,16 @@ public sealed class AppSettingsRepository
             {
                 Directory.CreateDirectory(backupDir);
             }
+
             _writer.Write(_backupPath, json);
+            return new SettingsSaveResult(null);
         }
         catch (Exception ex)
         {
-            warning = $"The data folder was saved, but the settings backup could not be synchronized: {ex.Message}";
+            return new SettingsSaveResult(
+                "The data folder was saved, but the settings backup could not be " +
+                $"synchronized: {ex.Message}");
         }
-
-        return new SettingsSaveResult(warning);
     }
 
     public string GetEffectiveDataRoot(AppSettings? settings = null)
@@ -284,6 +380,8 @@ public sealed class AppSettingsRepository
                 $"Settings file is empty or whitespace: '{path}'");
         }
 
+        ValidateSchemaPropertyBeforeDeserialization(json, path);
+
         AppSettings? settings;
         try
         {
@@ -314,6 +412,79 @@ public sealed class AppSettingsRepository
 
         settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
         return settings;
+    }
+
+    private static void ValidateSchemaPropertyBeforeDeserialization(
+        string json,
+        string path)
+    {
+        JsonDocument document;
+
+        try
+        {
+            document = JsonDocument.Parse(json);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException(
+                $"Failed to parse settings JSON from '{path}': {ex.Message}",
+                ex);
+        }
+
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException(
+                    $"Root of settings JSON must be an object: '{path}'.");
+            }
+
+            int count = 0;
+            int version = 0;
+
+            foreach (JsonProperty property in document.RootElement.EnumerateObject())
+            {
+                if (!string.Equals(
+                        property.Name,
+                        "schemaVersion",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                count++;
+
+                if (property.Value.ValueKind != JsonValueKind.Number ||
+                    !property.Value.TryGetInt32(out version))
+                {
+                    throw new InvalidDataException(
+                        $"Property 'schemaVersion' must be an integer in '{path}'.");
+                }
+            }
+
+            if (count == 0)
+            {
+                throw new InvalidDataException(
+                    $"Missing required 'schemaVersion' property in '{path}'.");
+            }
+
+            if (count > 1)
+            {
+                throw new InvalidDataException(
+                    $"Multiple 'schemaVersion' properties found in '{path}'.");
+            }
+
+            if (version > AppSettings.CurrentSchemaVersion)
+            {
+                throw new UnsupportedSettingsSchemaException(version);
+            }
+
+            if (version != AppSettings.CurrentSchemaVersion)
+            {
+                throw new InvalidDataException(
+                    $"Unsupported settings schema version: {version}.");
+            }
+        }
     }
 
     public static string? NormalizeAndValidateDataRoot(string? path)

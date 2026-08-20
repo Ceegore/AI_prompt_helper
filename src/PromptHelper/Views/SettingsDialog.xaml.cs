@@ -31,6 +31,7 @@ public partial class SettingsDialog : Window
         _migrationService = migrationService ?? throw new ArgumentNullException(nameof(migrationService));
         _confirmationService = confirmationService ?? new WpfUserConfirmationService(this);
         _coordinator = coordinator ?? new DataFolderTransitionCoordinator(
+            _currentDataFolder,
             _settingsRepo,
             _migrationService,
             _confirmationService);
@@ -101,21 +102,15 @@ public partial class SettingsDialog : Window
                     successMessage += $"\r\n\r\nWarning: {result.Warning}";
                 }
 
-                MessageBox.Show(
-                    this,
+                _confirmationService.ShowInformation(
                     successMessage,
-                    "Data Folder Saved",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                    "Data Folder Saved");
             }
             else if (!string.IsNullOrEmpty(result.Warning))
             {
-                MessageBox.Show(
-                    this,
+                _confirmationService.ShowWarning(
                     $"The data folder setting was updated, but a warning occurred:\r\n\r\n{result.Warning}",
-                    "Settings Warning",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                    "Settings Warning");
             }
 
             RestartRequired = result.RestartRequired;
@@ -137,12 +132,9 @@ public partial class SettingsDialog : Window
             NotSupportedException or
             InvalidOperationException)
         {
-            MessageBox.Show(
-                this,
+            _confirmationService.ShowWarning(
                 $"Failed to configure the selected data folder:\r\n\r\n{ex.Message}\r\n\r\nThe previous data folder was left unchanged as a safety copy.",
-                "Data Folder Configuration Error",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+                "Data Folder Configuration Error");
         }
     }
 

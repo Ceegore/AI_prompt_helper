@@ -40,24 +40,29 @@ public sealed class DataFolderMigrationService
         LibraryDocument? EffectiveDocument,
         string? EffectiveMetadataPath,
         string? Warning,
-        Exception? Error);
+        Exception? Error,
+        byte[]? Fingerprint);
 
     internal sealed class MigrationTargetTransaction : IDisposable
     {
         private readonly List<string> _createdFiles = [];
         private readonly List<string> _createdDirectories = [];
         private bool _committed;
+        private bool _rolledBack;
 
         public void TrackCreatedFile(string path) => _createdFiles.Add(path);
         public void TrackCreatedDirectory(string path) => _createdDirectories.Add(path);
         public void Commit() => _committed = true;
 
-        public void Dispose()
+        public MigrationRollbackResult Rollback()
         {
-            if (_committed)
+            if (_committed || _rolledBack)
             {
-                return;
+                return new MigrationRollbackResult([]);
             }
+
+            _rolledBack = true;
+            var failures = new List<MigrationRollbackFailure>();
 
             foreach (string file in _createdFiles.AsEnumerable().Reverse())
             {
@@ -68,9 +73,9 @@ public sealed class DataFolderMigrationService
                         File.Delete(file);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Best effort cleanup
+                    failures.Add(new MigrationRollbackFailure(file, "DeleteFile", ex.Message));
                 }
             }
 
@@ -83,10 +88,20 @@ public sealed class DataFolderMigrationService
                         Directory.Delete(dir);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Best effort directory cleanup
+                    failures.Add(new MigrationRollbackFailure(dir, "DeleteDirectory", ex.Message));
                 }
+            }
+
+            return new MigrationRollbackResult(failures);
+        }
+
+        public void Dispose()
+        {
+            if (!_committed && !_rolledBack)
+            {
+                Rollback();
             }
         }
     }
@@ -108,7 +123,9 @@ public sealed class DataFolderMigrationService
         _pathResolver = pathResolver ?? new WindowsPhysicalPathResolver();
     }
 
-    public DataFolderChangeResult PrepareTarget(string currentRoot, string selectedRoot)
+    // TEST/INTERNAL ONLY.
+    // Production data-root changes must go through DataFolderTransitionCoordinator.
+    internal DataFolderChangeResult PrepareTargetForMigrationUnitTest(string currentRoot, string selectedRoot)
     {
         if (string.IsNullOrWhiteSpace(selectedRoot))
         {
@@ -181,7 +198,7 @@ public sealed class DataFolderMigrationService
 
         if (!Directory.Exists(normalizedTarget))
         {
-            return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null);
+            return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null, null);
         }
 
         string primaryPath = Path.Combine(normalizedTarget, "library.json");
@@ -192,7 +209,7 @@ public sealed class DataFolderMigrationService
 
         if (!primaryExists && !backupExists)
         {
-            return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null);
+            return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null, null);
         }
 
         LibraryDocument? primaryDoc = null;
@@ -230,18 +247,21 @@ public sealed class DataFolderMigrationService
                 null,
                 primaryPath,
                 null,
-                new UnsupportedLibrarySchemaException(primaryFutureVersion));
+                new UnsupportedLibrarySchemaException(primaryFutureVersion),
+                null);
         }
 
         if (primaryDoc is not null)
         {
+            byte[] fingerprint = ComputeEffectiveLibraryFingerprint(normalizedTarget, primaryPath, primaryDoc);
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.ValidPrimary,
                 primaryDoc,
                 primaryPath,
                 null,
-                null);
+                null,
+                fingerprint);
         }
 
         LibraryDocument? backupDoc = null;
@@ -279,7 +299,8 @@ public sealed class DataFolderMigrationService
                 null,
                 backupPath,
                 null,
-                new UnsupportedLibrarySchemaException(backupFutureVersion));
+                new UnsupportedLibrarySchemaException(backupFutureVersion),
+                null);
         }
 
         if (primaryExists && primaryDoc is null && backupDoc is not null)
@@ -290,18 +311,21 @@ public sealed class DataFolderMigrationService
                 backupDoc,
                 backupPath,
                 null,
-                primaryEx);
+                primaryEx,
+                null);
         }
 
         if (!primaryExists && backupDoc is not null)
         {
+            byte[] fingerprint = ComputeEffectiveLibraryFingerprint(normalizedTarget, backupPath, backupDoc);
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.RecoverableBackupOnly,
                 backupDoc,
                 backupPath,
                 "The selected folder contains a recoverable Prompt Helper safety backup but no primary library.json. Prompt Helper will recover it on startup; the current library will not be copied there.",
-                null);
+                null,
+                fingerprint);
         }
 
         Exception error = primaryEx is InvalidDataException pIde
@@ -316,7 +340,33 @@ public sealed class DataFolderMigrationService
             null,
             primaryExists ? primaryPath : backupPath,
             null,
-            error);
+            error,
+            null);
+    }
+
+    internal static byte[] ComputeEffectiveLibraryFingerprint(
+        string root,
+        string metadataPath,
+        LibraryDocument document)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        byte[] metadata = File.ReadAllBytes(metadataPath);
+        hash.AppendData(metadata);
+
+        string promptsDir = Path.Combine(root, "prompts");
+
+        foreach (PromptRecord prompt in document.Prompts.OrderBy(p => p.Id))
+        {
+            byte[] id = prompt.Id.ToByteArray();
+            hash.AppendData(id);
+
+            string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
+            byte[] body = File.ReadAllBytes(promptPath);
+            hash.AppendData(SHA256.HashData(body));
+        }
+
+        return hash.GetHashAndReset();
     }
 
     internal MigrationSnapshot CaptureSourceSnapshot(string currentRoot)

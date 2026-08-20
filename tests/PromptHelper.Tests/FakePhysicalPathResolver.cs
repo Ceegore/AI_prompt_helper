@@ -9,6 +9,8 @@ public sealed class FakePhysicalPathResolver : IPhysicalPathResolver
 {
     private readonly Dictionary<string, string> _mappings = new(StringComparer.OrdinalIgnoreCase);
 
+    public Exception? Failure { get; set; }
+
     public void AddMapping(string alias, string target)
     {
         _mappings[PathIdentity.NormalizeForComparison(alias)] = PathIdentity.NormalizeForComparison(target);
@@ -16,6 +18,11 @@ public sealed class FakePhysicalPathResolver : IPhysicalPathResolver
 
     public string ResolveWithNearestExistingAncestor(string path)
     {
+        if (Failure is not null)
+        {
+            throw Failure;
+        }
+
         string normalized = PathIdentity.NormalizeForComparison(path);
 
         foreach (var kvp in _mappings)

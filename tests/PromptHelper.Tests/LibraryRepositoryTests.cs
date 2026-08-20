@@ -361,4 +361,131 @@ public sealed class LibraryRepositoryTests
         Assert.IsTrue(File.Exists(paths.LibraryPath));
         Assert.IsFalse(File.Exists(paths.LibraryBackupPath));
     }
+
+    [TestMethod]
+    public void CRUU5_003_Commit_preserves_future_schema_backup_exactly()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        string backupContent = "{\"schemaVersion\": 2, \"categories\": [], \"prompts\": []}";
+        File.WriteAllText(paths.LibraryBackupPath, backupContent);
+        byte[] backupBefore = File.ReadAllBytes(paths.LibraryBackupPath);
+
+        var repo = new LibraryRepository(paths, new AtomicTextWriter());
+        var doc = new LibraryDocument
+        {
+            Categories = [new CategoryRecord { Id = Guid.NewGuid(), Name = "General", SortOrder = 10 }]
+        };
+
+        var result = repo.Commit(doc);
+
+        Assert.IsFalse(result.BackupSynchronized);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "newer schema version 2");
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(paths.LibraryBackupPath));
+    }
+
+    [TestMethod]
+    public void CRUU5_003_Commit_refuses_future_schema_primary()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        File.WriteAllText(paths.LibraryPath, "{\"schemaVersion\": 3, \"categories\": [], \"prompts\": []}");
+        File.WriteAllText(paths.LibraryBackupPath, "{\"schemaVersion\": 1, \"categories\": [], \"prompts\": []}");
+
+        byte[] primaryBefore = File.ReadAllBytes(paths.LibraryPath);
+        byte[] backupBefore = File.ReadAllBytes(paths.LibraryBackupPath);
+
+        var repo = new LibraryRepository(paths, new AtomicTextWriter());
+        var doc = new LibraryDocument();
+
+        Assert.Throws<UnsupportedLibrarySchemaException>(() => repo.Commit(doc));
+
+        CollectionAssert.AreEqual(primaryBefore, File.ReadAllBytes(paths.LibraryPath));
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(paths.LibraryBackupPath));
+    }
+
+    [TestMethod]
+    public void CRUU5_003_SynchronizeBackup_preserves_future_backup()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        File.WriteAllText(paths.LibraryBackupPath, "{\"schemaVersion\": 2, \"categories\": [], \"prompts\": []}");
+        byte[] backupBefore = File.ReadAllBytes(paths.LibraryBackupPath);
+
+        var repo = new LibraryRepository(paths, new AtomicTextWriter());
+        var doc = new LibraryDocument();
+
+        var result = repo.SynchronizeBackup(doc);
+
+        Assert.IsFalse(result.BackupSynchronized);
+        Assert.IsNotNull(result.Warning);
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(paths.LibraryBackupPath));
+    }
+
+    [TestMethod]
+    public void CRUU5_003_CreateCategory_preserves_future_backup()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var repo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        // Pre-create valid primary and future backup
+        repo.Commit(new LibraryDocument());
+        File.WriteAllText(paths.LibraryBackupPath, "{\"schemaVersion\": 2, \"categories\": [], \"prompts\": []}");
+        byte[] backupBefore = File.ReadAllBytes(paths.LibraryBackupPath);
+
+        var doc = repo.ReadPrimary();
+        var service = new PromptLibraryService(doc, repo, promptRepo);
+
+        var result = service.CreateCategory(null, "NewCat");
+
+        Assert.IsNotNull(result.Value);
+        Assert.AreEqual("NewCat", result.Value.Name);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "newer schema version 2");
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(paths.LibraryBackupPath));
+    }
+
+    [TestMethod]
+    public void CRUU5_003_DeletePrompt_preserves_body_if_backup_not_synchronized()
+    {
+        using var testDir = new TestDirectory();
+        var paths = new AppPaths(testDir.Root);
+        paths.EnsureDataDirectories();
+
+        var writer = new AtomicTextWriter();
+        var deleter = new FileDeleter();
+        var repo = new LibraryRepository(paths, writer);
+        var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        // Pre-create valid primary with a prompt
+        var startupService = new LibraryStartupService(paths, repo, promptRepo, deleter, writer);
+        var initResult = startupService.LoadOrInitialize();
+
+        var service = new PromptLibraryService(initResult.Document, repo, promptRepo);
+        var prompt = service.CreatePrompt(null, "Body text", "Title").Value;
+
+        // Make backup future schema
+        File.WriteAllText(paths.LibraryBackupPath, "{\"schemaVersion\": 2, \"categories\": [], \"prompts\": []}");
+
+        // Delete prompt
+        var deleteResult = service.DeletePrompt(prompt.Id);
+
+        Assert.IsNotNull(deleteResult.Warning);
+
+        // Body must be preserved because backup was not synchronized
+        Assert.IsTrue(File.Exists(paths.GetPromptPath(prompt.Id)));
+    }
 }

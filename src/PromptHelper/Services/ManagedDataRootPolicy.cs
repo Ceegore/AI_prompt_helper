@@ -27,12 +27,24 @@ public sealed class ManagedDataRootPolicy
                 "A drive or volume root cannot be used as the Prompt Helper data folder.");
         }
 
-        string physicalTarget =
-            _resolver.ResolveWithNearestExistingAncestor(lexical);
+        string physicalTarget;
+        string physicalBootstrap;
 
-        string physicalBootstrap =
-            _resolver.ResolveWithNearestExistingAncestor(
-                Path.GetFullPath(bootstrapRoot));
+        try
+        {
+            physicalTarget = DataRootTopologyValidator.ResolvePhysicalOrThrow(_resolver, lexical, "configured data folder");
+            physicalBootstrap = DataRootTopologyValidator.ResolvePhysicalOrThrow(_resolver, Path.GetFullPath(bootstrapRoot), "bootstrap settings folder");
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
+
+        if (DataRootTopologyValidator.IsVolumeRootSafe(physicalTarget))
+        {
+            throw new InvalidDataException(
+                "The configured data folder resolves to a drive or share root.");
+        }
 
         if (!PathIdentity.Equals(physicalTarget, physicalBootstrap) &&
             (PathIdentity.IsStrictDescendant(
@@ -49,15 +61,27 @@ public sealed class ManagedDataRootPolicy
         return physicalTarget;
     }
 
+    public DataRootRelationship ValidateTransition(
+        string currentRoot,
+        string targetRoot,
+        string? bootstrapRoot = null)
+    {
+        string bootstrap = bootstrapRoot ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PromptHelper");
+
+        return DataRootTopologyValidator.ValidateTransition(
+            currentRoot,
+            targetRoot,
+            bootstrap,
+            _resolver);
+    }
+
     public void ValidateDisjointOrSame(
         string currentRoot,
         string targetRoot,
         string? defaultBootstrapRoot = null)
     {
-        DataRootTopologyValidator.ValidateDisjointOrSame(
-            currentRoot,
-            targetRoot,
-            defaultBootstrapRoot,
-            _resolver);
+        ValidateTransition(currentRoot, targetRoot, defaultBootstrapRoot);
     }
 }

@@ -53,35 +53,8 @@ public sealed class LibraryStartupService
         // Valid primary always wins immediately
         if (primaryResult is MetadataReadResult.Valid primaryValid)
         {
-            string? backupWarning = null;
-            MetadataReadResult backupState = ReadMetadataState(_paths.LibraryBackupPath);
-
-            if (backupState is MetadataReadResult.FutureSchema futureBackup)
-            {
-                backupWarning =
-                    $"The current library.json was loaded, but library.backup.json uses " +
-                    $"newer schema version {futureBackup.Version}. " +
-                    "The newer backup was preserved and was not overwritten.";
-            }
-            else if (backupState is MetadataReadResult.Unreadable unreadableBackup)
-            {
-                backupWarning =
-                    "The current library.json was loaded, but its safety backup could not " +
-                    $"be synchronized: {unreadableBackup.Error.Message}";
-            }
-            else
-            {
-                try
-                {
-                    _libraryRepo.SynchronizeBackup(primaryValid.Document);
-                }
-                catch (Exception)
-                {
-                    backupWarning =
-                        "The library was loaded from library.json, but its safety backup " +
-                        "could not be synchronized.";
-                }
-            }
+            var syncResult = _libraryRepo.SynchronizeBackup(primaryValid.Document);
+            string? backupWarning = syncResult.BackupSynchronized ? null : syncResult.Warning;
 
             TryRemoveStaleMarker();
             return new StartupResult(primaryValid.Document, false, backupWarning);

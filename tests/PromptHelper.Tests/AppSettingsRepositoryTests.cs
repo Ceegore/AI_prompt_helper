@@ -390,4 +390,279 @@ public sealed class AppSettingsRepositoryTests
         Assert.IsNotNull(result.Warning);
         StringAssert.Contains(result.Warning, "could not be inspected or synchronized");
     }
+
+    [TestMethod]
+    public void CRUU5_001_Save_preserves_future_schema_backup_exactly()
+    {
+        using var temp = new TestDirectory();
+
+        string primary = Path.Combine(temp.Root, "settings.json");
+        string backup = Path.Combine(temp.Root, "settings.backup.json");
+
+        File.WriteAllText(
+            primary,
+            "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+
+        File.WriteAllText(
+            backup,
+            "{\"schemaVersion\":2,\"dataRootPath\":\"C:\\\\Newer\"}");
+
+        byte[] backupBefore = File.ReadAllBytes(backup);
+
+        var repo = new AppSettingsRepository(
+            settingsPathOverride: primary,
+            backupPathOverride: backup);
+
+        SettingsSaveResult result = repo.Save(new AppSettings
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            DataRootPath = @"C:\ChangedByOldBuild"
+        });
+
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(backup));
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "newer");
+    }
+
+    [TestMethod]
+    public void CRUU5_001_Save_refuses_to_overwrite_future_schema_primary()
+    {
+        using var temp = new TestDirectory();
+
+        string primary = Path.Combine(temp.Root, "settings.json");
+        string backup = Path.Combine(temp.Root, "settings.backup.json");
+
+        File.WriteAllText(
+            primary,
+            "{\"schemaVersion\":2,\"dataRootPath\":\"C:\\\\Future\"}");
+        File.WriteAllText(
+            backup,
+            "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+
+        byte[] primaryBefore = File.ReadAllBytes(primary);
+        byte[] backupBefore = File.ReadAllBytes(backup);
+
+        var repo = new AppSettingsRepository(
+            settingsPathOverride: primary,
+            backupPathOverride: backup);
+
+        Assert.Throws<UnsupportedSettingsSchemaException>(() =>
+            repo.Save(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\AttemptedOverwrite"
+            }));
+
+        CollectionAssert.AreEqual(primaryBefore, File.ReadAllBytes(primary));
+        CollectionAssert.AreEqual(backupBefore, File.ReadAllBytes(backup));
+    }
+
+    [TestMethod]
+    public void CRUU5_001_Save_with_unreadable_backup_saves_primary_and_preserves_backup()
+    {
+        using var temp = new TestDirectory();
+
+        string primary = Path.Combine(temp.Root, "settings.json");
+        string backup = Path.Combine(temp.Root, "settings.backup.json");
+
+        File.WriteAllText(primary, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+        File.WriteAllText(backup, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Backup\"}");
+
+        using (var lockStream = new FileStream(backup, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var repo = new AppSettingsRepository(
+                settingsPathOverride: primary,
+                backupPathOverride: backup);
+
+            var result = repo.Save(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\NewRoot"
+            });
+
+            Assert.IsNotNull(result.Warning);
+            StringAssert.Contains(result.Warning, "could not be inspected or synchronized");
+            Assert.IsTrue(File.ReadAllText(primary).Contains("NewRoot"));
+        }
+    }
+
+    [TestMethod]
+    public void CRUU5_001_Save_with_unreadable_primary_writes_nothing()
+    {
+        using var temp = new TestDirectory();
+
+        string primary = Path.Combine(temp.Root, "settings.json");
+        string backup = Path.Combine(temp.Root, "settings.backup.json");
+
+        File.WriteAllText(primary, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+        File.WriteAllText(backup, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Backup\"}");
+
+        using (var lockStream = new FileStream(primary, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var repo = new AppSettingsRepository(
+                settingsPathOverride: primary,
+                backupPathOverride: backup);
+
+            Assert.Throws<SettingsReadException>(() =>
+                repo.Save(new AppSettings
+                {
+                    SchemaVersion = 1,
+                    DataRootPath = @"C:\NewRoot"
+                }));
+
+            Assert.IsTrue(File.ReadAllText(backup).Contains("Backup"));
+        }
+    }
+
+    [TestMethod]
+    public void CRUU5_002_Settings_missing_schemaVersion_is_corrupt()
+    {
+        using var temp = new TestDirectory();
+        string settings = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settings, "{\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settings);
+        Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU5_002_Settings_duplicate_same_case_schemaVersion_is_corrupt()
+    {
+        using var temp = new TestDirectory();
+        string settings = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settings, "{\"schemaVersion\":1,\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settings);
+        Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU5_002_Settings_duplicate_case_variant_schemaVersion_is_corrupt()
+    {
+        using var temp = new TestDirectory();
+        string settings = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settings, "{\"schemaVersion\":2,\"SchemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settings);
+        Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU5_002_Future_schema_cannot_be_hidden_by_duplicate()
+    {
+        using var temp = new TestDirectory();
+        string settings = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settings, "{\"schemaVersion\":1,\"SchemaVersion\":2,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settings);
+        Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU5_002_Noninteger_schemaVersion_is_corrupt()
+    {
+        using var temp = new TestDirectory();
+        string settings = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settings, "{\"schemaVersion\":\"1\",\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settings);
+        Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU5_002_Nonobject_settings_root_is_corrupt()
+    {
+        using var temp = new TestDirectory();
+        string settings = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settings, "[{\"schemaVersion\":1}]");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settings);
+        Assert.Throws<InvalidDataException>(() => repo.LoadOrRecover());
+    }
+
+    [TestMethod]
+    public void CRUU5_005_SaveIfPrimaryUnchanged_accepts_unchanged_primary()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
+        var token = repo.CapturePrimaryWriteToken();
+
+        var result = repo.SaveIfPrimaryUnchanged(new AppSettings
+        {
+            SchemaVersion = 1,
+            DataRootPath = @"C:\New"
+        }, token);
+
+        Assert.IsNull(result.Warning);
+        Assert.AreEqual(Path.GetFullPath(@"C:\New"), repo.GetEffectiveDataRoot());
+    }
+
+    [TestMethod]
+    public void CRUU5_005_SaveIfPrimaryUnchanged_rejects_changed_primary()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
+        var token = repo.CapturePrimaryWriteToken();
+
+        // Simulate concurrent mutation
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Concurrent\"}");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfPrimaryUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\New"
+            }, token));
+
+        Assert.AreEqual(Path.GetFullPath(@"C:\Concurrent"), repo.GetEffectiveDataRoot());
+    }
+
+    [TestMethod]
+    public void CRUU5_005_SaveIfPrimaryUnchanged_rejects_appearing_primary()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
+        var token = repo.CapturePrimaryWriteToken();
+        Assert.IsFalse(token.Exists);
+
+        // File appears unexpectedly
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Appeared\"}");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfPrimaryUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\New"
+            }, token));
+    }
+
+    [TestMethod]
+    public void CRUU5_005_SaveIfPrimaryUnchanged_rejects_disappearing_primary()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
+        var token = repo.CapturePrimaryWriteToken();
+        Assert.IsTrue(token.Exists);
+
+        // File deleted unexpectedly
+        File.Delete(settingsPath);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfPrimaryUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\New"
+            }, token));
+    }
 }

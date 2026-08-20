@@ -265,17 +265,21 @@ public sealed class PublishedLifecycleAndGuiFlowRegressionTests
         Assert.AreEqual("Updated Headline", updated.Title);
         Assert.AreEqual("Line 1 Modified\nLine 2 Content", promptRepo1.Read(prompt.Id));
 
-        // 3. Migrate data to second directory
-        var migration = new DataFolderMigrationService();
-        var migrationResult = migration.PrepareTarget(testDir1.Root, testDir2.Root);
-        Assert.IsTrue(migrationResult.Copied);
-
-        // 4. Save settings pointing to second directory
+        // 3. Migrate data to second directory via DataFolderTransitionCoordinator
         string settingsPath = Path.Combine(testDir1.Root, "settings.json");
         var settingsRepo = new AppSettingsRepository(writer, settingsPath);
-        settingsRepo.Save(new AppSettings { SchemaVersion = 1, DataRootPath = testDir2.Root });
+        var confirmation = new FakeUserConfirmationService { ConfirmationResult = true };
+        var coordinator = new DataFolderTransitionCoordinator(
+            testDir1.Root,
+            settingsRepo,
+            new DataFolderMigrationService(),
+            confirmation);
 
-        // 5. Start from second directory using settings
+        DataFolderTransitionResult transitionResult = coordinator.RequestTransition(testDir2.Root);
+        Assert.IsTrue(transitionResult.Changed);
+        Assert.IsTrue(transitionResult.RestartRequired);
+
+        // 4. Start from second directory using settings
         string effectiveRoot = settingsRepo.GetEffectiveDataRoot();
         var paths2 = new AppPaths(effectiveRoot);
         var libRepo2 = new LibraryRepository(paths2, writer);

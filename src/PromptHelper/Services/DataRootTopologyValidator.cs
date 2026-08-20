@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.IO;
 
 namespace PromptHelper.Services;
@@ -10,83 +11,103 @@ public static class DataRootTopologyValidator
         return PathIdentity.IsStrictDescendant(candidate, parent);
     }
 
-    public static void ValidateDisjointOrSame(
+    public static DataRootRelationship ValidateTransition(
         string currentRoot,
         string targetRoot,
-        string? defaultBootstrapRoot = null,
+        string bootstrapRoot,
         IPhysicalPathResolver? resolver = null)
     {
-        string current = PathIdentity.NormalizeForComparison(currentRoot);
-        string target = PathIdentity.NormalizeForComparison(targetRoot);
+        string lexicalCurrent = PathIdentity.NormalizeForComparison(currentRoot);
+        string lexicalTarget = PathIdentity.NormalizeForComparison(targetRoot);
+        string lexicalBootstrap = PathIdentity.NormalizeForComparison(bootstrapRoot);
 
-        if (PathIdentity.Equals(current, target))
-        {
-            return;
-        }
-
-        if (IsStrictDescendant(target, current) ||
-            IsStrictDescendant(current, target))
-        {
-            throw new InvalidOperationException(
-                "The current and target data folders cannot contain one another.");
-        }
-
-        if (IsVolumeRootSafe(target))
+        if (IsVolumeRootSafe(lexicalTarget))
         {
             throw new InvalidOperationException(
                 "A root volume or drive cannot be selected as a Prompt Helper data folder.");
         }
 
-        string bootstrap = PathIdentity.NormalizeForComparison(defaultBootstrapRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PromptHelper"));
+        var physicalResolver = resolver ?? new WindowsPhysicalPathResolver();
+        string physicalCurrent = ResolvePhysicalOrThrow(physicalResolver, lexicalCurrent, "current data folder");
+        string physicalTarget = ResolvePhysicalOrThrow(physicalResolver, lexicalTarget, "target data folder");
+        string physicalBootstrap = ResolvePhysicalOrThrow(physicalResolver, lexicalBootstrap, "bootstrap settings folder");
 
-        if (!PathIdentity.Equals(target, bootstrap))
+        if (IsVolumeRootSafe(physicalTarget))
         {
-            if (IsStrictDescendant(target, bootstrap) || IsStrictDescendant(bootstrap, target))
+            throw new InvalidOperationException(
+                "The selected data folder resolves to a drive or share root. Choose a dedicated subdirectory instead.");
+        }
+
+        bool same = PathIdentity.Equals(physicalCurrent, physicalTarget);
+        if (same)
+        {
+            return new DataRootRelationship(
+                lexicalCurrent,
+                lexicalTarget,
+                physicalCurrent,
+                physicalTarget,
+                SamePhysicalRoot: true);
+        }
+
+        if (PathIdentity.IsStrictDescendant(physicalTarget, physicalCurrent) ||
+            PathIdentity.IsStrictDescendant(physicalCurrent, physicalTarget))
+        {
+            throw new InvalidOperationException(
+                "The current and target data folders cannot contain one another.");
+        }
+
+        if (!PathIdentity.Equals(physicalTarget, physicalBootstrap))
+        {
+            if (PathIdentity.IsStrictDescendant(physicalTarget, physicalBootstrap) ||
+                PathIdentity.IsStrictDescendant(physicalBootstrap, physicalTarget))
             {
                 throw new InvalidOperationException(
                     "A custom data folder cannot be inside or contain the Prompt Helper bootstrap settings folder.");
             }
         }
 
-        // Physical resolution check if resolver is available or provided
-        var physicalResolver = resolver ?? new WindowsPhysicalPathResolver();
+        return new DataRootRelationship(
+            lexicalCurrent,
+            lexicalTarget,
+            physicalCurrent,
+            physicalTarget,
+            SamePhysicalRoot: false);
+    }
+
+    public static void ValidateDisjointOrSame(
+        string currentRoot,
+        string targetRoot,
+        string? defaultBootstrapRoot = null,
+        IPhysicalPathResolver? resolver = null)
+    {
+        string bootstrap = defaultBootstrapRoot ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PromptHelper");
+
+        ValidateTransition(currentRoot, targetRoot, bootstrap, resolver);
+    }
+
+    public static string ResolvePhysicalOrThrow(
+        IPhysicalPathResolver resolver,
+        string path,
+        string role)
+    {
         try
         {
-            string physCurrent = physicalResolver.ResolveWithNearestExistingAncestor(current);
-            string physTarget = physicalResolver.ResolveWithNearestExistingAncestor(target);
-            string physBootstrap = physicalResolver.ResolveWithNearestExistingAncestor(bootstrap);
-
-            if (PathIdentity.Equals(physCurrent, physTarget))
-            {
-                return;
-            }
-
-            if (PathIdentity.IsStrictDescendant(physTarget, physCurrent) ||
-                PathIdentity.IsStrictDescendant(physCurrent, physTarget))
-            {
-                throw new InvalidOperationException(
-                    "The current and target data folders cannot physically contain one another.");
-            }
-
-            if (!PathIdentity.Equals(physTarget, physBootstrap))
-            {
-                if (PathIdentity.IsStrictDescendant(physTarget, physBootstrap) ||
-                    PathIdentity.IsStrictDescendant(physBootstrap, physTarget))
-                {
-                    throw new InvalidOperationException(
-                        "A custom data folder cannot physically be inside or contain the Prompt Helper bootstrap settings folder.");
-                }
-            }
+            return PathIdentity.NormalizeForComparison(
+                resolver.ResolveWithNearestExistingAncestor(path));
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            Win32Exception or
+            ArgumentException or
+            NotSupportedException)
         {
-            throw;
-        }
-        catch
-        {
-            // If physical path resolution encounters non-fatal environment constraint, lexical check stands
+            throw new InvalidOperationException(
+                $"Prompt Helper could not safely resolve the physical {role} path " +
+                $"'{path}'. The data-folder operation was cancelled.",
+                ex);
         }
     }
 
