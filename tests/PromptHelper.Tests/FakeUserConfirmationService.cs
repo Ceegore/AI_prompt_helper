@@ -7,6 +7,8 @@ internal sealed class FakeUserConfirmationService : IUserConfirmationService
 {
     public bool ConfirmationResult { get; set; } = true;
     public Action? OnConfirm { get; set; }
+    public Action<string, string>? OnShowInformation { get; set; }
+    public Action<string, string>? OnShowWarning { get; set; }
     public string? LastPromptedPath { get; private set; }
     public string? LastWarning { get; private set; }
     public string? LastMessage { get; private set; }
@@ -38,6 +40,7 @@ internal sealed class FakeUserConfirmationService : IUserConfirmationService
         LastMessage = message;
         LastTitle = title;
         InfoCount++;
+        OnShowInformation?.Invoke(message, title);
     }
 
     public void ShowWarning(string message, string title)
@@ -46,5 +49,6 @@ internal sealed class FakeUserConfirmationService : IUserConfirmationService
         LastTitle = title;
         LastWarning = message;
         WarningCount++;
+        OnShowWarning?.Invoke(message, title);
     }
 }

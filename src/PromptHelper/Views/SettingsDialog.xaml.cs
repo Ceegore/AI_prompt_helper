@@ -75,6 +75,16 @@ public partial class SettingsDialog : Window
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        ExecuteSaveInternal();
+    }
+
+    internal void ExecuteSaveForTest()
+    {
+        ExecuteSaveInternal();
+    }
+
+    private void ExecuteSaveInternal()
+    {
         try
         {
             string targetInput = !string.IsNullOrWhiteSpace(DataFolderTextBox?.Text)
@@ -104,26 +114,36 @@ public partial class SettingsDialog : Window
                 return;
             }
 
-            if (!result.ExistingLibrarySelected)
+            // CRUU8-013: Monotonic postcommit boundary.
+            // Establish RestartRequired BEFORE showing notification UI!
+            RestartRequired = true;
+
+            try
             {
-                string successMessage = "The data folder has been saved.\r\n\r\nPrompt Helper will use it the next time the application starts.\r\n\r\nThe previous data folder was left unchanged as a safety copy.";
-                if (!string.IsNullOrEmpty(result.Warning))
+                if (!result.ExistingLibrarySelected)
                 {
-                    successMessage += $"\r\n\r\nWarning: {result.Warning}";
+                    string successMessage = "The data folder has been saved.\r\n\r\nPrompt Helper will use it the next time the application starts.\r\n\r\nThe previous data folder was left unchanged as a safety copy.";
+                    if (!string.IsNullOrEmpty(result.Warning))
+                    {
+                        successMessage += $"\r\n\r\nWarning: {result.Warning}";
+                    }
+
+                    _confirmationService.ShowInformation(
+                        successMessage,
+                        "Data Folder Saved");
                 }
-
-                _confirmationService.ShowInformation(
-                    successMessage,
-                    "Data Folder Saved");
+                else if (!string.IsNullOrEmpty(result.Warning))
+                {
+                    _confirmationService.ShowWarning(
+                        $"The data folder setting was updated, but a warning occurred:\r\n\r\n{result.Warning}",
+                        "Settings Warning");
+                }
             }
-            else if (!string.IsNullOrEmpty(result.Warning))
+            catch
             {
-                _confirmationService.ShowWarning(
-                    $"The data folder setting was updated, but a warning occurred:\r\n\r\n{result.Warning}",
-                    "Settings Warning");
+                // Notification failure must NOT revert or clear RestartRequired.
             }
 
-            RestartRequired = result.RestartRequired;
             try
             {
                 DialogResult = true;

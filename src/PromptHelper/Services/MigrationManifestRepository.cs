@@ -8,6 +8,16 @@ using System.Text.Json.Serialization;
 
 namespace PromptHelper.Services;
 
+internal sealed class ManifestWriteCleanupException : IOException
+{
+    public string TempPath { get; }
+    public ManifestWriteCleanupException(string tempPath, Exception inner)
+        : base($"Failed to clean manifest temp file at '{tempPath}': {inner.Message}", inner)
+    {
+        TempPath = tempPath;
+    }
+}
+
 internal sealed class MigrationManifestRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -16,6 +26,13 @@ internal sealed class MigrationManifestRepository
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter() }
     };
+
+    private readonly IMigrationManifestFileOps _fileOps;
+
+    public MigrationManifestRepository(IMigrationManifestFileOps? fileOps = null)
+    {
+        _fileOps = fileOps ?? new DefaultMigrationManifestFileOps();
+    }
 
     public static string ResolveManifestArtifactPath(string root, string relativePath)
     {
@@ -29,6 +46,7 @@ internal sealed class MigrationManifestRepository
             throw new InvalidDataException("Migration artifact path must be relative.");
         }
 
+        // Canonical relative check: reject aliases like 'prompts\..\library.json' or '.\library.json'
         string normalizedRoot = PathIdentity.NormalizeForComparison(root);
         string full = Path.GetFullPath(Path.Combine(normalizedRoot, relativePath));
 
@@ -37,10 +55,18 @@ internal sealed class MigrationManifestRepository
             throw new InvalidDataException("Migration artifact path escapes the target root.");
         }
 
+        string canonicalRelative = Path.GetRelativePath(normalizedRoot, full);
+        if (!string.Equals(relativePath.Replace('/', '\\'), canonicalRelative, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"Migration artifact path '{relativePath}' is not canonical.");
+        }
+
         string fileName = Path.GetFileName(full);
         if (fileName.StartsWith(".prompthelper", StringComparison.OrdinalIgnoreCase) ||
             fileName.StartsWith(".app.lock", StringComparison.OrdinalIgnoreCase) ||
-            fileName.StartsWith(".settings.lock", StringComparison.OrdinalIgnoreCase))
+            fileName.StartsWith(".settings.lock", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(fileName, "settings.json", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(fileName, "settings.backup.json", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException($"Migration artifact targets reserved namespace: '{relativePath}'.");
         }
@@ -50,12 +76,22 @@ internal sealed class MigrationManifestRepository
 
     public MigrationAttemptManifest? TryRead(string markerPath)
     {
-        if (string.IsNullOrWhiteSpace(markerPath) || !File.Exists(markerPath))
+        if (string.IsNullOrWhiteSpace(markerPath) || !_fileOps.FileExists(markerPath))
         {
             return null;
         }
 
-        string json = File.ReadAllText(markerPath);
+        string json;
+        try
+        {
+            byte[] rawBytes = _fileOps.ReadAllBytes(markerPath);
+            json = Encoding.UTF8.GetString(rawBytes);
+        }
+        catch (Exception ex) when (ex is not InvalidDataException)
+        {
+            throw new InvalidDataException($"Failed to read migration manifest from '{markerPath}': {ex.Message}", ex);
+        }
+
         if (string.IsNullOrWhiteSpace(json))
         {
             throw new InvalidDataException($"Migration manifest file is empty: '{markerPath}'.");
@@ -90,7 +126,7 @@ internal sealed class MigrationManifestRepository
         ValidateManifestInvariants(manifest, markerPath);
 
         string? dir = Path.GetDirectoryName(markerPath);
-        if (!string.IsNullOrEmpty(dir))
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
             Directory.CreateDirectory(dir);
         }
@@ -100,29 +136,54 @@ internal sealed class MigrationManifestRepository
 
         string tempPath = Path.Combine(
             dir ?? string.Empty,
-            $".{Path.GetFileName(markerPath)}.{manifest.AttemptId:N}-{Guid.NewGuid():N}.tmp");
+            $".{Path.GetFileName(markerPath)}.{manifest.AttemptId:N}-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}.tmp");
 
-        using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+        bool promoted = false;
+        try
         {
-            fs.Write(bytes);
-            fs.Flush(flushToDisk: true);
-        }
+            using (Stream stream = _fileOps.CreateNew(tempPath))
+            {
+                stream.Write(bytes);
+                _fileOps.FlushToDisk(stream);
+            }
 
-        if (File.Exists(markerPath))
-        {
-            File.Replace(tempPath, markerPath, null);
+            if (_fileOps.FileExists(markerPath))
+            {
+                _fileOps.ReplaceWriteThrough(tempPath, markerPath);
+            }
+            else
+            {
+                _fileOps.MoveNoOverwriteWriteThrough(tempPath, markerPath);
+            }
+
+            promoted = true;
         }
-        else
+        finally
         {
-            File.Move(tempPath, markerPath, overwrite: false);
+            if (!promoted && _fileOps.FileExists(tempPath))
+            {
+                try
+                {
+                    _fileOps.DeleteFile(tempPath);
+                }
+                catch (Exception cleanupEx)
+                {
+                    throw new ManifestWriteCleanupException(tempPath, cleanupEx);
+                }
+            }
         }
+    }
+
+    public void DeleteDurable(string markerPath)
+    {
+        Delete(markerPath);
     }
 
     public void Delete(string markerPath)
     {
-        if (File.Exists(markerPath))
+        if (_fileOps.FileExists(markerPath))
         {
-            File.Delete(markerPath);
+            _fileOps.DeleteFile(markerPath);
         }
     }
 
@@ -160,14 +221,9 @@ internal sealed class MigrationManifestRepository
             throw new InvalidDataException($"Multiple 'schemaVersion' properties found in '{path}'.");
         }
 
-        if (schemaVersion > MigrationAttemptManifest.CurrentSchemaVersion)
-        {
-            throw new InvalidDataException($"Unsupported migration manifest schema version: {schemaVersion}.");
-        }
-
         if (schemaVersion != MigrationAttemptManifest.CurrentSchemaVersion)
         {
-            throw new InvalidDataException($"Invalid migration manifest schema version: {schemaVersion}.");
+            throw new InvalidDataException($"Unsupported migration manifest schema version: {schemaVersion}. Expected {MigrationAttemptManifest.CurrentSchemaVersion}.");
         }
     }
 
@@ -175,7 +231,7 @@ internal sealed class MigrationManifestRepository
     {
         if (manifest.SchemaVersion != MigrationAttemptManifest.CurrentSchemaVersion)
         {
-            throw new InvalidDataException($"Unsupported migration manifest schema version: {manifest.SchemaVersion}.");
+            throw new InvalidDataException($"Unsupported migration manifest schema version: {manifest.SchemaVersion}. Expected {MigrationAttemptManifest.CurrentSchemaVersion}.");
         }
 
         if (manifest.AttemptId == Guid.Empty)
@@ -200,20 +256,56 @@ internal sealed class MigrationManifestRepository
             throw new InvalidDataException("Migration manifest source and target roots must not be identical.");
         }
 
-        if (manifest.Artifacts is null)
+        if (string.IsNullOrWhiteSpace(manifest.SourceLibrarySha256Hex) ||
+            manifest.SourceLibrarySha256Hex.Length != 64 ||
+            !IsHex(manifest.SourceLibrarySha256Hex))
         {
-            throw new InvalidDataException("Migration manifest artifacts list cannot be null.");
+            throw new InvalidDataException($"SourceLibrarySha256Hex must be a 64-character hexadecimal string: '{manifest.SourceLibrarySha256Hex}'.");
         }
 
-        var relativePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Enum.IsDefined(manifest.Phase))
+        {
+            throw new InvalidDataException($"Undefined migration manifest phase: {manifest.Phase}.");
+        }
+
+        if (manifest.Artifacts is null || manifest.Artifacts.Count == 0)
+        {
+            throw new InvalidDataException("Migration manifest artifacts list cannot be null or empty.");
+        }
+
+        var finalFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tempFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        int primaryCount = 0;
+        int safetyBackupCount = 0;
 
         foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
         {
-            ResolveManifestArtifactPath(manifest.TargetPhysicalRoot, artifact.RelativePath);
-
-            if (!relativePaths.Add(artifact.RelativePath))
+            if (!Enum.IsDefined(artifact.Role))
             {
-                throw new InvalidDataException($"Duplicate artifact path in migration manifest: '{artifact.RelativePath}'.");
+                throw new InvalidDataException($"Undefined artifact role: {artifact.Role} for '{artifact.RelativePath}'.");
+            }
+
+            string finalFull = ResolveManifestArtifactPath(manifest.TargetPhysicalRoot, artifact.RelativePath);
+            if (!finalFullPaths.Add(finalFull))
+            {
+                throw new InvalidDataException($"Duplicate resolved artifact final path in migration manifest: '{artifact.RelativePath}'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(artifact.TempRelativePath))
+            {
+                throw new InvalidDataException($"Artifact TempRelativePath cannot be empty: '{artifact.RelativePath}'.");
+            }
+
+            string tempFull = ResolveManifestArtifactPath(manifest.TargetPhysicalRoot, artifact.TempRelativePath);
+            if (!tempFullPaths.Add(tempFull))
+            {
+                throw new InvalidDataException($"Duplicate resolved artifact temp path in migration manifest: '{artifact.TempRelativePath}'.");
+            }
+
+            if (PathIdentity.Equals(finalFull, tempFull))
+            {
+                throw new InvalidDataException($"Artifact final path and temp path must not be identical: '{artifact.RelativePath}'.");
             }
 
             if (artifact.Length < 0)
@@ -227,6 +319,56 @@ internal sealed class MigrationManifestRepository
             {
                 throw new InvalidDataException($"Artifact SHA-256 hash must be 64 hexadecimal characters: '{artifact.RelativePath}'.");
             }
+
+            switch (artifact.Role)
+            {
+                case MigrationPayloadRole.PrimaryMetadata:
+                    primaryCount++;
+                    if (!string.Equals(artifact.RelativePath, "library.json", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException($"PrimaryMetadata relative path must be 'library.json', found '{artifact.RelativePath}'.");
+                    }
+                    if (!string.Equals(artifact.Sha256Hex, manifest.SourceLibrarySha256Hex, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException("PrimaryMetadata SHA-256 hash must match manifest SourceLibrarySha256Hex.");
+                    }
+                    break;
+
+                case MigrationPayloadRole.SafetyBackup:
+                    safetyBackupCount++;
+                    if (!string.Equals(artifact.RelativePath, "library.backup.json", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException($"SafetyBackup relative path must be 'library.backup.json', found '{artifact.RelativePath}'.");
+                    }
+                    break;
+
+                case MigrationPayloadRole.PromptBody:
+                case MigrationPayloadRole.OrphanPromptBody:
+                    if (!artifact.RelativePath.StartsWith("prompts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                        !artifact.RelativePath.StartsWith("prompts/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException($"Prompt body must reside under 'prompts/', found '{artifact.RelativePath}'.");
+                    }
+                    break;
+
+                case MigrationPayloadRole.RecoveryArtifact:
+                    if (!artifact.RelativePath.StartsWith("recovery" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                        !artifact.RelativePath.StartsWith("recovery/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException($"Recovery artifact must reside under 'recovery/', found '{artifact.RelativePath}'.");
+                    }
+                    break;
+            }
+        }
+
+        if (primaryCount != 1)
+        {
+            throw new InvalidDataException($"Migration manifest must contain exactly one PrimaryMetadata artifact, found {primaryCount}.");
+        }
+
+        if (safetyBackupCount > 1)
+        {
+            throw new InvalidDataException($"Migration manifest may contain at most one SafetyBackup artifact, found {safetyBackupCount}.");
         }
     }
 

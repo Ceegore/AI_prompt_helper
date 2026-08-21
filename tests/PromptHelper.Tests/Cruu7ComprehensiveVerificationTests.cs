@@ -276,6 +276,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
 
         var manifest = new MigrationAttemptManifest
         {
+            SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
             AttemptId = Guid.NewGuid(),
             SourcePhysicalRoot = source.Root,
             TargetPhysicalRoot = target.Root,
@@ -286,6 +287,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
+                    TempRelativePath = ".library.json.tmp",
                     Role = MigrationPayloadRole.PrimaryMetadata,
                     Length = new FileInfo(targetLib).Length,
                     Sha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(targetLib)))
@@ -293,6 +295,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = Path.Combine("prompts", $"{promptId:N}.md"),
+                    TempRelativePath = Path.Combine("prompts", $".{promptId:N}.md.tmp"),
                     Role = MigrationPayloadRole.PromptBody,
                     Length = new FileInfo(targetPrompt).Length,
                     Sha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(targetPrompt)))
@@ -333,12 +336,23 @@ public sealed class Cruu7ComprehensiveVerificationTests
 
         var manifest = new MigrationAttemptManifest
         {
+            SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
             AttemptId = Guid.NewGuid(),
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = target.Root,
-            SourceLibrarySha256Hex = "abc",
+            SourceLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
             Phase = MigrationManifestPhase.Copying,
-            Artifacts = []
+            Artifacts =
+            [
+                new MigrationManifestArtifact
+                {
+                    RelativePath = "library.json",
+                    TempRelativePath = ".library.json.tmp",
+                    Role = MigrationPayloadRole.PrimaryMetadata,
+                    Length = 10,
+                    Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000"
+                }
+            ]
         };
 
         var manifestRepo = new MigrationManifestRepository();
@@ -358,6 +372,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
 
         var manifest = new MigrationAttemptManifest
         {
+            SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
             AttemptId = Guid.NewGuid(),
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = target.Root,
@@ -368,6 +383,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
+                    TempRelativePath = ".library.json.tmp",
                     Role = MigrationPayloadRole.PrimaryMetadata,
                     Length = 10,
                     Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -721,7 +737,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
         {
             var validator = new DataRootCapabilityValidator();
             var doc = LibraryRepository.InspectAndDeserialize(File.ReadAllText(Path.Combine(target.Root, "library.json")));
-            var ctx = new ExistingLibraryCapabilityContext(Path.Combine(target.Root, "library.json"), doc);
+            var ctx = new ExistingLibraryCapabilityContext(DataFolderMigrationService.TargetLibraryKind.ValidPrimary, Path.Combine(target.Root, "library.json"), null, doc);
 
             var result = validator.ValidateWritable(target.Root, null, ctx);
             Assert.IsNotNull(result.Warning);
@@ -747,7 +763,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
         {
             var validator = new DataRootCapabilityValidator();
             var doc = LibraryRepository.InspectAndDeserialize(File.ReadAllText(Path.Combine(target.Root, "library.json")));
-            var ctx = new ExistingLibraryCapabilityContext(Path.Combine(target.Root, "library.json"), doc);
+            var ctx = new ExistingLibraryCapabilityContext(DataFolderMigrationService.TargetLibraryKind.ValidPrimary, Path.Combine(target.Root, "library.json"), null, doc);
 
             var result = validator.ValidateWritable(target.Root, null, ctx);
             Assert.IsNull(result.Warning);

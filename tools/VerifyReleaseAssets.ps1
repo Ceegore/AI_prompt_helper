@@ -53,6 +53,9 @@ if (Test-Path $outputIco) {
     }
 
     $sizes = [System.Collections.Generic.HashSet[int]]::new()
+    $frameHashes = [System.Collections.Generic.HashSet[string]]::new()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+
     for ($i = 0; $i -lt $count; $i++) {
         $offset = 6 + ($i * 16)
         $w = if ($bytes[$offset] -eq 0) { 256 } else { [int]$bytes[$offset] }
@@ -81,6 +84,19 @@ if (Test-Path $outputIco) {
         if ($end -gt [UInt64]$bytes.Length) {
             Write-Error "ICO frame $i extends beyond end of file."
             exit 1
+        }
+
+        if ($RequireIcon) {
+            $frameBytes = [byte[]]::new($imageSize)
+            [System.Array]::Copy($bytes, $imageOffset, $frameBytes, 0, $imageSize)
+            $hashBytes = $sha256.ComputeHash($frameBytes)
+            $hashHex = [System.BitConverter]::ToString($hashBytes).Replace("-", "").ToLowerInvariant()
+
+            if ($frameHashes.Contains($hashHex)) {
+                Write-Error "ICO frame $i (${w}x${h}) has duplicate image data matching another frame. Frames must be independently rendered at native resolutions."
+                exit 1
+            }
+            $frameHashes.Add($hashHex) | Out-Null
         }
     }
 

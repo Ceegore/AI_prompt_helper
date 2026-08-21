@@ -55,6 +55,7 @@ public sealed class DataFolderMigrationService
         Unreadable,
         Unstable,
         InterruptedMigration,
+        OccupiedNonLibrary,
         Invalid
     }
 
@@ -153,7 +154,9 @@ public sealed class DataFolderMigrationService
     {
         _fileOps = fileOps ?? new DefaultMigrationFileOps();
         _capabilityValidator = capabilityValidator ?? new DataRootCapabilityValidator();
-        _defaultBootstrapRoot = defaultBootstrapRoot;
+        _defaultBootstrapRoot = defaultBootstrapRoot ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PromptHelper");
         _pathResolver = pathResolver ?? new WindowsPhysicalPathResolver();
     }
 
@@ -205,7 +208,7 @@ public sealed class DataFolderMigrationService
                     cleanTarget,
                     null,
                     inspection.EffectiveDocument != null && inspection.EffectiveMetadataPath != null
-                        ? new ExistingLibraryCapabilityContext(inspection.EffectiveMetadataPath, inspection.EffectiveDocument)
+                        ? new ExistingLibraryCapabilityContext(inspection.Kind, inspection.EffectiveMetadataPath, null, inspection.EffectiveDocument)
                         : null);
                 return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: true, Copied: false, Warning: inspection.Warning);
 
@@ -214,7 +217,7 @@ public sealed class DataFolderMigrationService
                     cleanTarget,
                     null,
                     inspection.EffectiveDocument != null && inspection.EffectiveMetadataPath != null
-                        ? new ExistingLibraryCapabilityContext(inspection.EffectiveMetadataPath, inspection.EffectiveDocument)
+                        ? new ExistingLibraryCapabilityContext(inspection.Kind, null, inspection.EffectiveMetadataPath, inspection.EffectiveDocument)
                         : null);
                 return new DataFolderChangeResult(
                     cleanTarget,
@@ -230,14 +233,28 @@ public sealed class DataFolderMigrationService
             case TargetLibraryKind.FutureSchema:
                 throw inspection.Error ?? new UnsupportedLibrarySchemaException(999);
 
+            case TargetLibraryKind.Unreadable:
+                throw new InvalidOperationException($"The target data folder cannot be read: '{cleanTarget}'. {inspection.Error?.Message}", inspection.Error);
+
+            case TargetLibraryKind.Unstable:
+                throw new InvalidOperationException($"The target data folder is unstable: '{cleanTarget}'. {inspection.Error?.Message}", inspection.Error);
+
+            case TargetLibraryKind.InterruptedMigration:
+                throw new InvalidOperationException($"The target data folder contains an unfinished migration attempt: '{cleanTarget}'.");
+
+            case TargetLibraryKind.OccupiedNonLibrary:
+                throw new InvalidDataException($"The target data folder is not empty and does not contain a valid library: '{cleanTarget}'. {inspection.Error?.Message}");
+
             case TargetLibraryKind.Invalid:
                 throw inspection.Error is InvalidDataException ide
                     ? ide
                     : new InvalidDataException($"The target data folder contains invalid or unreadable library data: '{cleanTarget}'. {inspection.Error?.Message}", inspection.Error);
 
             case TargetLibraryKind.Empty:
-            default:
                 break;
+
+            default:
+                throw new InvalidOperationException($"Unsupported target-library state: {inspection.Kind}.");
         }
 
         // Empty target copy workflow
@@ -251,7 +268,7 @@ public sealed class DataFolderMigrationService
         return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: false, Copied: true);
     }
 
-    internal TargetInspection InspectTarget(string targetRoot)
+    internal TargetInspection InspectTarget(string targetRoot, bool isReservationActive = false)
     {
         string normalizedTarget = PathIdentity.NormalizeForComparison(targetRoot);
 
@@ -281,6 +298,25 @@ public sealed class DataFolderMigrationService
 
         if (!primaryExists && !backupExists)
         {
+            EmptyTargetBaselineInspection baseline = EmptyTargetBaselineInspector.Inspect(
+                normalizedTarget,
+                _defaultBootstrapRoot ?? string.Empty,
+                isReservationActive: isReservationActive,
+                _fileOps);
+
+            if (!baseline.IsAcceptable)
+            {
+                return new TargetInspection(
+                    normalizedTarget,
+                    TargetLibraryKind.OccupiedNonLibrary,
+                    null,
+                    null,
+                    null,
+                    new InvalidDataException(
+                        $"The folder is not empty and contains unexpected files: {string.Join(", ", baseline.UnexpectedEntries)}."),
+                    null);
+            }
+
             return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null, null);
         }
 
@@ -662,7 +698,8 @@ public sealed class DataFolderMigrationService
         string targetRoot,
         MigrationPayloadSnapshot snapshot,
         Guid attemptId,
-        MigrationTargetTransaction tx)
+        MigrationTargetTransaction tx,
+        IReadOnlyDictionary<string, string>? declaredTempMap = null)
     {
         EnsureDirectoryTracked(targetRoot, tx);
 
@@ -672,7 +709,20 @@ public sealed class DataFolderMigrationService
             string sourcePath = Path.Combine(currentRoot, item.RelativePath);
             string destPath = Path.Combine(targetRoot, item.RelativePath);
 
-            CopyPayloadFileDurably(sourcePath, destPath, attemptId, tx);
+            string tempPath;
+            if (declaredTempMap != null && declaredTempMap.TryGetValue(item.RelativePath, out string? declaredTempRel))
+            {
+                tempPath = Path.Combine(targetRoot, declaredTempRel);
+            }
+            else
+            {
+                string directory = Path.GetDirectoryName(destPath) ?? targetRoot;
+                tempPath = Path.Combine(
+                    directory,
+                    $".{Path.GetFileName(destPath)}.migration-{attemptId:N}-{RandomNumberGenerator.GetHexString(16).ToLowerInvariant()}.tmp");
+            }
+
+            CopyPayloadFileDurablyWithTemp(sourcePath, destPath, tempPath, tx);
         }
 
         // Verify eligible source file set has not changed
@@ -757,10 +807,10 @@ public sealed class DataFolderMigrationService
         return set;
     }
 
-    private void CopyPayloadFileDurably(
+    private void CopyPayloadFileDurablyWithTemp(
         string sourcePath,
         string finalPath,
-        Guid attemptId,
+        string tempPath,
         MigrationTargetTransaction tx)
     {
         if (_fileOps.FileExists(finalPath))
@@ -772,10 +822,6 @@ public sealed class DataFolderMigrationService
             ?? throw new InvalidOperationException("Target payload path has no directory.");
 
         EnsureDirectoryTracked(directory, tx);
-
-        string tempPath = Path.Combine(
-            directory,
-            $".{Path.GetFileName(finalPath)}.migration-{attemptId:N}-{Guid.NewGuid():N}.tmp");
 
         using (Stream source = _fileOps.OpenRead(sourcePath))
         using (Stream destination = _fileOps.CreateNewFile(tempPath))

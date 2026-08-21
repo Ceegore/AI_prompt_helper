@@ -11,12 +11,13 @@ internal enum MigrationManifestPhase
 
 internal sealed class MigrationAttemptManifest
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Guid AttemptId { get; set; }
     public string SourcePhysicalRoot { get; set; } = string.Empty;
     public string TargetPhysicalRoot { get; set; } = string.Empty;
+    public bool TargetIsBootstrapRoot { get; set; }
     public string SourceLibrarySha256Hex { get; set; } = string.Empty;
     public MigrationManifestPhase Phase { get; set; }
     public List<MigrationManifestArtifact> Artifacts { get; set; } = [];
@@ -25,6 +26,7 @@ internal sealed class MigrationAttemptManifest
 internal sealed class MigrationManifestArtifact
 {
     public string RelativePath { get; set; } = string.Empty;
+    public string TempRelativePath { get; set; } = string.Empty;
     public string Sha256Hex { get; set; } = string.Empty;
     public long Length { get; set; }
     public MigrationPayloadRole Role { get; set; }

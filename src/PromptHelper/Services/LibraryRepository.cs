@@ -6,6 +6,13 @@ using PromptHelper.Models;
 
 namespace PromptHelper.Services;
 
+public abstract record LibraryMetadataCompatibility
+{
+    public sealed record Current : LibraryMetadataCompatibility;
+    public sealed record Future(int Version) : LibraryMetadataCompatibility;
+    public sealed record Corrupt(Exception Error) : LibraryMetadataCompatibility;
+}
+
 public sealed class LibraryRepository
 {
     public static readonly JsonSerializerOptions JsonOptions = new()
@@ -166,6 +173,71 @@ public sealed class LibraryRepository
         catch
         {
             // Explicit best-effort only
+        }
+    }
+
+    public static LibraryMetadataCompatibility InspectCompatibility(string rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException("Library JSON is empty or whitespace."));
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException("Root of library JSON must be an object."));
+            }
+
+            int schemaPropCount = 0;
+            int foundSchemaVersion = 0;
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase))
+                {
+                    schemaPropCount++;
+                    if (prop.Value.ValueKind != JsonValueKind.Number || !prop.Value.TryGetInt32(out foundSchemaVersion))
+                    {
+                        return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException("Property 'schemaVersion' must be an integer."));
+                    }
+                }
+            }
+
+            if (schemaPropCount == 0)
+            {
+                return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException("Missing required 'schemaVersion' property."));
+            }
+
+            if (schemaPropCount > 1)
+            {
+                return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException("Multiple conflicting 'schemaVersion' properties found."));
+            }
+
+            if (foundSchemaVersion > LibraryDocument.CurrentSchemaVersion)
+            {
+                return new LibraryMetadataCompatibility.Future(foundSchemaVersion);
+            }
+
+            if (foundSchemaVersion != LibraryDocument.CurrentSchemaVersion)
+            {
+                return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException($"Unsupported schema version: {foundSchemaVersion}."));
+            }
+
+            LibraryDocument? document = JsonSerializer.Deserialize<LibraryDocument>(rawJson, JsonOptions);
+            if (document == null)
+            {
+                return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException("Failed to deserialize library document."));
+            }
+
+            LibraryValidator.Validate(document);
+            return new LibraryMetadataCompatibility.Current();
+        }
+        catch (Exception ex)
+        {
+            return new LibraryMetadataCompatibility.Corrupt(ex);
         }
     }
 

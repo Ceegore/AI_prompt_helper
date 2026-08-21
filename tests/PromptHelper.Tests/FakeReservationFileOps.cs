@@ -14,6 +14,7 @@ internal sealed class FakeReservationFileOps : IReservationFileOps
     public Func<string, IReadOnlyList<string>>? OnEnumerateEntries { get; set; }
     public Action<string>? OnDeleteFile { get; set; }
     public Action<string>? OnDeleteDirectory { get; set; }
+    public Action<string>? OnCreateDirectory { get; set; }
 
     public bool FileExists(string path) => OnFileExists?.Invoke(path) ?? _inner.FileExists(path);
     public bool DirectoryExists(string path) => OnDirectoryExists?.Invoke(path) ?? _inner.DirectoryExists(path);
@@ -37,5 +38,15 @@ internal sealed class FakeReservationFileOps : IReservationFileOps
             return;
         }
         _inner.DeleteDirectory(path);
+    }
+
+    public void CreateDirectory(string path)
+    {
+        if (OnCreateDirectory != null)
+        {
+            OnCreateDirectory(path);
+            return;
+        }
+        _inner.CreateDirectory(path);
     }
 }

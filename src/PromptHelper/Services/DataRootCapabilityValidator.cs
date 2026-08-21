@@ -3,14 +3,15 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 
 namespace PromptHelper.Services;
 
 internal sealed record ExistingLibraryCapabilityContext(
-    string MetadataPath,
+    DataFolderMigrationService.TargetLibraryKind Kind,
+    string? PrimaryMetadataPath,
+    string? SafetyBackupPath,
     LibraryDocument Document);
 
 public sealed class DataRootCapabilityValidator
@@ -20,11 +21,6 @@ public sealed class DataRootCapabilityValidator
     internal DataRootCapabilityValidator(ICapabilityFileOps? fileOps = null)
     {
         _fileOps = fileOps ?? new DefaultCapabilityFileOps();
-    }
-
-    public DataRootCapabilityValidator(IAtomicTextWriter? writer)
-        : this((ICapabilityFileOps?)null)
-    {
     }
 
     public DataRootCapabilityValidator()
@@ -71,48 +67,76 @@ public sealed class DataRootCapabilityValidator
         string root,
         ExistingLibraryCapabilityContext existing)
     {
-        // 1. Primary metadata MUST be writable
-        if (!string.IsNullOrWhiteSpace(existing.MetadataPath) && _fileOps.FileExists(existing.MetadataPath))
+        if (existing.Kind == DataFolderMigrationService.TargetLibraryKind.ValidPrimary)
         {
-            AssertFileWritable(existing.MetadataPath, "Primary library metadata");
-        }
-
-        // 2. Active prompt bodies MUST be writable
-        string promptsDir = Path.Combine(root, "prompts");
-        if (existing.Document?.Prompts != null)
-        {
-            foreach (PromptRecord prompt in existing.Document.Prompts)
+            // 1. Primary metadata MUST be writable
+            if (!string.IsNullOrWhiteSpace(existing.PrimaryMetadataPath) && _fileOps.FileExists(existing.PrimaryMetadataPath))
             {
-                string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
-                if (_fileOps.FileExists(promptPath))
+                AssertFileWritable(existing.PrimaryMetadataPath, "Primary library metadata");
+            }
+
+            // 2. Active prompt bodies MUST be writable
+            string promptsDir = Path.Combine(root, "prompts");
+            if (existing.Document?.Prompts != null)
+            {
+                foreach (PromptRecord prompt in existing.Document.Prompts)
                 {
-                    AssertFileWritable(promptPath, "Prompt body");
+                    string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
+                    if (_fileOps.FileExists(promptPath))
+                    {
+                        AssertFileWritable(promptPath, "Prompt body");
+                    }
                 }
             }
-        }
 
-        // 3. Safety backup policy: Future schema is preserved; read-only is a warning, not hard error
-        string backupPath = Path.Combine(root, "library.backup.json");
-        if (_fileOps.FileExists(backupPath))
-        {
-            bool isFutureBackup = false;
-            try
+            // 3. Safety backup policy: Future schema is preserved; read-only is a warning, not hard error
+            string backupPath = existing.SafetyBackupPath ?? Path.Combine(root, "library.backup.json");
+            if (_fileOps.FileExists(backupPath))
             {
                 string backupJson = File.ReadAllText(backupPath);
-                using var doc = JsonDocument.Parse(backupJson);
-                if (doc.RootElement.TryGetProperty("schemaVersion", out JsonElement verElement) &&
-                    verElement.TryGetInt32(out int version) &&
-                    version > LibraryDocument.CurrentSchemaVersion)
+                LibraryMetadataCompatibility compat = LibraryRepository.InspectCompatibility(backupJson);
+
+                if (compat is not LibraryMetadataCompatibility.Future)
                 {
-                    isFutureBackup = true;
+                    try
+                    {
+                        AssertFileWritable(backupPath, "Safety backup");
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        return "Prompt Helper safety backup (library.backup.json) is read-only or not writable; safety backup synchronization will not occur.";
+                    }
                 }
             }
-            catch
+
+            return null;
+        }
+
+        if (existing.Kind == DataFolderMigrationService.TargetLibraryKind.RecoverableBackupOnly)
+        {
+            // 1. Safety backup must be readable
+            if (!string.IsNullOrWhiteSpace(existing.SafetyBackupPath) && _fileOps.FileExists(existing.SafetyBackupPath))
             {
-                // If unparseable or error, treat as current inspection
+                AssertFileReadable(existing.SafetyBackupPath, "Safety backup");
             }
 
-            if (!isFutureBackup)
+            // 2. Active prompt bodies MUST be writable
+            string promptsDir = Path.Combine(root, "prompts");
+            if (existing.Document?.Prompts != null)
+            {
+                foreach (PromptRecord prompt in existing.Document.Prompts)
+                {
+                    string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
+                    if (_fileOps.FileExists(promptPath))
+                    {
+                        AssertFileWritable(promptPath, "Prompt body");
+                    }
+                }
+            }
+
+            // Read-only safety backup in backup-only target is soft warning:
+            string backupPath = existing.SafetyBackupPath ?? Path.Combine(root, "library.backup.json");
+            if (_fileOps.FileExists(backupPath))
             {
                 try
                 {
@@ -120,12 +144,32 @@ public sealed class DataRootCapabilityValidator
                 }
                 catch (UnauthorizedAccessException)
                 {
-                    return "Prompt Helper safety backup (library.backup.json) is read-only or not writable; safety backup synchronization will not occur.";
+                    return "Prompt Helper recovered its library from safety backup, but library.backup.json is read-only. Further backup updates will not be written.";
                 }
             }
+
+            return null;
         }
 
         return null;
+    }
+
+    private static void AssertFileReadable(string filePath, string description)
+    {
+        try
+        {
+            using FileStream stream = new(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new UnauthorizedAccessException(
+                $"{description} cannot be opened for reading: '{filePath}'. {ex.Message}",
+                ex);
+        }
     }
 
     private static void AssertFileWritable(string filePath, string description)

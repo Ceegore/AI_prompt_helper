@@ -10,6 +10,7 @@ internal interface IReservationFileOps
     IReadOnlyList<string> EnumerateEntries(string path);
     void DeleteFile(string path);
     void DeleteDirectory(string path);
+    void CreateDirectory(string path);
 }
 
 internal sealed class DefaultReservationFileOps : IReservationFileOps
@@ -46,5 +47,10 @@ internal sealed class DefaultReservationFileOps : IReservationFileOps
         {
             Directory.Delete(path);
         }
+    }
+
+    public void CreateDirectory(string path)
+    {
+        Directory.CreateDirectory(path);
     }
 }

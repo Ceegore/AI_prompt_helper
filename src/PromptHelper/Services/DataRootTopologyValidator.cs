@@ -41,10 +41,18 @@ public static class DataRootTopologyValidator
 
         var caseSensitivityInspector = caseInspector ?? new WindowsDirectoryCaseSensitivityInspector();
         string nearestTargetDir = FindNearestExistingDirectory(lexicalTarget);
-        if (caseSensitivityInspector.IsCaseSensitive(nearestTargetDir))
+        try
+        {
+            if (caseSensitivityInspector.IsCaseSensitive(nearestTargetDir))
+            {
+                throw new InvalidOperationException(
+                    $"Case-sensitive directory '{nearestTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
+            }
+        }
+        catch (DirectoryCaseSensitivityInspectionException ex)
         {
             throw new InvalidOperationException(
-                $"Case-sensitive directory '{nearestTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
+                $"Failed to verify case-insensitivity for target directory '{nearestTargetDir}': {ex.Message}", ex);
         }
 
         var physicalResolver = resolver ?? new WindowsPhysicalPathResolver();
@@ -53,10 +61,18 @@ public static class DataRootTopologyValidator
         string physicalBootstrap = ResolvePhysicalOrThrow(physicalResolver, lexicalBootstrap, "bootstrap settings folder");
 
         string nearestPhysicalTargetDir = FindNearestExistingDirectory(physicalTarget);
-        if (caseSensitivityInspector.IsCaseSensitive(nearestPhysicalTargetDir))
+        try
+        {
+            if (caseSensitivityInspector.IsCaseSensitive(nearestPhysicalTargetDir))
+            {
+                throw new InvalidOperationException(
+                    $"Case-sensitive directory '{nearestPhysicalTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
+            }
+        }
+        catch (DirectoryCaseSensitivityInspectionException ex)
         {
             throw new InvalidOperationException(
-                $"Case-sensitive directory '{nearestPhysicalTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
+                $"Failed to verify case-insensitivity for physical target directory '{nearestPhysicalTargetDir}': {ex.Message}", ex);
         }
 
         if (IsVolumeRootSafe(physicalTarget))

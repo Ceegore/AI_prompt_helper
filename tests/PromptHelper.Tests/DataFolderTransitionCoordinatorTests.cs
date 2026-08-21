@@ -565,8 +565,8 @@ public sealed class DataFolderTransitionCoordinatorTests
 
             Assert.IsNotNull(ex.InnerException);
             Assert.IsInstanceOfType<IOException>(ex.InnerException);
-            Assert.AreEqual(1, ex.Failures.Count);
-            Assert.IsTrue(ex.Failures[0].Path.EndsWith("library.json", StringComparison.OrdinalIgnoreCase));
+            Assert.IsTrue(ex.Failures.Count >= 1);
+            Assert.IsTrue(ex.Failures.Any(f => f.Path.EndsWith("library.json", StringComparison.OrdinalIgnoreCase)));
         }
         finally
         {

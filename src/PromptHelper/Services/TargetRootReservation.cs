@@ -30,7 +30,7 @@ public sealed class TargetRootReservation : IDisposable
     private readonly string _lockPath;
     private readonly string _rootPath;
     private readonly bool _deleteLockFileOnDispose;
-    private readonly bool _deleteRootIfStillEmptyOnDispose;
+    private readonly IReadOnlyList<string> _createdDirectories;
     private readonly IReservationFileOps _fileOps;
     private TargetReservationCleanupResult? _releaseResult;
 
@@ -39,15 +39,36 @@ public sealed class TargetRootReservation : IDisposable
         string rootPath,
         string lockPath,
         bool deleteLockFileOnDispose,
-        bool deleteRootIfStillEmptyOnDispose,
+        IReadOnlyList<string> createdDirectories,
         IReservationFileOps fileOps)
     {
         _lock = @lock;
         _rootPath = rootPath;
         _lockPath = lockPath;
         _deleteLockFileOnDispose = deleteLockFileOnDispose;
-        _deleteRootIfStillEmptyOnDispose = deleteRootIfStillEmptyOnDispose;
+        _createdDirectories = createdDirectories;
         _fileOps = fileOps;
+    }
+
+    internal static IReadOnlyList<string> GetMissingDirectoryChain(string root, IReservationFileOps ops)
+    {
+        var chain = new List<string>();
+        string current = Path.GetFullPath(root);
+
+        while (!string.IsNullOrEmpty(current) && !ops.DirectoryExists(current))
+        {
+            chain.Add(current);
+            string? parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || PathIdentity.Equals(parent, current))
+            {
+                break;
+            }
+            current = parent;
+        }
+
+        // chain was collected from deepest to shallowest, reverse to shallowest -> deepest
+        chain.Reverse();
+        return chain;
     }
 
     public static TargetRootReservation? TryAcquire(string root)
@@ -60,11 +81,11 @@ public sealed class TargetRootReservation : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
         IReservationFileOps ops = fileOps ?? new DefaultReservationFileOps();
-        bool rootExistedBefore = ops.DirectoryExists(root);
+        IReadOnlyList<string> createdDirectories = GetMissingDirectoryChain(root, ops);
 
-        if (!rootExistedBefore)
+        if (createdDirectories.Count > 0)
         {
-            Directory.CreateDirectory(root);
+            ops.CreateDirectory(root);
         }
 
         string lockPath = Path.Combine(root, ".app.lock");
@@ -77,36 +98,18 @@ public sealed class TargetRootReservation : IDisposable
         }
         catch
         {
-            if (!rootExistedBefore)
+            if (createdDirectories.Count > 0)
             {
-                try
-                {
-                    if (ops.DirectoryExists(root) && ops.EnumerateEntries(root).Count == 0)
-                    {
-                        ops.DeleteDirectory(root);
-                    }
-                }
-                catch
-                {
-                }
+                CleanupCreatedDirectories(createdDirectories, ops, null);
             }
             throw;
         }
 
         if (@lock is null)
         {
-            if (!rootExistedBefore)
+            if (createdDirectories.Count > 0)
             {
-                try
-                {
-                    if (ops.DirectoryExists(root) && ops.EnumerateEntries(root).Count == 0)
-                    {
-                        ops.DeleteDirectory(root);
-                    }
-                }
-                catch
-                {
-                }
+                CleanupCreatedDirectories(createdDirectories, ops, null);
             }
             return null;
         }
@@ -116,8 +119,44 @@ public sealed class TargetRootReservation : IDisposable
             rootPath: root,
             lockPath: lockPath,
             deleteLockFileOnDispose: !lockExistedBefore,
-            deleteRootIfStillEmptyOnDispose: !rootExistedBefore,
+            createdDirectories: createdDirectories,
             fileOps: ops);
+    }
+
+    private static void CleanupCreatedDirectories(
+        IReadOnlyList<string> createdDirs,
+        IReservationFileOps ops,
+        List<MigrationRollbackFailure>? failures)
+    {
+        // Delete deepest -> shallowest
+        for (int i = createdDirs.Count - 1; i >= 0; i--)
+        {
+            string dir = createdDirs[i];
+            try
+            {
+                if (ops.DirectoryExists(dir))
+                {
+                    if (ops.EnumerateEntries(dir).Count == 0)
+                    {
+                        ops.DeleteDirectory(dir);
+                    }
+                    else if (failures is not null)
+                    {
+                        failures.Add(new MigrationRollbackFailure(
+                            dir,
+                            "DeleteCreatedDirectory",
+                            "Directory was created by transition attempt but is not empty."));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                failures?.Add(new MigrationRollbackFailure(
+                    dir,
+                    "DeleteCreatedDirectory",
+                    ex.Message));
+            }
+        }
     }
 
     public TargetReservationCleanupResult Release()
@@ -159,23 +198,9 @@ public sealed class TargetRootReservation : IDisposable
             }
         }
 
-        if (_deleteRootIfStillEmptyOnDispose)
+        if (_createdDirectories.Count > 0)
         {
-            try
-            {
-                if (_fileOps.DirectoryExists(_rootPath) &&
-                    _fileOps.EnumerateEntries(_rootPath).Count == 0)
-                {
-                    _fileOps.DeleteDirectory(_rootPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                failures.Add(new MigrationRollbackFailure(
-                    _rootPath,
-                    "DeleteEmptyRoot",
-                    ex.Message));
-            }
+            CleanupCreatedDirectories(_createdDirectories, _fileOps, failures);
         }
 
         _releaseResult = new TargetReservationCleanupResult(failures);

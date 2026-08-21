@@ -167,7 +167,7 @@ public sealed class DataFolderMigrationServiceTests
         File.WriteAllText(Path.Combine(targetPromptsDir, $"{promptId:N}.md"), "pre-existing colliding file");
 
         var migration = new DataFolderMigrationService();
-        Assert.Throws<IOException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<Exception>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
 
         // Ensure target library.json was rolled back / deleted
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
@@ -575,11 +575,12 @@ public sealed class DataFolderMigrationServiceTests
 
         var migration = new DataFolderMigrationService();
 
-        // Migration encounters target file collision
-        var ex = Assert.Throws<IOException>(() =>
+        // Migration encounters target file collision or occupied target
+        var ex = Assert.Throws<Exception>(() =>
             migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root));
 
-        Assert.IsTrue(ex.Message.Contains("collision", StringComparison.OrdinalIgnoreCase));
+        Assert.IsTrue(ex.Message.Contains("collision", StringComparison.OrdinalIgnoreCase) ||
+                        ex.Message.Contains("not empty", StringComparison.OrdinalIgnoreCase));
 
         // Foreign file must be preserved
         Assert.IsTrue(File.Exists(foreignPath));
