@@ -7,31 +7,53 @@ namespace PromptHelper.Services;
 
 internal sealed class ManagedDataRootSessionLease : IDisposable
 {
-    private readonly StrictPathAuthority _strictPathAuthority = new();
-    private readonly IManagedDirectoryHandleApi _api;
+    private readonly IStrictDirectoryOpener _opener;
+    private readonly StrictPathAuthority _authority;
     private readonly List<SafeFileHandle> _handles = [];
     private bool _disposed;
 
-    private ManagedDataRootSessionLease(IManagedDirectoryHandleApi api)
+    private ManagedDataRootSessionLease(IStrictDirectoryOpener? opener = null, StrictPathAuthority? authority = null)
     {
-        _api = api;
+        _opener = opener ?? new WindowsStrictDirectoryOpener();
+        _authority = authority ?? new StrictPathAuthority();
     }
 
-    public static ManagedDataRootSessionLease Acquire(string physicalRoot, IManagedDirectoryHandleApi? api = null)
+    public static ManagedDataRootSessionLease Acquire(
+        string physicalRoot,
+        IStrictDirectoryOpener? opener = null,
+        StrictPathAuthority? authority = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
 
-        var lease = new ManagedDataRootSessionLease(api ?? new WindowsManagedDirectoryHandleApi());
+        var effectiveOpener = opener ?? new WindowsStrictDirectoryOpener();
+        var effectiveAuthority = authority ?? new StrictPathAuthority();
+        var lease = new ManagedDataRootSessionLease(effectiveOpener, effectiveAuthority);
 
         try
         {
-            lease.TryAddDirectoryHandle(physicalRoot);
+            foreach (string path in new[]
+            {
+                physicalRoot,
+                Path.Combine(physicalRoot, "prompts"),
+                Path.Combine(physicalRoot, "recovery")
+            })
+            {
+                StrictPathProbe probe = effectiveAuthority.Probe(path);
 
-            string promptsDir = Path.Combine(physicalRoot, "prompts");
-            lease.TryAddDirectoryHandle(promptsDir);
+                if (probe.Kind == StrictPathKind.Missing)
+                {
+                    throw new DirectoryNotFoundException(
+                        $"Managed session directory missing: '{path}'.");
+                }
 
-            string recoveryDir = Path.Combine(physicalRoot, "recovery");
-            lease.TryAddDirectoryHandle(recoveryDir);
+                if (probe.Kind != StrictPathKind.Directory)
+                {
+                    throw new InvalidDataException(
+                        $"Managed session path is not a directory: '{path}'.");
+                }
+
+                lease._handles.Add(effectiveOpener.OpenManagedNodeLease(path));
+            }
 
             return lease;
         }
@@ -40,25 +62,6 @@ internal sealed class ManagedDataRootSessionLease : IDisposable
             lease.Dispose();
             throw;
         }
-    }
-
-    private void TryAddDirectoryHandle(string path)
-    {
-        StrictPathProbe probe = _strictPathAuthority.Probe(path);
-        
-        if (probe.Kind != StrictPathKind.Directory)
-        {
-            return;
-        }
-
-        SafeFileHandle handle = _api.OpenManagedDirectoryWithoutDeleteShare(path);
-
-        if (handle.IsInvalid)
-        {
-            throw _api.CreateLastError(path);
-        }
-
-        _handles.Add(handle);
     }
 
     public void Dispose()

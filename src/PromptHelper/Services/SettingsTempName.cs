@@ -32,7 +32,7 @@ internal static class SettingsTempName
             return false;
         }
 
-        string targetName = middle.Substring(0, lastHyphen);
+        string target = middle.Substring(0, lastHyphen);
         string guidPart = middle.Substring(lastHyphen + 1);
 
         if (guidPart.Length != 32 || !Guid.TryParseExact(guidPart, "N", out _))
@@ -40,7 +40,43 @@ internal static class SettingsTempName
             return false;
         }
 
-        targetFileName = targetName;
+        if (!string.Equals(
+                target,
+                "settings.json",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                target,
+                "settings.backup.json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        targetFileName = target;
         return true;
+    }
+
+    public static bool TryParseLegacySettingsTemp(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        if (fileName.StartsWith(".settings.json.", StringComparison.OrdinalIgnoreCase) &&
+            fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+        {
+            string guidPart = fileName.Substring(".settings.json.".Length, fileName.Length - ".settings.json.".Length - ".tmp".Length);
+            return guidPart.Length == 32 && Guid.TryParseExact(guidPart, "N", out _);
+        }
+
+        if (fileName.StartsWith(".settings.backup.json.", StringComparison.OrdinalIgnoreCase) &&
+            fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+        {
+            string guidPart = fileName.Substring(".settings.backup.json.".Length, fileName.Length - ".settings.backup.json.".Length - ".tmp".Length);
+            return guidPart.Length == 32 && Guid.TryParseExact(guidPart, "N", out _);
+        }
+
+        return false;
     }
 }

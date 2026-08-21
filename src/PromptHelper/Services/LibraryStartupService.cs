@@ -18,7 +18,21 @@ public sealed class LibraryStartupService
     private readonly LibraryRepository _libraryRepo;
     private readonly PromptRepository _promptRepo;
     private readonly IFileDeleter _deleter;
-    private readonly IAtomicTextWriter _writer;
+    private readonly IDurableAtomicFileWriter _writer;
+
+    internal LibraryStartupService(
+        AppPaths paths,
+        LibraryRepository libraryRepo,
+        PromptRepository promptRepo,
+        IFileDeleter deleter,
+        IDurableAtomicFileWriter writer)
+    {
+        _paths = paths;
+        _libraryRepo = libraryRepo;
+        _promptRepo = promptRepo;
+        _deleter = deleter;
+        _writer = writer;
+    }
 
     public LibraryStartupService(
         AppPaths paths,
@@ -26,12 +40,8 @@ public sealed class LibraryStartupService
         PromptRepository promptRepo,
         IFileDeleter deleter,
         IAtomicTextWriter writer)
+        : this(paths, libraryRepo, promptRepo, deleter, new WindowsDurableAtomicFileWriter())
     {
-        _paths = paths;
-        _libraryRepo = libraryRepo;
-        _promptRepo = promptRepo;
-        _deleter = deleter;
-        _writer = writer;
     }
 
     public StartupResult LoadOrInitialize()
@@ -61,7 +71,7 @@ public sealed class LibraryStartupService
         // Valid primary always wins immediately IF HEALTHY
         if (primaryPackage is LibraryPackageState.Healthy primaryHealthy)
         {
-            var syncResult = _libraryRepo.SynchronizeBackup(primaryHealthy.Document);
+            var syncResult = _libraryRepo.SynchronizeBackup(primaryHealthy.Package);
             string? backupWarning = syncResult.BackupSynchronized ? null : syncResult.Warning;
 
             TryRemoveStaleMarker();
@@ -158,7 +168,7 @@ public sealed class LibraryStartupService
             {
                 throw new InvalidDataException("Primary metadata is missing and backup metadata is corrupt.");
             }
-            
+
             if (backupPackage != null && backupPackage is not LibraryPackageState.Healthy)
             {
                 throw new InvalidDataException("Primary metadata is missing and backup library is incomplete.");
@@ -167,14 +177,14 @@ public sealed class LibraryStartupService
             // Both primary and backup are missing -> First run or Interrupted initialization
             return HandleFirstRunOrInterruptedInit();
         }
-        
+
         throw new InvalidOperationException("Unexpected startup state.");
     }
 
     private StartupResult HandleFirstRunOrInterruptedInit()
     {
         bool markerExists = IsMarkerPresent();
-        IReadOnlyList<string> existingPromptFiles = _promptRepo.EnumeratePromptFiles();
+        IReadOnlyList<string> existingPromptFiles = _promptRepo.EnumeratePromptFilesStrict();
         DefaultLibraryPackage defaultPkg = DefaultLibraryFactory.CreateDefaults();
 
         if (!markerExists)
@@ -186,7 +196,8 @@ public sealed class LibraryStartupService
             }
 
             // Clean first run
-            _writer.Write(_paths.InitializationMarkerPath, "initializing");
+            byte[] initMarkerBytes = StrictUtf8Text.Encode("initializing");
+            _writer.ReplaceDurable(_paths.InitializationMarkerPath, initMarkerBytes, DurableFileClass.MutationControl);
 
             foreach (var kvp in defaultPkg.PromptContents)
             {
@@ -211,7 +222,7 @@ public sealed class LibraryStartupService
                     throw new InvalidOperationException($"Found unknown prompt file during interrupted initialization: {filePath}");
                 }
 
-                string existingContent = File.ReadAllText(filePath);
+                string existingContent = StrictUtf8Text.ReadAllText(filePath, "default prompt file");
                 string expectedContent = defaultPkg.PromptContents[fileGuid];
                 if (!string.Equals(existingContent, expectedContent, StringComparison.Ordinal))
                 {
@@ -269,7 +280,7 @@ public sealed class LibraryStartupService
         string raw;
         try
         {
-            raw = File.ReadAllText(path);
+            raw = StrictUtf8Text.ReadAllText(path, $"metadata file '{path}'");
         }
         catch (FileNotFoundException)
         {
@@ -282,7 +293,8 @@ public sealed class LibraryStartupService
         catch (Exception ex) when (
             ex is IOException or
             UnauthorizedAccessException or
-            SecurityException)
+            SecurityException or
+            InvalidDataException)
         {
             return new MetadataReadResult.Unreadable(ex);
         }

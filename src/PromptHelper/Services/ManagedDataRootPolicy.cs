@@ -32,7 +32,18 @@ public sealed class ManagedDataRootPolicy
                 "A drive or volume root cannot be used as the Prompt Helper data folder.");
         }
 
-        string nearestDir = DataRootTopologyValidator.FindNearestExistingDirectory(lexical);
+        string nearestDir;
+        try
+        {
+            nearestDir = DataRootTopologyValidator.FindNearestExistingDirectory(lexical);
+        }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or DriveNotFoundException or IOException)
+        {
+            throw new ConfiguredDataFolderUnavailableException(
+                lexical,
+                $"The configured data folder is unavailable: {ex.Message}",
+                ex);
+        }
         try
         {
             if (new StrictPathAuthority().Probe(nearestDir).Kind == StrictPathKind.Directory &&
@@ -67,6 +78,12 @@ public sealed class ManagedDataRootPolicy
             }
 
             throw new InvalidDataException(ex.Message, ex);
+        }
+
+        if (DataRootTopologyValidator.IsVolumeRootSafe(physicalTarget))
+        {
+            throw new InvalidDataException(
+                "A drive or volume root cannot be used as the Prompt Helper data folder.");
         }
 
         string nearestPhysicalDir = DataRootTopologyValidator.FindNearestExistingDirectory(physicalTarget);

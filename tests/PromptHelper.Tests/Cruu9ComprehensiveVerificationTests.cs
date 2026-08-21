@@ -846,16 +846,16 @@ public sealed class Cruu9ComprehensiveVerificationTests
         var repo = new MigrationManifestRepository();
         repo.CreateInitialCopyingManifestDurable(markerPath, manifest);
 
-        // Inject probe directory residue
-        string probeDir = Path.Combine(target.Root, probePlan.RootProbe.DirectoryRelativePath);
-        Directory.CreateDirectory(probeDir);
+        // Inject probe file residue
+        string probeFile = Path.Combine(target.Root, probePlan.RootProbe.CurrentRelativePath);
+        File.WriteAllText(probeFile, "probe");
 
         var recovery = new MigrationRecoveryService();
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);
         var result = recovery.RecoverForRetry(context);
 
         Assert.IsTrue(result.Success);
-        Assert.IsFalse(Directory.Exists(probeDir));
+        Assert.IsFalse(File.Exists(probeFile));
         Assert.IsFalse(File.Exists(markerPath));
     }
 
@@ -1058,7 +1058,7 @@ public sealed class Cruu9ComprehensiveVerificationTests
         File.WriteAllText(tempPath, "temporary");
 
         var gate = new MigrationReadyGate();
-        Assert.Throws<InvalidDataException>(() => gate.AssertReady(temp.Root, manifest, snapshot));
+        Assert.Throws<InvalidDataException>(() => gate.AssertReady(temp.Root, temp.Root, manifest, snapshot));
     }
 
     // ==========================================

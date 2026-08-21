@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Security;
 using System.Text.Json;
+using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 
 namespace PromptHelper.Services;
@@ -34,30 +35,34 @@ public sealed class LibraryRepository
     }
 
     private readonly AppPaths _paths;
-    private readonly IAtomicTextWriter _writer;
+    private readonly IDurableAtomicFileWriter _durableWriter;
 
-    public LibraryRepository(AppPaths paths, IAtomicTextWriter writer)
+    internal LibraryRepository(AppPaths paths, IDurableAtomicFileWriter durableWriter)
     {
         _paths = paths;
-        _writer = writer;
+        _durableWriter = durableWriter;
     }
 
-    public LibraryDocument ReadPrimary()
+    public LibraryRepository(AppPaths paths, IAtomicTextWriter writer)
+        : this(paths, new AtomicTextWriterDurableAdapter(writer))
     {
-        string json = File.ReadAllText(_paths.LibraryPath);
-        return InspectAndDeserialize(json);
     }
 
-    public LibraryDocument ReadBackup()
-    {
-        string json = File.ReadAllText(_paths.LibraryBackupPath);
-        return InspectAndDeserialize(json);
-    }
+    internal AppPaths Paths => _paths;
+    internal IDurableAtomicFileWriter DurableWriter => _durableWriter;
 
-    public CommitResult Commit(LibraryDocument document)
+    public byte[] SerializeCanonicalBytes(LibraryDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         LibraryValidator.Validate(document);
+        string json = JsonSerializer.Serialize(document, JsonOptions);
+        return StrictUtf8Text.Encode(json);
+    }
+
+    public CommitResult CommitCanonicalBytes(LibraryDocument document, byte[] canonicalBytes)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(canonicalBytes);
 
         MetadataFileState primaryState = ReadMetadataFileState(_paths.LibraryPath);
 
@@ -73,23 +78,49 @@ public sealed class LibraryRepository
                 unreadablePrimary.Error);
         }
 
-        string json = JsonSerializer.Serialize(document, JsonOptions);
-        _writer.Write(_paths.LibraryPath, json);
+        _durableWriter.ReplaceDurable(
+            _paths.LibraryPath,
+            canonicalBytes,
+            DurableFileClass.LibraryMetadata);
 
-        return SynchronizeBackupPreservingFuture(json);
+        return SynchronizeBackupCore(document);
+    }
+
+    public LibraryDocument ReadPrimary()
+    {
+        string json = StrictUtf8Text.ReadAllText(_paths.LibraryPath, "primary library metadata");
+        return InspectAndDeserialize(json);
+    }
+
+    public LibraryDocument ReadBackup()
+    {
+        string json = StrictUtf8Text.ReadAllText(_paths.LibraryBackupPath, "backup library metadata");
+        return InspectAndDeserialize(json);
+    }
+
+    public CommitResult Commit(LibraryDocument document)
+    {
+        byte[] bytes = SerializeCanonicalBytes(document);
+        return CommitCanonicalBytes(document, bytes);
     }
 
     public CommitResult SynchronizeBackup(LibraryDocument document)
     {
+        return SynchronizeBackupCore(document);
+    }
+
+    internal CommitResult SynchronizeBackup(HealthyLibraryPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        return SynchronizeBackupCore(package.Document);
+    }
+
+    internal CommitResult SynchronizeBackupCore(LibraryDocument document)
+    {
         ArgumentNullException.ThrowIfNull(document);
         LibraryValidator.Validate(document);
 
-        string json = JsonSerializer.Serialize(document, JsonOptions);
-        return SynchronizeBackupPreservingFuture(json);
-    }
-
-    private CommitResult SynchronizeBackupPreservingFuture(string json)
-    {
+        byte[] bytes = SerializeCanonicalBytes(document);
         MetadataFileState state = ReadMetadataFileState(_paths.LibraryBackupPath);
 
         if (state is MetadataFileState.Future future)
@@ -110,7 +141,10 @@ public sealed class LibraryRepository
 
         try
         {
-            _writer.Write(_paths.LibraryBackupPath, json);
+            _durableWriter.ReplaceDurable(
+                _paths.LibraryBackupPath,
+                bytes,
+                DurableFileClass.LibraryMetadata);
             return new CommitResult(true, null);
         }
         catch (Exception ex)
@@ -127,7 +161,7 @@ public sealed class LibraryRepository
         string raw;
         try
         {
-            raw = File.ReadAllText(path);
+            raw = StrictUtf8Text.ReadAllText(path, $"library file '{path}'");
         }
         catch (FileNotFoundException)
         {
@@ -138,7 +172,7 @@ public sealed class LibraryRepository
             return new MetadataFileState.Missing();
         }
         catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or SecurityException)
+            ex is IOException or UnauthorizedAccessException or SecurityException or InvalidDataException)
         {
             return new MetadataFileState.Unreadable(ex);
         }
@@ -168,7 +202,8 @@ public sealed class LibraryRepository
                 _paths.RecoveryDirectory,
                 $"library.corrupt-{timestamp}-{Guid.NewGuid():N}.json");
 
-            _writer.Write(recoveryFile, corruptPrimaryContent);
+            byte[] bytes = StrictUtf8Text.Encode(corruptPrimaryContent);
+            _durableWriter.ReplaceDurable(recoveryFile, bytes, DurableFileClass.RecoveryArtifact);
         }
         catch
         {
@@ -186,8 +221,8 @@ public sealed class LibraryRepository
                 _paths.RecoveryDirectory,
                 $"library.incomplete-{timestamp}-{Guid.NewGuid():N}.json");
 
-            string json = JsonSerializer.Serialize(document, JsonOptions);
-            _writer.Write(recoveryFile, json);
+            byte[] bytes = SerializeCanonicalBytes(document);
+            _durableWriter.ReplaceDurable(recoveryFile, bytes, DurableFileClass.RecoveryArtifact);
         }
         catch
         {

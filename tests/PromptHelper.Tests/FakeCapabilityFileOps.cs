@@ -15,6 +15,7 @@ internal sealed class FakeCapabilityFileOps : ICapabilityFileOps
     public Func<string, bool>? OnFileExists { get; set; }
     public Func<string, bool>? OnDirectoryExists { get; set; }
     public Func<string, IReadOnlyList<string>>? OnEnumerateEntries { get; set; }
+    public Func<string, string, IReadOnlyList<string>>? OnEnumerateFiles { get; set; }
     public Action<string>? OnDeleteFile { get; set; }
     public Action<string>? OnDeleteDirectory { get; set; }
 
@@ -42,6 +43,7 @@ internal sealed class FakeCapabilityFileOps : ICapabilityFileOps
     public bool FileExists(string path) => OnFileExists?.Invoke(path) ?? _inner.FileExists(path);
     public bool DirectoryExists(string path) => OnDirectoryExists?.Invoke(path) ?? _inner.DirectoryExists(path);
     public IReadOnlyList<string> EnumerateEntries(string path) => OnEnumerateEntries?.Invoke(path) ?? _inner.EnumerateEntries(path);
+    public IReadOnlyList<string> EnumerateFiles(string path, string searchPattern) => OnEnumerateFiles?.Invoke(path, searchPattern) ?? _inner.EnumerateFiles(path, searchPattern);
 
     public void DeleteFile(string path)
     {

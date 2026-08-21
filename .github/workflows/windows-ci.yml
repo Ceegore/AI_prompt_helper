@@ -46,6 +46,51 @@ jobs:
       - name: Build Release
         run: dotnet build PromptHelper.slnx -c Release --no-restore
 
+      - name: Test Filesystem Authority
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=FilesystemAuthority" `
+            --logger "trx;LogFileName=filesystem-authority.trx"
+
+      - name: Test Package Integrity
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=PackageIntegrity" `
+            --logger "trx;LogFileName=package-integrity.trx"
+
+      - name: Test Mutation Recovery
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=MutationRecovery" `
+            --logger "trx;LogFileName=mutation-recovery.trx"
+
+      - name: Test Migration Ready Gate
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=MigrationReady" `
+            --logger "trx;LogFileName=migration-ready.trx"
+
+      - name: Test Strict UTF-8
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=StrictUtf8" `
+            --logger "trx;LogFileName=strict-utf8.trx"
+
       - name: Test Crash Recovery Category
         shell: pwsh
         run: |
@@ -54,7 +99,6 @@ jobs:
             --no-build `
             --filter "TestCategory=CrashRecovery" `
             --logger "trx;LogFileName=cruu9-crash.trx"
-          ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/cruu9-crash.trx -RequiredTests CRUU8_006_FinalizeCommittedStartup_verifies_all_finals_and_retires_marker,CRUU9_002_Unreadable_marker_is_not_treated_as_missing,CRUU9_005_Different_source_interrupted_retry_fails_closed
 
       - name: Test WPF Integration Category
         shell: pwsh
@@ -64,7 +108,6 @@ jobs:
             --no-build `
             --filter "TestCategory=WpfIntegration" `
             --logger "trx;LogFileName=cruu9-wpf.trx"
-          ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/cruu9-wpf.trx -RequiredTests CRUU9_020_RestartRequired_true_Result_null_shuts_down,CRUU9_020_Restart_message_failure_still_requests_shutdown,CRUU9_020_RestartRequired_false_does_not_shutdown
 
       - name: Test Windows Filesystem Integration Category
         shell: pwsh
@@ -74,7 +117,6 @@ jobs:
             --no-build `
             --filter "TestCategory=WindowsFilesystemIntegration" `
             --logger "trx;LogFileName=cruu9-winfs.trx"
-          ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/cruu9-winfs.trx -RequiredTests CRUU9_001_Empty_prompts_junction_outside_target_is_rejected,CRUU9_001_Empty_recovery_junction_outside_target_is_rejected,CRUU9_001_Migration_never_writes_through_prompts_junction,CRUU9_001_Retry_never_deletes_through_prompts_junction
 
       - name: Test Full Suite
         shell: pwsh
@@ -91,8 +133,14 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
-            ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/test-results-$i.trx
           }
+
+      - name: Verify exact sentinels across all test evidence
+        shell: pwsh
+        run: |
+          $required = Import-PowerShellDataFile ./tools/RequiredRegressionTests.psd1
+          $trx = Get-ChildItem tests/PromptHelper.Tests/TestResults -Recurse -Filter '*.trx' | Select-Object -ExpandProperty FullName
+          ./tools/VerifyTestEvidence.ps1 -TrxPath $trx -RequiredTests $required.Required
 
       - name: Publish self-contained win-x64
         shell: pwsh

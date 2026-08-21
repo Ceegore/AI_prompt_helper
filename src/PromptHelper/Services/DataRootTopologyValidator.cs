@@ -6,51 +6,45 @@ namespace PromptHelper.Services;
 
 public static class DataRootTopologyValidator
 {
-    private static readonly StrictPathAuthority _strictPathAuthority = new();
-
     public static bool IsStrictDescendant(string candidate, string parent)
     {
         return PathIdentity.IsStrictDescendant(candidate, parent);
     }
 
-    public static string FindNearestExistingDirectory(string path)
+    internal static string FindNearestExistingDirectoryStrict(string path, IStrictDirectoryOpener? opener = null)
     {
-        string full = Path.GetFullPath(path);
-        string? current = full;
-        var strictAuthority = new StrictPathAuthority();
+        var effectiveOpener = opener ?? new WindowsStrictDirectoryOpener();
+        string current = Path.GetFullPath(path);
 
-        while (!string.IsNullOrEmpty(current))
+        while (true)
         {
-            try
-            {
-                StrictPathProbe probe = strictAuthority.Probe(current);
+            DirectoryOpenResult result = effectiveOpener.OpenDirectoryStrict(current);
 
-                if (probe.Kind == StrictPathKind.Directory)
-                {
-                    return current;
-                }
-
-                if (probe.Kind == StrictPathKind.File)
-                {
-                    throw new InvalidDataException($"Path component is a file: '{current}'.");
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            if (result.State == DirectoryOpenState.Opened)
             {
-                // Not accessible, continue to parent
+                result.Handle!.Dispose();
+                return current;
             }
 
-            string? parent = Path.GetDirectoryName(current);
+            string trimmed = current.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+
+            string? parent = Path.GetDirectoryName(trimmed);
 
             if (string.IsNullOrEmpty(parent) || PathIdentity.Equals(parent, current))
             {
-                return Path.GetFullPath(path);
+                throw new DirectoryNotFoundException(
+                    $"No accessible existing directory ancestor exists for '{path}'.");
             }
 
             current = parent;
         }
+    }
 
-        return full;
+    public static string FindNearestExistingDirectory(string path)
+    {
+        return FindNearestExistingDirectoryStrict(path);
     }
 
     public static DataRootRelationship ValidateTransition(
@@ -91,6 +85,12 @@ public static class DataRootTopologyValidator
         string physicalTarget = ResolvePhysicalOrThrow(physicalResolver, lexicalTarget, "target data folder");
         string physicalBootstrap = ResolvePhysicalOrThrow(physicalResolver, lexicalBootstrap, "bootstrap settings folder");
 
+        if (IsVolumeRootSafe(physicalTarget))
+        {
+            throw new InvalidOperationException(
+                "The selected data folder resolves to a drive or share root. Choose a dedicated subdirectory instead.");
+        }
+
         string nearestPhysicalTargetDir = FindNearestExistingDirectory(physicalTarget);
         try
         {
@@ -104,12 +104,6 @@ public static class DataRootTopologyValidator
         {
             throw new InvalidOperationException(
                 $"Failed to verify case-insensitivity for physical target directory '{nearestPhysicalTargetDir}': {ex.Message}", ex);
-        }
-
-        if (IsVolumeRootSafe(physicalTarget))
-        {
-            throw new InvalidOperationException(
-                "The selected data folder resolves to a drive or share root. Choose a dedicated subdirectory instead.");
         }
 
         bool same = PathIdentity.Equals(physicalCurrent, physicalTarget);

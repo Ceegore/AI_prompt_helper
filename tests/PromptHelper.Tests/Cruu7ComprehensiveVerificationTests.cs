@@ -20,6 +20,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
         promptId = Guid.NewGuid();
         string promptsDir = Path.Combine(root, "prompts");
         Directory.CreateDirectory(promptsDir);
+        Directory.CreateDirectory(Path.Combine(root, "recovery"));
         File.WriteAllText(Path.Combine(promptsDir, $"{promptId:N}.md"), "Prompt body content");
 
         string libraryJson = $$"""
@@ -284,6 +285,8 @@ public sealed class Cruu7ComprehensiveVerificationTests
             SourcePhysicalRoot = source.Root,
             TargetPhysicalRoot = target.Root,
             SourceLibrarySha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(targetLib))),
+            SourcePayloadFingerprintSha256Hex = MigrationPayloadFingerprint.Compute(
+                new DataFolderMigrationService().CaptureSourcePayloadSnapshot(source.Root).Files),
             Phase = MigrationManifestPhase.Copying,
             Artifacts =
             [

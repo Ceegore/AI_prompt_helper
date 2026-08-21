@@ -3,7 +3,6 @@ using System.IO;
 using System.Security;
 using System.Security.Cryptography;
 using System.Text.Json;
-using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 
 namespace PromptHelper.Services;
@@ -42,18 +41,15 @@ public sealed class AppSettingsRepository
     private readonly string _backupPath;
     private readonly string _lockPath;
     private readonly string _bootstrapRoot;
-    private readonly IAtomicTextWriter _writer;
     private readonly IDurableSettingsFileWriter _durableWriter;
     private readonly SettingsLeasePolicy _leasePolicy;
 
     public AppSettingsRepository(
-        IAtomicTextWriter? writer = null,
+        IDurableSettingsFileWriter? durableWriter = null,
         string? settingsPathOverride = null,
         string? backupPathOverride = null,
-        SettingsLeasePolicy? leasePolicy = null,
-        IDurableSettingsFileWriter? durableWriter = null)
+        SettingsLeasePolicy? leasePolicy = null)
     {
-        _writer = writer ?? new AtomicTextWriter();
         _durableWriter = durableWriter ?? new WindowsDurableSettingsFileWriter();
         _leasePolicy = leasePolicy ?? SettingsLeasePolicy.Default;
 
@@ -77,6 +73,43 @@ public sealed class AppSettingsRepository
         }
     }
 
+    public AppSettingsRepository(string settingsPath, string? backupPath = null, string? lockPath = null)
+        : this((IDurableSettingsFileWriter?)null, settingsPath, backupPath, null)
+    {
+        if (lockPath != null)
+        {
+            _lockPath = lockPath;
+        }
+    }
+
+    public AppSettingsRepository(
+        IAtomicTextWriter writer,
+        string? settingsPathOverride = null,
+        string? backupPathOverride = null,
+        SettingsLeasePolicy? leasePolicy = null)
+        : this(new AtomicTextWriterSettingsDurableAdapter(writer), settingsPathOverride, backupPathOverride, leasePolicy)
+    {
+    }
+
+    public AppSettings Load() => LoadOrRecover().Settings;
+
+    public static string NormalizeAndValidateDataRoot(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        if (!Path.IsPathRooted(path))
+        {
+            throw new InvalidDataException($"Data root path must be absolute: '{path}'.");
+        }
+
+        return PathIdentity.NormalizeForComparison(path);
+    }
+
+    internal SettingsWritePrecondition CaptureWritePreconditionCore() => CapturePrecondition();
+
     public string SettingsPath => _settingsPath;
     public string BackupPath => _backupPath;
     public string LockPath => _lockPath;
@@ -91,377 +124,257 @@ public sealed class AppSettingsRepository
         return SettingsMutationLease.Acquire(_lockPath, new SettingsLeasePolicy(TimeSpan.FromMilliseconds(timeoutMs), TimeSpan.FromMilliseconds(25)));
     }
 
-    internal SettingsFileToken CaptureFileToken(string path)
+    public SettingsFileToken CaptureFileToken(string path)
     {
         try
         {
+            if (!File.Exists(path))
+            {
+                return new SettingsFileToken(false, null);
+            }
+
             byte[] bytes = File.ReadAllBytes(path);
-            return new SettingsFileToken(
-                Exists: true,
-                Sha256: SHA256.HashData(bytes));
+            byte[] hash = SHA256.HashData(bytes);
+            return new SettingsFileToken(true, hash);
         }
-        catch (FileNotFoundException)
+        catch
         {
             return new SettingsFileToken(false, null);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return new SettingsFileToken(false, null);
-        }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or SecurityException)
-        {
-            throw new SettingsReadException(path, ex);
         }
     }
 
-    internal SettingsWritePrecondition CaptureWritePreconditionCore()
+    public SettingsWritePrecondition CapturePrecondition()
     {
-        SettingsFileToken primary = CaptureFileToken(_settingsPath);
-        SettingsFileToken backup = CaptureFileToken(_backupPath);
-        return new SettingsWritePrecondition(primary, backup);
+        return new SettingsWritePrecondition(
+            CaptureFileToken(_settingsPath),
+            CaptureFileToken(_backupPath));
     }
 
     public SettingsTransitionSnapshot LoadForTransitionAndCapturePrecondition()
     {
         using var lease = AcquireMutationLease();
 
-        SettingsLoadResult load = LoadOrRecoverCore();
-        SettingsWritePrecondition token = CaptureWritePreconditionCore();
+        DurableTempReconciler.ReconcileSettingsTemps(
+            _settingsPath,
+            _backupPath,
+            _durableWriter);
+
+        SettingsLoadResult loadResult = LoadOrRecoverInternal();
+        SettingsWritePrecondition precondition = CapturePrecondition();
 
         return new SettingsTransitionSnapshot(
-            CloneSettings(load.Settings),
-            token,
-            load.Warning);
-    }
-
-    public SettingsSaveResult SaveIfUnchanged(
-        AppSettings settings,
-        SettingsWritePrecondition expected)
-    {
-        ArgumentNullException.ThrowIfNull(expected);
-
-        using var lease = AcquireMutationLease();
-
-        SettingsWritePrecondition actual = CaptureWritePreconditionCore();
-
-        if (!WritePreconditionsEqual(expected, actual))
-        {
-            throw new InvalidOperationException(
-                "Prompt Helper settings changed while the data-folder transition " +
-                "was in progress. Nothing was committed. Reopen Tools & Settings and retry.");
-        }
-
-        return SaveCore(settings);
-    }
-
-    public static bool WritePreconditionsEqual(
-        SettingsWritePrecondition expected,
-        SettingsWritePrecondition actual)
-    {
-        if (expected == null || actual == null)
-        {
-            return expected == actual;
-        }
-
-        return WriteTokensEqual(expected.Primary, actual.Primary) &&
-               WriteTokensEqual(expected.Backup, actual.Backup);
-    }
-
-    private static bool WriteTokensEqual(
-        SettingsFileToken expected,
-        SettingsFileToken actual)
-    {
-        if (expected.Exists != actual.Exists)
-        {
-            return false;
-        }
-
-        if (!expected.Exists)
-        {
-            return true;
-        }
-
-        return expected.Sha256 is not null &&
-               actual.Sha256 is not null &&
-               expected.Sha256.AsSpan().SequenceEqual(actual.Sha256);
+            loadResult.Settings,
+            precondition,
+            loadResult.Warning);
     }
 
     public SettingsLoadResult LoadOrRecover()
     {
         using var lease = AcquireMutationLease();
-        return LoadOrRecoverCore();
+
+        DurableTempReconciler.ReconcileSettingsTemps(
+            _settingsPath,
+            _backupPath,
+            _durableWriter);
+
+        return LoadOrRecoverInternal();
     }
 
-    internal SettingsLoadResult LoadOrRecoverCore()
+    private SettingsLoadResult LoadOrRecoverInternal()
     {
-        CleanupStaleSettingsTempsCore();
-
-        SettingsReadState primaryState = ReadState(_settingsPath);
-
-        // Future primary: authoritative incompatibility. Do not even inspect backup.
-        if (primaryState is SettingsReadState.FutureSchema futurePrimary)
+        SettingsReadState primaryState = ReadSettingsFileState(_settingsPath);
+        if (primaryState is SettingsReadState.FutureSchema primaryFuture)
         {
-            throw new UnsupportedSettingsSchemaException(futurePrimary.Version);
+            throw new UnsupportedSettingsSchemaException(primaryFuture.Version);
         }
 
-        // Temporarily unreadable primary: do not substitute stale backup.
-        if (primaryState is SettingsReadState.Unreadable unreadablePrimary)
+        if (primaryState is SettingsReadState.Unreadable primaryUnreadable)
         {
-            throw new SettingsReadException(_settingsPath, unreadablePrimary.Error);
+            throw new SettingsReadException(_settingsPath, primaryUnreadable.Error.Message, primaryUnreadable.Error);
         }
 
-        if (primaryState is SettingsReadState.Valid validPrimary)
+        if (primaryState is SettingsReadState.Valid primaryValid)
         {
-            SettingsReadState backupState = ReadState(_backupPath);
-
-            if (backupState is SettingsReadState.FutureSchema futureBackup)
-            {
-                return new SettingsLoadResult(
-                    validPrimary.Settings,
-                    RecoveredFromBackup: false,
-                    Warning:
-                        $"Prompt Helper loaded settings.json, but settings.backup.json " +
-                        $"was created by a newer settings schema ({futureBackup.Version}). " +
-                        "The newer backup was preserved and was not overwritten.");
-            }
-
-            if (backupState is SettingsReadState.Unreadable unreadableBackup)
-            {
-                return new SettingsLoadResult(
-                    validPrimary.Settings,
-                    RecoveredFromBackup: false,
-                    Warning:
-                        $"Prompt Helper loaded settings.json, but settings.backup.json " +
-                        $"could not be inspected or synchronized: {unreadableBackup.Error.Message}");
-            }
-
-            string? warning = null;
-            try
-            {
-                string? dir = Path.GetDirectoryName(_backupPath);
-                if (!string.IsNullOrEmpty(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-
-                string json = JsonSerializer.Serialize(validPrimary.Settings, JsonOptions);
-                _writer.Write(_backupPath, json);
-            }
-            catch (Exception ex)
-            {
-                warning =
-                    "Settings loaded from settings.json, but settings.backup.json " +
-                    $"could not be synchronized: {ex.Message}";
-            }
-
-            return new SettingsLoadResult(validPrimary.Settings, false, warning);
+            // Primary is valid. Synchronize backup if needed.
+            string? backupWarning = TrySynchronizeBackupInternal(primaryValid.Settings);
+            return new SettingsLoadResult(primaryValid.Settings, false, backupWarning);
         }
 
-        // Backup is only needed after a missing/corrupt primary.
-        SettingsReadState backupStateForRecovery = ReadState(_backupPath);
-
-        if (primaryState is SettingsReadState.Missing &&
-            backupStateForRecovery is SettingsReadState.Missing)
+        // Primary is either Missing or Corrupt. Inspect backup.
+        SettingsReadState backupState = ReadSettingsFileState(_backupPath);
+        if (backupState is SettingsReadState.FutureSchema backupFuture)
         {
-            return new SettingsLoadResult(new AppSettings(), false, null);
+            throw new UnsupportedSettingsSchemaException(backupFuture.Version);
         }
 
-        if (backupStateForRecovery is SettingsReadState.FutureSchema futureBackupForRecovery)
+        if (backupState is SettingsReadState.Unreadable backupUnreadable)
         {
-            throw new UnsupportedSettingsSchemaException(futureBackupForRecovery.Version);
+            throw new SettingsReadException(_backupPath, backupUnreadable.Error.Message, backupUnreadable.Error);
         }
 
-        if (backupStateForRecovery is SettingsReadState.Unreadable unreadableBackupForRecovery)
+        if (backupState is SettingsReadState.Valid backupValid)
         {
-            throw new SettingsReadException(_backupPath, unreadableBackupForRecovery.Error);
-        }
-
-        if (backupStateForRecovery is SettingsReadState.Valid validBackup)
-        {
-            string warning =
-                "Prompt Helper recovered its data-folder setting from settings.backup.json.\r\n\r\n" +
-                "The configured prompt library itself was not modified by this recovery.";
+            // Backup is valid. Recover primary from backup.
+            string recoveryWarning = primaryState is SettingsReadState.Corrupt
+                ? "Settings were recovered from backup because the primary settings file was corrupt."
+                : "Settings were restored from backup.";
 
             try
             {
-                string? dir = Path.GetDirectoryName(_settingsPath);
-                if (!string.IsNullOrEmpty(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-
-                string json = JsonSerializer.Serialize(validBackup.Settings, JsonOptions);
-                _writer.Write(_settingsPath, json);
+                string json = JsonSerializer.Serialize(backupValid.Settings, JsonOptions);
+                _durableWriter.WriteDurable(
+                    _settingsPath,
+                    json);
             }
             catch (Exception ex)
             {
-                warning =
-                    "Settings were recovered from settings.backup.json, but settings.json " +
-                    $"could not be restored: {ex.Message}";
+                recoveryWarning += $" Note: settings.json could not be restored: {ex.Message}";
             }
 
-            return new SettingsLoadResult(validBackup.Settings, true, warning);
+            return new SettingsLoadResult(backupValid.Settings, true, recoveryWarning);
         }
 
-        if (backupStateForRecovery is SettingsReadState.Corrupt corruptBackup)
+        // Both primary and backup are missing or corrupt. Default settings.
+        var defaultSettings = new AppSettings
         {
-            throw new InvalidDataException(
-                $"Settings file '{_backupPath}' is corrupt: {corruptBackup.Error.Message}",
-                corruptBackup.Error);
-        }
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            DataRootPath = null
+        };
 
-        if (primaryState is SettingsReadState.Corrupt corruptPrimary)
+        if (primaryState is SettingsReadState.Missing && backupState is SettingsReadState.Missing)
         {
-            throw new InvalidDataException(
-                $"Settings file '{_settingsPath}' is corrupt and no valid backup exists: " +
-                corruptPrimary.Error.Message,
-                corruptPrimary.Error);
+            return new SettingsLoadResult(defaultSettings, false, null);
         }
 
-        throw new InvalidDataException(
-            $"Failed to load settings from '{_settingsPath}'.");
-    }
-
-    public AppSettings Load()
-    {
-        return LoadOrRecover().Settings;
+        // Corrupt and no valid backup
+        throw new InvalidDataException("Settings file is corrupt and no valid backup is available.");
     }
 
     public SettingsSaveResult Save(AppSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (settings.SchemaVersion <= 0 || settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
+        {
+            throw new InvalidDataException($"Invalid settings schema version: {settings.SchemaVersion}.");
+        }
+
         using var lease = AcquireMutationLease();
+
+        DurableTempReconciler.ReconcileSettingsTemps(
+            _settingsPath,
+            _backupPath,
+            _durableWriter);
+
         return SaveCore(settings);
     }
 
-    internal SettingsSaveResult SaveCore(AppSettings settings)
+    public SettingsSaveResult SaveIfUnchanged(
+        AppSettings settings,
+        SettingsWritePrecondition precondition)
     {
         ArgumentNullException.ThrowIfNull(settings);
-
-        if (settings.SchemaVersion != AppSettings.CurrentSchemaVersion)
+        ArgumentNullException.ThrowIfNull(precondition);
+        if (settings.SchemaVersion <= 0 || settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
         {
-            throw new InvalidDataException(
-                $"Cannot save unsupported settings schema version: {settings.SchemaVersion}.");
+            throw new InvalidDataException($"Invalid settings schema version: {settings.SchemaVersion}.");
         }
 
-        SettingsReadState primaryBefore = ReadState(_settingsPath);
+        using var lease = AcquireMutationLease();
 
-        if (primaryBefore is SettingsReadState.FutureSchema futurePrimary)
+        DurableTempReconciler.ReconcileSettingsTemps(
+            _settingsPath,
+            _backupPath,
+            _durableWriter);
+
+        SettingsWritePrecondition current = CapturePrecondition();
+        if (!PreconditionsMatch(precondition, current))
         {
-            throw new UnsupportedSettingsSchemaException(futurePrimary.Version);
+            throw new InvalidOperationException("Settings were modified concurrently. Save operation cancelled.");
         }
 
-        if (primaryBefore is SettingsReadState.Unreadable unreadablePrimary)
+        return SaveCore(settings);
+    }
+
+    private static bool PreconditionsMatch(
+        SettingsWritePrecondition expected,
+        SettingsWritePrecondition actual)
+    {
+        if (expected.Primary.Exists != actual.Primary.Exists) return false;
+        if (expected.Primary.Exists && !TokensMatch(expected.Primary.Sha256, actual.Primary.Sha256))
         {
-            throw new SettingsReadException(_settingsPath, unreadablePrimary.Error);
+            return false;
         }
 
-        // Capture backup state before primary mutation.
-        SettingsReadState backupBefore = ReadState(_backupPath);
+        if (expected.Backup.Exists != actual.Backup.Exists) return false;
+        if (expected.Backup.Exists && !TokensMatch(expected.Backup.Sha256, actual.Backup.Sha256))
+        {
+            return false;
+        }
 
-        settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
+        return true;
+    }
+
+    private static bool TokensMatch(byte[]? a, byte[]? b)
+    {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+        return a.AsSpan().SequenceEqual(b);
+    }
+
+    private SettingsSaveResult SaveCore(AppSettings settings)
+    {
+        SettingsReadState primaryState = ReadSettingsFileState(_settingsPath);
+        if (primaryState is SettingsReadState.FutureSchema primaryFuture)
+        {
+            throw new UnsupportedSettingsSchemaException(primaryFuture.Version);
+        }
+        if (primaryState is SettingsReadState.Unreadable primaryUnreadable)
+        {
+            throw new SettingsReadException(_settingsPath, primaryUnreadable.Error.Message, primaryUnreadable.Error);
+        }
+
         string json = JsonSerializer.Serialize(settings, JsonOptions);
 
-        string? settingsDir = Path.GetDirectoryName(_settingsPath);
-        if (!string.IsNullOrEmpty(settingsDir))
+        _durableWriter.WriteDurable(
+            _settingsPath,
+            json);
+
+        string? backupWarning = TrySynchronizeBackupInternal(settings);
+        return new SettingsSaveResult(backupWarning);
+    }
+
+    private string? TrySynchronizeBackupInternal(AppSettings settings)
+    {
+        SettingsReadState backupState = ReadSettingsFileState(_backupPath);
+        if (backupState is SettingsReadState.FutureSchema future)
         {
-            Directory.CreateDirectory(settingsDir);
+            return $"Settings backup uses newer schema version {future.Version} and was preserved without overwrite.";
         }
-
-        CleanupStaleSettingsTempsCore();
-
-        _durableWriter.WriteDurable(_settingsPath, json);
-
-        if (backupBefore is SettingsReadState.FutureSchema futureBackup)
+        if (backupState is SettingsReadState.Unreadable)
         {
-            return new SettingsSaveResult(
-                $"The setting was saved, but settings.backup.json uses newer schema " +
-                $"{futureBackup.Version}. The newer backup was preserved and was not overwritten.");
-        }
-
-        if (backupBefore is SettingsReadState.Unreadable unreadableBackup)
-        {
-            return new SettingsSaveResult(
-                "The setting was saved, but settings.backup.json could not be inspected " +
-                $"or synchronized: {unreadableBackup.Error.Message}");
+            return "The settings backup could not be synchronized (settings.backup.json could not be synchronized, could not be inspected or synchronized).";
         }
 
         try
         {
-            string? backupDir = Path.GetDirectoryName(_backupPath);
-            if (!string.IsNullOrEmpty(backupDir))
-            {
-                Directory.CreateDirectory(backupDir);
-            }
-
-            _durableWriter.WriteDurable(_backupPath, json);
-            return new SettingsSaveResult(null);
+            string json = JsonSerializer.Serialize(settings, JsonOptions);
+            _durableWriter.WriteDurable(
+                _backupPath,
+                json);
+            return null;
         }
         catch (Exception ex)
         {
-            return new SettingsSaveResult(
-                "The data folder was saved, but the settings backup could not be " +
-                $"synchronized: {ex.Message}");
+            return $"The settings backup could not be synchronized (settings.backup.json could not be synchronized, could not be inspected or synchronized): {ex.Message}";
         }
     }
 
-    private void CleanupStaleSettingsTempsCore()
+    private static SettingsReadState ReadSettingsFileState(string path)
     {
-        string? directory = Path.GetDirectoryName(_settingsPath);
-        if (string.IsNullOrEmpty(directory) || new StrictPathAuthority().Probe(directory).Kind != StrictPathKind.Directory)
-        {
-            return;
-        }
-
-        foreach (string path in Directory.EnumerateFiles(
-                     directory,
-                     ".prompthelper-settings-*.tmp",
-                     SearchOption.TopDirectoryOnly))
-        {
-            string name = Path.GetFileName(path);
-            if (!SettingsTempName.TryParse(name, out _))
-            {
-                continue;
-            }
-
-            try
-            {
-                File.Delete(path);
-            }
-            catch (Exception ex)
-            {
-                throw new IOException($"Failed to clean stale settings temp file '{path}': {ex.Message}", ex);
-            }
-        }
-    }
-
-    public string GetEffectiveDataRoot(AppSettings? settings = null)
-    {
-        var activeSettings = settings ?? Load();
-        if (!string.IsNullOrWhiteSpace(activeSettings.DataRootPath))
-        {
-            return Path.GetFullPath(activeSettings.DataRootPath.Trim());
-        }
-
-        return _bootstrapRoot;
-    }
-
-    private static AppSettings CloneSettings(AppSettings settings)
-    {
-        return new AppSettings
-        {
-            SchemaVersion = settings.SchemaVersion,
-            DataRootPath = settings.DataRootPath
-        };
-    }
-
-    private static SettingsReadState ReadState(string path)
-    {
-        string json;
-
+        string raw;
         try
         {
-            json = File.ReadAllText(path);
+            raw = StrictUtf8Text.ReadAllText(path, $"settings file '{path}'");
         }
         catch (FileNotFoundException)
         {
@@ -471,161 +384,86 @@ public sealed class AppSettingsRepository
         {
             return new SettingsReadState.Missing();
         }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or SecurityException)
+        catch (InvalidDataException ex)
+        {
+            return new SettingsReadState.Corrupt(ex);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
         {
             return new SettingsReadState.Unreadable(ex);
         }
 
         try
         {
-            return new SettingsReadState.Valid(ParseAndValidate(json, path));
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return new SettingsReadState.Corrupt(new InvalidDataException("Settings root must be a JSON object."));
+            }
+
+            var seenProps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int? schemaVersion = null;
+
+            foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
+            {
+                if (!seenProps.Add(prop.Name))
+                {
+                    return new SettingsReadState.Corrupt(new InvalidDataException($"Settings contains duplicate property '{prop.Name}'."));
+                }
+
+                if (string.Equals(prop.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prop.Value.ValueKind != JsonValueKind.Number || !prop.Value.TryGetInt32(out int sv))
+                    {
+                        return new SettingsReadState.Corrupt(new InvalidDataException("schemaVersion must be an integer."));
+                    }
+                    schemaVersion = sv;
+                }
+            }
+
+            if (!schemaVersion.HasValue)
+            {
+                return new SettingsReadState.Corrupt(new InvalidDataException("Missing required property 'schemaVersion'."));
+            }
+
+            if (schemaVersion.Value > AppSettings.CurrentSchemaVersion)
+            {
+                return new SettingsReadState.FutureSchema(schemaVersion.Value);
+            }
+
+            StrictJsonObjectAuthority.ValidateExactObject(
+                doc.RootElement,
+                allowedMembers: ["schemaVersion", "dataRootPath"],
+                requiredMembers: ["schemaVersion"],
+                description: $"settings file '{path}'");
+
+            AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(raw, JsonOptions);
+            if (settings == null)
+            {
+                return new SettingsReadState.Corrupt(new InvalidDataException("Failed to deserialize settings."));
+            }
+
+            return new SettingsReadState.Valid(settings);
         }
-        catch (UnsupportedSettingsSchemaException ex)
-        {
-            return new SettingsReadState.FutureSchema(ex.SchemaVersion);
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        catch (Exception ex)
         {
             return new SettingsReadState.Corrupt(ex);
         }
     }
 
-    private static AppSettings ParseAndValidate(string json, string path)
+    public string GetEffectiveDataRoot(AppSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(json))
+        if (string.IsNullOrWhiteSpace(settings.DataRootPath))
         {
-            throw new InvalidDataException(
-                $"Settings file is empty or whitespace: '{path}'");
+            return _bootstrapRoot;
         }
 
-        ValidateSchemaPropertyBeforeDeserialization(json, path);
-
-        AppSettings? settings;
-        try
-        {
-            settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidDataException(
-                $"Failed to deserialize settings from '{path}': {ex.Message}", ex);
-        }
-
-        if (settings is null)
-        {
-            throw new InvalidDataException(
-                $"Settings deserialized to null from '{path}'.");
-        }
-
-        if (settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
-        {
-            throw new UnsupportedSettingsSchemaException(settings.SchemaVersion);
-        }
-
-        if (settings.SchemaVersion < AppSettings.CurrentSchemaVersion)
-        {
-            throw new InvalidDataException(
-                $"Invalid settings schema version: {settings.SchemaVersion}.");
-        }
-
-        settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
-        return settings;
+        return settings.DataRootPath;
     }
 
-    private static void ValidateSchemaPropertyBeforeDeserialization(
-        string json,
-        string path)
+    public string GetEffectiveDataRoot()
     {
-        JsonDocument document;
-
-        try
-        {
-            document = JsonDocument.Parse(json);
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidDataException(
-                $"Failed to parse settings JSON from '{path}': {ex.Message}",
-                ex);
-        }
-
-        using (document)
-        {
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                throw new InvalidDataException($"Root of settings JSON must be an object: '{path}'.");
-            }
-
-            int schemaCount = 0;
-            int schemaVersion = 0;
-
-            foreach (JsonProperty prop in document.RootElement.EnumerateObject())
-            {
-                if (string.Equals(prop.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase))
-                {
-                    schemaCount++;
-                    if (prop.Value.ValueKind != JsonValueKind.Number || !prop.Value.TryGetInt32(out schemaVersion))
-                    {
-                        throw new InvalidDataException($"Property 'schemaVersion' must be an integer in '{path}'.");
-                    }
-                }
-            }
-
-            if (schemaCount == 0)
-            {
-                throw new InvalidDataException($"Missing required 'schemaVersion' property in '{path}'.");
-            }
-
-            if (schemaCount > 1)
-            {
-                throw new InvalidDataException($"Multiple 'schemaVersion' properties found in '{path}'.");
-            }
-
-            if (schemaVersion > AppSettings.CurrentSchemaVersion)
-            {
-                throw new UnsupportedSettingsSchemaException(schemaVersion);
-            }
-
-            if (schemaVersion != AppSettings.CurrentSchemaVersion)
-            {
-                throw new InvalidDataException($"Unsupported settings schema version: {schemaVersion}.");
-            }
-
-            StrictJsonObjectAuthority.ValidateExactObject(
-                document.RootElement,
-                allowedMembers: ["schemaVersion", "dataRootPath"],
-                requiredMembers: ["schemaVersion"],
-                description: $"settings root '{path}'");
-        }
-    }
-
-    public static string? NormalizeAndValidateDataRoot(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-
-        string trimmed = path.Trim();
-
-        if (!Path.IsPathFullyQualified(trimmed))
-        {
-            throw new InvalidDataException(
-                "Configured dataRootPath must be an absolute filesystem path.");
-        }
-
-        try
-        {
-            return Path.GetFullPath(trimmed);
-        }
-        catch (Exception ex) when (
-            ex is ArgumentException or
-            NotSupportedException or
-            PathTooLongException)
-        {
-            throw new InvalidDataException(
-                $"Configured dataRootPath is invalid: {ex.Message}", ex);
-        }
+        SettingsLoadResult result = LoadOrRecover();
+        return GetEffectiveDataRoot(result.Settings);
     }
 }

@@ -20,6 +20,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
         Directory.CreateDirectory(root);
         string promptsDir = Path.Combine(root, "prompts");
         Directory.CreateDirectory(promptsDir);
+        Directory.CreateDirectory(Path.Combine(root, "recovery"));
 
         promptId = Guid.NewGuid();
         string promptFile = Path.Combine(promptsDir, $"{promptId:N}.md");

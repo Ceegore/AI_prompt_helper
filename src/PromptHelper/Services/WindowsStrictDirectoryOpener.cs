@@ -54,4 +54,28 @@ internal sealed class WindowsStrictDirectoryOpener : IStrictDirectoryOpener
 
         return new DirectoryOpenResult(DirectoryOpenState.Opened, handle);
     }
+
+    public SafeFileHandle OpenManagedNodeLease(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        SafeFileHandle handle = CreateFileW(
+            path,
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, // NO FILE_SHARE_DELETE
+            IntPtr.Zero,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            IntPtr.Zero);
+
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            throw new IOException(
+                $"Failed to acquire tree lease on directory '{path}'.",
+                new Win32Exception(error));
+        }
+
+        return handle;
+    }
 }

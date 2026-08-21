@@ -3,27 +3,22 @@ using System.IO;
 
 namespace PromptHelper.Services;
 
-internal sealed record CapabilityProbeLocationPlan(
-    string DirectoryRelativePath,
-    string CurrentFileRelativePath,
-    string ReplacementFileRelativePath);
+internal sealed record CapabilityFileProbePlan(
+    string CurrentRelativePath,
+    string ReplacementRelativePath);
 
 internal sealed record MigrationCapabilityProbePlan(
-    CapabilityProbeLocationPlan RootProbe,
-    CapabilityProbeLocationPlan? PromptsProbe)
+    CapabilityFileProbePlan RootProbe,
+    CapabilityFileProbePlan PromptsProbe)
 {
     public static MigrationCapabilityProbePlan Create(Guid attemptId)
     {
-        string rootDir = $".prompthelper-write-probe-{attemptId:N}-root";
-        string rootCurrent = Path.Combine(rootDir, "probe-current.txt");
-        string rootReplacement = Path.Combine(rootDir, "probe-replacement.tmp");
-
-        string promptsDir = Path.Combine("prompts", $".prompthelper-write-probe-{attemptId:N}-prompts");
-        string promptsCurrent = Path.Combine(promptsDir, "probe-current.txt");
-        string promptsReplacement = Path.Combine(promptsDir, "probe-replacement.tmp");
-
-        return new MigrationCapabilityProbePlan(
-            new CapabilityProbeLocationPlan(rootDir, rootCurrent, rootReplacement),
-            new CapabilityProbeLocationPlan(promptsDir, promptsCurrent, promptsReplacement));
+        return new(
+            new CapabilityFileProbePlan(
+                $".prompthelper-probe-{attemptId:N}-root-current.tmp",
+                $".prompthelper-probe-{attemptId:N}-root-replacement.tmp"),
+            new CapabilityFileProbePlan(
+                Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-current.tmp"),
+                Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-replacement.tmp")));
     }
 }

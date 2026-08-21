@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace PromptHelper.Services;
 
@@ -11,6 +12,7 @@ internal interface ICapabilityFileOps
     bool FileExists(string path);
     bool DirectoryExists(string path);
     IReadOnlyList<string> EnumerateEntries(string path);
+    IReadOnlyList<string> EnumerateFiles(string path, string searchPattern);
     void DeleteFile(string path);
     void DeleteDirectory(string path);
 }
@@ -61,6 +63,16 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
             list.Add(entry);
         }
         return list;
+    }
+
+    public IReadOnlyList<string> EnumerateFiles(string path, string searchPattern)
+    {
+        if (_authority.Probe(path).Kind != StrictPathKind.Directory)
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(path, searchPattern).ToList();
     }
 
     public void DeleteFile(string path)

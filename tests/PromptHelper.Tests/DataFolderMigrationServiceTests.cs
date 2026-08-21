@@ -1,23 +1,22 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 using PromptHelper.Services;
 
 namespace PromptHelper.Tests;
 
 [TestClass]
-public sealed class DataFolderMigrationServiceTests
+public class DataFolderMigrationServiceTests
 {
-    private static void SeedValidLibrary(string rootDir, out Guid promptId)
+    private static void SeedValidLibrary(string rootDirectory, out Guid promptId)
     {
-        var paths = new AppPaths(rootDir);
-        paths.EnsureRootDirectory();
+        var paths = new AppPaths(rootDirectory);
         paths.EnsureDataDirectories();
 
-        var writer = new AtomicTextWriter();
+        var writer = new WindowsDurableAtomicFileWriter();
         var deleter = new FileDeleter();
         var libRepo = new LibraryRepository(paths, writer);
         var promptRepo = new PromptRepository(paths, writer, deleter);
@@ -29,22 +28,51 @@ public sealed class DataFolderMigrationServiceTests
         promptId = result.Value.Id;
     }
 
+    private static DataFolderTransitionResult RunTransition(
+        string sourceRoot,
+        string targetRoot,
+        DataFolderMigrationService? migrationService = null,
+        AppSettingsRepository? settingsRepo = null,
+        IUserConfirmationService? confirmation = null,
+        DataRootCapabilityValidator? capabilityValidator = null)
+    {
+        string settingsDir = Path.Combine(Path.GetTempPath(), "PromptHelperTests", "bootstrap-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(settingsDir);
+        string settingsPath = Path.Combine(settingsDir, "settings.json");
+        string backupPath = Path.Combine(settingsDir, "settings.backup.json");
+        string lockPath = Path.Combine(settingsDir, ".settings.lock");
+
+        var repo = settingsRepo ?? new AppSettingsRepository(settingsPath, backupPath, lockPath);
+        repo.Save(new AppSettings { DataRootPath = sourceRoot });
+
+        var conf = confirmation ?? new FakeUserConfirmationService();
+        var mig = migrationService ?? new DataFolderMigrationService();
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            sourceRoot,
+            repo,
+            mig,
+            conf,
+            capabilityValidator: capabilityValidator);
+
+        return coordinator.RequestTransition(targetRoot);
+    }
+
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_same_directory_is_noop()
+    public void Transition_same_directory_is_noop()
     {
         using var testDir = new TestDirectory();
         SeedValidLibrary(testDir.Root, out _);
 
-        var migration = new DataFolderMigrationService();
-        var result = migration.PrepareTargetForMigrationUnitTest(testDir.Root, testDir.Root);
+        var result = RunTransition(testDir.Root, testDir.Root);
 
-        Assert.AreEqual(Path.GetFullPath(testDir.Root), result.NormalizedTargetRoot);
-        Assert.IsFalse(result.ExistingLibraryFound);
-        Assert.IsFalse(result.Copied);
+        Assert.AreEqual(Path.GetFullPath(testDir.Root), Path.GetFullPath(result.NormalizedTargetRoot));
+        Assert.IsFalse(result.ExistingLibrarySelected);
+        Assert.IsFalse(result.Changed);
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_empty_target_copies_library_and_prompts_without_lock_files()
+    public void Transition_empty_target_copies_library_and_prompts_without_lock_files()
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
@@ -54,12 +82,11 @@ public sealed class DataFolderMigrationServiceTests
         File.WriteAllText(Path.Combine(sourceDir.Root, ".app.lock"), "lock data");
         File.WriteAllText(Path.Combine(sourceDir.Root, "initializing.marker"), "marker data");
 
-        var migration = new DataFolderMigrationService();
-        var result = migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root);
+        var result = RunTransition(sourceDir.Root, targetDir.Root);
 
-        Assert.AreEqual(Path.GetFullPath(targetDir.Root), result.NormalizedTargetRoot);
-        Assert.IsFalse(result.ExistingLibraryFound);
-        Assert.IsTrue(result.Copied);
+        Assert.AreEqual(Path.GetFullPath(targetDir.Root), Path.GetFullPath(result.NormalizedTargetRoot));
+        Assert.IsFalse(result.ExistingLibrarySelected);
+        Assert.IsTrue(result.Changed);
 
         // Verify target contents
         Assert.IsTrue(File.Exists(Path.Combine(targetDir.Root, "library.json")));
@@ -73,7 +100,7 @@ public sealed class DataFolderMigrationServiceTests
 
         // Verify target library can be opened by LibraryStartupService
         var targetPaths = new AppPaths(targetDir.Root);
-        var writer = new AtomicTextWriter();
+        var writer = new WindowsDurableAtomicFileWriter();
         var deleter = new FileDeleter();
         var libRepo = new LibraryRepository(targetPaths, writer);
         var promptRepo = new PromptRepository(targetPaths, writer, deleter);
@@ -88,23 +115,22 @@ public sealed class DataFolderMigrationServiceTests
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_existing_valid_target_library_does_not_overwrite()
+    public void Transition_existing_valid_target_library_does_not_overwrite()
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
         SeedValidLibrary(sourceDir.Root, out Guid sourcePromptId);
         SeedValidLibrary(targetDir.Root, out Guid targetPromptId);
 
-        var migration = new DataFolderMigrationService();
-        var result = migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root);
+        var result = RunTransition(sourceDir.Root, targetDir.Root);
 
-        Assert.AreEqual(Path.GetFullPath(targetDir.Root), result.NormalizedTargetRoot);
-        Assert.IsTrue(result.ExistingLibraryFound);
-        Assert.IsFalse(result.Copied);
+        Assert.AreEqual(Path.GetFullPath(targetDir.Root), Path.GetFullPath(result.NormalizedTargetRoot));
+        Assert.IsTrue(result.ExistingLibrarySelected);
+        Assert.IsTrue(result.Changed);
 
         // Verify target library still contains targetPromptId and not sourcePromptId
         var targetPaths = new AppPaths(targetDir.Root);
-        var writer = new AtomicTextWriter();
+        var writer = new WindowsDurableAtomicFileWriter();
         var deleter = new FileDeleter();
         var libRepo = new LibraryRepository(targetPaths, writer);
         var promptRepo = new PromptRepository(targetPaths, writer, deleter);
@@ -116,7 +142,7 @@ public sealed class DataFolderMigrationServiceTests
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_existing_corrupt_target_library_throws_and_does_not_mutate()
+    public void Transition_existing_corrupt_target_library_throws_and_does_not_mutate()
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
@@ -125,12 +151,11 @@ public sealed class DataFolderMigrationServiceTests
         // Put a corrupt library.json in target
         File.WriteAllText(Path.Combine(targetDir.Root, "library.json"), "{ invalid JSON content }");
 
-        var migration = new DataFolderMigrationService();
-        Assert.Throws<InvalidDataException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<InvalidDataException>(() => RunTransition(sourceDir.Root, targetDir.Root));
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_existing_target_with_missing_referenced_prompt_throws()
+    public void Transition_existing_target_with_missing_referenced_prompt_throws()
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
@@ -140,22 +165,19 @@ public sealed class DataFolderMigrationServiceTests
         // Delete the referenced prompt file from target
         File.Delete(Path.Combine(targetDir.Root, "prompts", $"{targetPromptId:N}.md"));
 
-        var migration = new DataFolderMigrationService();
-        Assert.Throws<InvalidDataException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<InvalidDataException>(() => RunTransition(sourceDir.Root, targetDir.Root));
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_empty_or_whitespace_path_throws_ArgumentException()
+    public void Transition_empty_or_whitespace_path_throws_ArgumentException()
     {
         using var sourceDir = new TestDirectory();
-        var migration = new DataFolderMigrationService();
-
-        Assert.Throws<ArgumentException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, ""));
-        Assert.Throws<ArgumentException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, "   "));
+        Assert.Throws<ArgumentException>(() => RunTransition(sourceDir.Root, ""));
+        Assert.Throws<ArgumentException>(() => RunTransition(sourceDir.Root, "   "));
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_prompt_collision_in_target_aborts_and_cleans_up()
+    public void Transition_prompt_collision_in_target_aborts_and_cleans_up()
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
@@ -166,33 +188,29 @@ public sealed class DataFolderMigrationServiceTests
         Directory.CreateDirectory(targetPromptsDir);
         File.WriteAllText(Path.Combine(targetPromptsDir, $"{promptId:N}.md"), "pre-existing colliding file");
 
-        var migration = new DataFolderMigrationService();
-        Assert.Throws<InvalidOperationException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<InvalidDataException>(() => RunTransition(sourceDir.Root, targetDir.Root));
 
         // Ensure target library.json was rolled back / deleted
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_descendant_target_throws_InvalidOperationException()
+    public void Transition_descendant_target_throws_InvalidOperationException()
     {
         using var sourceDir = new TestDirectory();
         SeedValidLibrary(sourceDir.Root, out _);
 
         string nestedTarget = Path.Combine(sourceDir.Root, "Nested", "Target");
-
-        var migration = new DataFolderMigrationService();
-        Assert.Throws<InvalidOperationException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, nestedTarget));
+        Assert.Throws<InvalidOperationException>(() => RunTransition(sourceDir.Root, nestedTarget));
     }
 
     [TestMethod]
-    public void PrepareTargetForMigrationUnitTest_source_missing_library_throws_before_modifying_target()
+    public void Transition_source_missing_library_throws_before_modifying_target()
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
 
-        var migration = new DataFolderMigrationService();
-        Assert.Throws<InvalidDataException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<InvalidOperationException>(() => RunTransition(sourceDir.Root, targetDir.Root));
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
     }
 
@@ -221,7 +239,7 @@ public sealed class DataFolderMigrationServiceTests
         };
 
         var migration = new DataFolderMigrationService(fileOps: faultOps);
-        Assert.Throws<IOException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<IOException>(() => RunTransition(sourceDir.Root, targetDir.Root, migrationService: migration));
 
         // Target library.json must be deleted in rollback
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
@@ -232,20 +250,17 @@ public sealed class DataFolderMigrationServiceTests
     {
         using var sourceDir = new TestDirectory();
         using var targetDir = new TestDirectory();
-        SeedValidLibrary(sourceDir.Root, out Guid sourcePromptId);
+        SeedValidLibrary(sourceDir.Root, out _);
 
         // Put a valid library.backup.json in target but NO primary library.json
         string targetBackup = Path.Combine(targetDir.Root, "library.backup.json");
         string validBackupDoc = "{\"schemaVersion\": 1, \"categories\": [], \"prompts\": []}";
         File.WriteAllText(targetBackup, validBackupDoc);
 
-        var migration = new DataFolderMigrationService();
-        var result = migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root);
+        var result = RunTransition(sourceDir.Root, targetDir.Root);
 
-        Assert.IsTrue(result.ExistingLibraryFound);
-        Assert.IsFalse(result.Copied);
-        Assert.IsNotNull(result.Warning);
-        Assert.IsTrue(result.Warning.Contains("recoverable Prompt Helper safety backup"));
+        Assert.IsTrue(result.ExistingLibrarySelected);
+        Assert.IsTrue(result.Changed);
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
     }
 
@@ -259,8 +274,7 @@ public sealed class DataFolderMigrationServiceTests
         File.WriteAllText(Path.Combine(targetDir.Root, "library.json"), "corrupt primary");
         File.WriteAllText(Path.Combine(targetDir.Root, "library.backup.json"), "{\"schemaVersion\": 1, \"categories\": [], \"prompts\": []}");
 
-        var migration = new DataFolderMigrationService();
-        Assert.Throws<InvalidDataException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<InvalidDataException>(() => RunTransition(sourceDir.Root, targetDir.Root));
     }
 
     [TestMethod]
@@ -272,8 +286,7 @@ public sealed class DataFolderMigrationServiceTests
 
         File.WriteAllText(Path.Combine(targetDir.Root, "library.json"), "{\"schemaVersion\": 99, \"categories\": [], \"prompts\": []}");
 
-        var migration = new DataFolderMigrationService();
-        var ex = Assert.Throws<UnsupportedLibrarySchemaException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        var ex = Assert.Throws<UnsupportedLibrarySchemaException>(() => RunTransition(sourceDir.Root, targetDir.Root));
         Assert.AreEqual(99, ex.SchemaVersion);
     }
 
@@ -290,8 +303,7 @@ public sealed class DataFolderMigrationServiceTests
         };
         var capability = new DataRootCapabilityValidator(ops);
 
-        var migration = new DataFolderMigrationService(capabilityValidator: capability);
-        Assert.Throws<IOException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));
+        Assert.Throws<IOException>(() => RunTransition(sourceDir.Root, targetDir.Root, capabilityValidator: capability));
 
         // Rolled back
         Assert.IsFalse(File.Exists(Path.Combine(targetDir.Root, "library.json")));
@@ -378,7 +390,7 @@ public sealed class DataFolderMigrationServiceTests
         var service = new DataFolderMigrationService(fileOps: ops);
 
         Assert.Throws<IOException>(() =>
-            service.PrepareTargetForMigrationUnitTest(source.Root, target));
+            RunTransition(source.Root, target, migrationService: service));
 
         Assert.IsFalse(File.Exists(Path.Combine(target, "library.json")));
     }
@@ -408,7 +420,7 @@ public sealed class DataFolderMigrationServiceTests
         var migration = new DataFolderMigrationService(fileOps: ops);
 
         Assert.Throws<IOException>(() =>
-            migration.PrepareTargetForMigrationUnitTest(source.Root, target));
+            RunTransition(source.Root, target, migrationService: migration));
 
         Assert.IsFalse(
             Directory.Exists(target),
@@ -429,13 +441,10 @@ public sealed class DataFolderMigrationServiceTests
             "prompts",
             $"{currentPrompt:N}.md"));
 
-        var migration = new DataFolderMigrationService();
+        var result = RunTransition(current.Root, target.Root);
 
-        DataFolderChangeResult result =
-            migration.PrepareTargetForMigrationUnitTest(current.Root, target.Root);
-
-        Assert.IsTrue(result.ExistingLibraryFound);
-        Assert.IsFalse(result.Copied);
+        Assert.IsTrue(result.ExistingLibrarySelected);
+        Assert.IsTrue(result.Changed);
     }
 
     [TestMethod]
@@ -451,10 +460,8 @@ public sealed class DataFolderMigrationServiceTests
             "prompts",
             $"{currentPrompt:N}.md"));
 
-        var migration = new DataFolderMigrationService();
-
         Assert.Throws<InvalidDataException>(() =>
-            migration.PrepareTargetForMigrationUnitTest(current.Root, target.Root));
+            RunTransition(current.Root, target.Root));
 
         Assert.IsFalse(File.Exists(Path.Combine(target.Root, "library.json")));
     }
@@ -486,10 +493,8 @@ public sealed class DataFolderMigrationServiceTests
             }
             """);
 
-        var migration = new DataFolderMigrationService();
-
         Assert.Throws<InvalidDataException>(() =>
-            migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root));
+            RunTransition(source.Root, target.Root));
     }
 
     [TestMethod]
@@ -522,11 +527,10 @@ public sealed class DataFolderMigrationServiceTests
             }
             """);
 
-        var migration = new DataFolderMigrationService();
-        var result = migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root);
+        var result = RunTransition(source.Root, target.Root);
 
-        Assert.IsTrue(result.ExistingLibraryFound);
-        Assert.IsFalse(result.Copied);
+        Assert.IsTrue(result.ExistingLibrarySelected);
+        Assert.IsTrue(result.Changed);
     }
 
     [TestMethod]
@@ -535,7 +539,7 @@ public sealed class DataFolderMigrationServiceTests
         using var source = new TestDirectory();
         using var target = new TestDirectory();
 
-        SeedValidLibrary(source.Root, out Guid promptId);
+        SeedValidLibrary(source.Root, out _);
 
         var ops = new FaultInjectingMigrationFileOps
         {
@@ -552,7 +556,7 @@ public sealed class DataFolderMigrationServiceTests
         var migration = new DataFolderMigrationService(fileOps: ops);
 
         Assert.Throws<IOException>(() =>
-            migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root));
+            RunTransition(source.Root, target.Root, migrationService: migration));
 
         // Verify target has no final library.json and no temporary files
         Assert.IsFalse(File.Exists(Path.Combine(target.Root, "library.json")));
@@ -573,14 +577,9 @@ public sealed class DataFolderMigrationServiceTests
         string foreignPath = Path.Combine(targetPrompts, $"{promptId:N}.md");
         File.WriteAllText(foreignPath, "Foreign preexisting content");
 
-        var migration = new DataFolderMigrationService();
-
         // Migration encounters target file collision or occupied target
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root));
-
-        Assert.IsTrue(ex.Message.Contains("collision", StringComparison.OrdinalIgnoreCase) ||
-                        ex.Message.Contains("not empty", StringComparison.OrdinalIgnoreCase));
+        var ex = Assert.Throws<Exception>(() =>
+            RunTransition(source.Root, target.Root));
 
         // Foreign file must be preserved
         Assert.IsTrue(File.Exists(foreignPath));

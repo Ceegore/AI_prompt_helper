@@ -7,7 +7,7 @@ internal static class RecoveryBaselineVerifier
 {
     public static void AssertRestored(
         string targetRoot,
-        TargetRecoveryInventory inventory,
+        MigrationTargetInventory inventory,
         IAuthorityFileOps authorityOps)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetRoot);
@@ -21,17 +21,17 @@ internal static class RecoveryBaselineVerifier
                 string.Join(", ", inventory.UnknownEntries));
         }
 
-        foreach (string rel in inventory.ManifestFinals)
+        foreach (string rel in inventory.FinalArtifacts)
         {
             AssertMissing(targetRoot, rel, authorityOps);
         }
 
-        foreach (string rel in inventory.ManifestTemps)
+        foreach (string rel in inventory.PayloadTemps)
         {
             AssertMissing(targetRoot, rel, authorityOps);
         }
 
-        foreach (string rel in inventory.EphemeralControlArtifacts)
+        foreach (string rel in inventory.DeclaredControls)
         {
             AssertMissing(targetRoot, rel, authorityOps);
         }

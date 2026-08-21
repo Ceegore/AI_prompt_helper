@@ -117,37 +117,28 @@ if ($RequireIcon -and $PublishedExe) {
         exit 1
     }
 
+    # ExtractIconEx check superseded by exact pixel IconIdentityVerifier
     $resolvedExe = (Resolve-Path $PublishedExe).Path
-
-    Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class PromptHelperNativeIconCheck
-{
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    public static extern uint ExtractIconEx(
-        string szFileName,
-        int nIconIndex,
-        IntPtr phiconLarge,
-        IntPtr phiconSmall,
-        uint nIcons);
-}
-"@
-
-    $iconCount = [PromptHelperNativeIconCheck]::ExtractIconEx(
-        $resolvedExe,
-        -1,
-        [IntPtr]::Zero,
-        [IntPtr]::Zero,
-        0)
-
-    if ($iconCount -lt 1) {
-        Write-Error "Published PromptHelper.exe contains no embedded icon resources."
-        exit 1
+    $verifierDll = Join-Path $repoRoot "tools\IconIdentityVerifier\bin\Release\net10.0-windows\IconIdentityVerifier.dll"
+    if (-not (Test-Path $verifierDll)) {
+        $verifierDll = Join-Path $repoRoot "tools\IconIdentityVerifier\bin\Debug\net10.0-windows\IconIdentityVerifier.dll"
     }
 
-    Write-Host "Published EXE exposes $iconCount embedded icon group(s)."
+    if (Test-Path $verifierDll) {
+        Write-Host "Running IconIdentityVerifier compare-exe..."
+        dotnet $verifierDll compare-exe $outputIco $resolvedExe
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "IconIdentityVerifier failed for published executable."
+            exit 1
+        }
+    } else {
+        Write-Host "Building and running IconIdentityVerifier..."
+        dotnet run --project (Join-Path $repoRoot "tools\IconIdentityVerifier\IconIdentityVerifier.csproj") -- compare-exe $outputIco $resolvedExe
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "IconIdentityVerifier failed for published executable."
+            exit 1
+        }
+    }
 }
 
 Write-Host "Release asset verification completed successfully."

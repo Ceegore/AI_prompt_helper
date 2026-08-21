@@ -179,100 +179,6 @@ public sealed class DataFolderMigrationService
         return new MigrationSnapshot(libBytes, prim.Sha256, payload.ActiveDocument, dict);
     }
 
-    internal DataFolderChangeResult PrepareTargetForMigrationUnitTest(string currentRoot, string selectedRoot)
-    {
-        if (string.IsNullOrWhiteSpace(selectedRoot))
-        {
-            throw new ArgumentException("Selected data folder path cannot be empty or whitespace.", nameof(selectedRoot));
-        }
-
-        string cleanTarget = PathIdentity.NormalizeForComparison(selectedRoot.Trim());
-        string cleanCurrent = PathIdentity.NormalizeForComparison((currentRoot ?? string.Empty).Trim());
-
-        if (PathIdentity.Equals(cleanTarget, cleanCurrent))
-        {
-            return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: false, Copied: false);
-        }
-
-        DataRootTopologyValidator.ValidateDisjointOrSame(cleanCurrent, cleanTarget, _defaultBootstrapRoot, _pathResolver);
-
-        if (new StrictPathAuthority().Probe(cleanTarget).Kind == StrictPathKind.File)
-        {
-            throw new ArgumentException($"Selected path is a file, not a directory: {cleanTarget}", nameof(selectedRoot));
-        }
-
-        TargetInspection inspection = InspectTarget(cleanTarget);
-
-        switch (inspection.Kind)
-        {
-            case TargetLibraryKind.ValidPrimary:
-                _capabilityValidator.ValidateWritable(
-                    cleanTarget,
-                    null,
-                    inspection.EffectiveDocument != null && inspection.EffectiveMetadataPath != null
-                        ? new ExistingLibraryCapabilityContext(inspection.Kind, inspection.EffectiveMetadataPath, null, inspection.EffectiveDocument)
-                        : null);
-                return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: true, Copied: false, Warning: inspection.Warning);
-
-            case TargetLibraryKind.RecoverableBackupOnly:
-                _capabilityValidator.ValidateWritable(
-                    cleanTarget,
-                    null,
-                    inspection.EffectiveDocument != null && inspection.EffectiveMetadataPath != null
-                        ? new ExistingLibraryCapabilityContext(inspection.Kind, null, inspection.EffectiveMetadataPath, inspection.EffectiveDocument)
-                        : null);
-                return new DataFolderChangeResult(
-                    cleanTarget,
-                    ExistingLibraryFound: true,
-                    Copied: false,
-                    Warning: inspection.Warning ?? "The selected folder contains a recoverable Prompt Helper safety backup but no primary library.json. Prompt Helper will recover it on startup; the current library will not be copied there.");
-
-            case TargetLibraryKind.CorruptPrimaryWithValidBackup:
-                throw new InvalidDataException(
-                    "The target folder contains a corrupt primary library.json and a safety backup. Start Prompt Helper on that folder to recover it before selecting it as a migration target.",
-                    inspection.Error);
-
-            case TargetLibraryKind.FutureSchema:
-                throw inspection.Error ?? new UnsupportedLibrarySchemaException(999);
-
-            case TargetLibraryKind.Unreadable:
-                throw new InvalidOperationException($"The target data folder cannot be read: '{cleanTarget}'. {inspection.Error?.Message}", inspection.Error);
-
-            case TargetLibraryKind.Unstable:
-                throw new InvalidOperationException($"The target data folder is unstable: '{cleanTarget}'. {inspection.Error?.Message}", inspection.Error);
-
-            case TargetLibraryKind.InterruptedMigration:
-                throw new InvalidOperationException($"The target data folder contains an unfinished migration attempt: '{cleanTarget}'.");
-
-            case TargetLibraryKind.OccupiedNonLibrary:
-                throw new InvalidDataException($"The target data folder is not empty and does not contain a valid library: '{cleanTarget}'. {inspection.Error?.Message}");
-
-            case TargetLibraryKind.Invalid:
-                throw inspection.Error is InvalidDataException ide
-                    ? ide
-                    : new InvalidDataException($"The target data folder contains invalid or unreadable library data: '{cleanTarget}'. {inspection.Error?.Message}", inspection.Error);
-
-            case TargetLibraryKind.Empty:
-                break;
-
-            default:
-                throw new InvalidOperationException($"Unsupported target-library state: {inspection.Kind}.");
-        }
-
-        // Empty target copy workflow
-        MigrationPayloadSnapshot snapshot = CaptureSourcePayloadSnapshot(cleanCurrent);
-        Guid attemptId = Guid.NewGuid();
-        var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
-        var manifest = MigrationManifestBuilder.BuildCopying(cleanCurrent, cleanTarget, snapshot, attemptId, probePlan);
-
-        using var tx = new MigrationTargetTransaction();
-        CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, manifest, tx);
-        _capabilityValidator.ValidateWritable(cleanTarget, tx, null, probePlan);
-        tx.Commit();
-
-        return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: false, Copied: true);
-    }
-
     internal TargetInspection InspectTarget(string targetRoot, bool isReservationActive = false)
     {
         string normalizedTarget = PathIdentity.NormalizeForComparison(targetRoot);
@@ -724,7 +630,7 @@ public sealed class DataFolderMigrationService
         }
 
         var treeValidator = new ManagedTreeTopologyValidator(_pathResolver);
-        treeValidator.ValidateManagedTree(targetRoot);
+        treeValidator.ValidateManagedTree(targetRoot, ManagedTreeValidationMode.PreCreation);
 
         EnsureDirectoryTracked(targetRoot, tx);
 

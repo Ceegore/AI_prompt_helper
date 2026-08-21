@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using PromptHelper.Infrastructure;
 
 namespace PromptHelper.Services;
@@ -6,18 +9,29 @@ namespace PromptHelper.Services;
 public sealed class PromptRepository
 {
     private readonly AppPaths _paths;
-    private readonly IAtomicTextWriter _writer;
+    private readonly IDurableAtomicFileWriter _durableWriter;
     private readonly IFileDeleter _deleter;
+
+    internal PromptRepository(
+        AppPaths paths,
+        IDurableAtomicFileWriter durableWriter,
+        IFileDeleter deleter)
+    {
+        _paths = paths;
+        _durableWriter = durableWriter;
+        _deleter = deleter;
+    }
 
     public PromptRepository(
         AppPaths paths,
         IAtomicTextWriter writer,
-        IFileDeleter deleter)
+        IFileDeleter deleter) : this(paths, new AtomicTextWriterDurableAdapter(writer), deleter)
     {
-        _paths = paths;
-        _writer = writer;
-        _deleter = deleter;
     }
+
+    internal IFileDeleter Deleter => _deleter;
+    internal IDurableAtomicFileWriter DurableWriter => _durableWriter;
+    internal AppPaths Paths => _paths;
 
     public bool Exists(Guid id)
     {
@@ -42,7 +56,20 @@ public sealed class PromptRepository
         string path = _paths.GetPromptPath(id);
         try
         {
-            return File.ReadAllText(path);
+            return StrictUtf8Text.ReadAllText(path, $"prompt body '{id}'");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new FileNotFoundException("Prompt file does not exist.", path);
+        }
+    }
+
+    public byte[] ReadBytesStrict(Guid id)
+    {
+        string path = _paths.GetPromptPath(id);
+        try
+        {
+            return File.ReadAllBytes(path);
         }
         catch (DirectoryNotFoundException)
         {
@@ -52,14 +79,20 @@ public sealed class PromptRepository
 
     public void Create(Guid id, string content)
     {
-        string path = _paths.GetPromptPath(id);
-
-        if (Exists(id))
+        if (id == Guid.Empty)
         {
-            throw new InvalidOperationException($"Prompt file already exists: {id}");
+            throw new ArgumentException("Prompt ID cannot be empty.", nameof(id));
         }
 
-        _writer.Write(path, content);
+        ArgumentNullException.ThrowIfNull(content);
+
+        string path = _paths.GetPromptPath(id);
+        byte[] bytes = StrictUtf8Text.Encode(content);
+
+        _durableWriter.CreateNewDurable(
+            path,
+            bytes,
+            DurableFileClass.PromptBody);
     }
 
     public void Update(Guid id, string content)
@@ -79,7 +112,8 @@ public sealed class PromptRepository
             throw new FileNotFoundException("Prompt file does not exist.", path);
         }
 
-        _writer.Write(path, content);
+        byte[] bytes = StrictUtf8Text.Encode(content);
+        _durableWriter.ReplaceDurable(path, bytes, DurableFileClass.PromptBody);
     }
 
     public void DeleteIfExists(Guid id)
@@ -88,6 +122,11 @@ public sealed class PromptRepository
     }
 
     public IReadOnlyList<string> EnumeratePromptFiles()
+    {
+        return EnumeratePromptFilesStrict();
+    }
+
+    public IReadOnlyList<string> EnumeratePromptFilesStrict()
     {
         try
         {

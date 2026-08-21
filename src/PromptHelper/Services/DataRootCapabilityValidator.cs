@@ -219,23 +219,17 @@ public sealed class DataRootCapabilityValidator
 
     private void ProbeLocationWithPlan(
         string root,
-        CapabilityProbeLocationPlan plan,
+        CapabilityFileProbePlan plan,
         ICreatedPathJournal? journal)
     {
-        string probeDir = Path.Combine(root, plan.DirectoryRelativePath);
-        string currentFile = Path.Combine(root, plan.CurrentFileRelativePath);
-        string replacementFile = Path.Combine(root, plan.ReplacementFileRelativePath);
+        string currentFile = Path.Combine(root, plan.CurrentRelativePath);
+        string replacementFile = Path.Combine(root, plan.ReplacementRelativePath);
 
-        bool dirCreated = false;
         bool currentCreated = false;
         bool replacementCreated = false;
 
         try
         {
-            Directory.CreateDirectory(probeDir);
-            dirCreated = true;
-            journal?.TrackCreatedDirectory(probeDir);
-
             using (Stream curStream = _fileOps.CreateNew(currentFile))
             {
                 currentCreated = true;
@@ -259,15 +253,6 @@ public sealed class DataRootCapabilityValidator
 
             _fileOps.DeleteFile(currentFile);
             currentCreated = false;
-
-            IReadOnlyList<string> entries = _fileOps.EnumerateEntries(probeDir);
-            if (entries.Count > 0)
-            {
-                throw new IOException($"Probe directory '{probeDir}' is unexpectedly non-empty after test.");
-            }
-
-            _fileOps.DeleteDirectory(probeDir);
-            dirCreated = false;
         }
         catch (Exception ex)
         {
@@ -303,25 +288,10 @@ public sealed class DataRootCapabilityValidator
                 }
             }
 
-            if (dirCreated)
-            {
-                try
-                {
-                    if (_fileOps.DirectoryExists(probeDir))
-                    {
-                        _fileOps.DeleteDirectory(probeDir);
-                    }
-                }
-                catch (Exception deleteEx)
-                {
-                    cleanupFailures.Add(new MigrationRollbackFailure(probeDir, "DeleteProbeDirectory", deleteEx.Message));
-                }
-            }
-
             if (cleanupFailures.Count > 0)
             {
                 throw new DataRootCapabilityProbeException(
-                    probeDir,
+                    root,
                     ex,
                     cleanupFailures);
             }
@@ -332,23 +302,33 @@ public sealed class DataRootCapabilityValidator
 
     private void ProbeLocation(string directory, ICreatedPathJournal? journal)
     {
-        string probeDir = Path.Combine(
-            directory,
-            $".prompthelper-write-probe-{Guid.NewGuid():N}");
+        // Clean stale probe files first
+        try
+        {
+            foreach (string file in _fileOps.EnumerateFiles(directory, ".prompthelper-capability-*.tmp"))
+            {
+                try
+                {
+                    _fileOps.DeleteFile(file);
+                }
+                catch
+                {
+                }
+            }
+        }
+        catch
+        {
+        }
 
-        string currentFile = Path.Combine(probeDir, "probe-current.txt");
-        string replacementFile = Path.Combine(probeDir, "probe-replacement.tmp");
+        string nonce = Guid.NewGuid().ToString("N");
+        string currentFile = Path.Combine(directory, $".prompthelper-capability-{nonce}-current.tmp");
+        string replacementFile = Path.Combine(directory, $".prompthelper-capability-{nonce}-replacement.tmp");
 
-        bool dirCreated = false;
         bool currentCreated = false;
         bool replacementCreated = false;
 
         try
         {
-            Directory.CreateDirectory(probeDir);
-            dirCreated = true;
-            journal?.TrackCreatedDirectory(probeDir);
-
             using (Stream curStream = _fileOps.CreateNew(currentFile))
             {
                 currentCreated = true;
@@ -368,19 +348,10 @@ public sealed class DataRootCapabilityValidator
             }
 
             _fileOps.Replace(replacementFile, currentFile, null);
-            replacementCreated = false; // Replace moved replacementFile to currentFile
+            replacementCreated = false;
 
             _fileOps.DeleteFile(currentFile);
             currentCreated = false;
-
-            IReadOnlyList<string> entries = _fileOps.EnumerateEntries(probeDir);
-            if (entries.Count > 0)
-            {
-                throw new IOException($"Probe directory '{probeDir}' is unexpectedly non-empty after test.");
-            }
-
-            _fileOps.DeleteDirectory(probeDir);
-            dirCreated = false;
         }
         catch (Exception ex)
         {
@@ -413,32 +384,6 @@ public sealed class DataRootCapabilityValidator
                 catch (Exception deleteEx)
                 {
                     cleanupFailures.Add(new MigrationRollbackFailure(replacementFile, "DeleteProbeReplacementFile", deleteEx.Message));
-                }
-            }
-
-            if (dirCreated)
-            {
-                try
-                {
-                    if (_fileOps.DirectoryExists(probeDir))
-                    {
-                        IReadOnlyList<string> remaining = _fileOps.EnumerateEntries(probeDir);
-                        if (remaining.Count == 0)
-                        {
-                            _fileOps.DeleteDirectory(probeDir);
-                        }
-                        else
-                        {
-                            cleanupFailures.Add(new MigrationRollbackFailure(
-                                probeDir,
-                                "DeleteProbeDirectoryNonEmpty",
-                                $"Directory is not empty (contains: {string.Join(", ", remaining.Select(Path.GetFileName))})"));
-                        }
-                    }
-                }
-                catch (Exception deleteEx)
-                {
-                    cleanupFailures.Add(new MigrationRollbackFailure(probeDir, "DeleteProbeDirectory", deleteEx.Message));
                 }
             }
 

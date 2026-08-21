@@ -56,17 +56,12 @@ internal static class MigrationManifestBuilder
         {
             controlArtifacts.Add(new MigrationControlArtifact
             {
-                RelativePath = probePlan.RootProbe.DirectoryRelativePath,
-                Kind = MigrationControlArtifactKind.CapabilityProbeDirectory
-            });
-            controlArtifacts.Add(new MigrationControlArtifact
-            {
-                RelativePath = probePlan.RootProbe.CurrentFileRelativePath,
+                RelativePath = probePlan.RootProbe.CurrentRelativePath,
                 Kind = MigrationControlArtifactKind.CapabilityProbeFile
             });
             controlArtifacts.Add(new MigrationControlArtifact
             {
-                RelativePath = probePlan.RootProbe.ReplacementFileRelativePath,
+                RelativePath = probePlan.RootProbe.ReplacementRelativePath,
                 Kind = MigrationControlArtifactKind.CapabilityProbeFile
             });
 
@@ -74,17 +69,12 @@ internal static class MigrationManifestBuilder
             {
                 controlArtifacts.Add(new MigrationControlArtifact
                 {
-                    RelativePath = probePlan.PromptsProbe.DirectoryRelativePath,
-                    Kind = MigrationControlArtifactKind.CapabilityProbeDirectory
-                });
-                controlArtifacts.Add(new MigrationControlArtifact
-                {
-                    RelativePath = probePlan.PromptsProbe.CurrentFileRelativePath,
+                    RelativePath = probePlan.PromptsProbe.CurrentRelativePath,
                     Kind = MigrationControlArtifactKind.CapabilityProbeFile
                 });
                 controlArtifacts.Add(new MigrationControlArtifact
                 {
-                    RelativePath = probePlan.PromptsProbe.ReplacementFileRelativePath,
+                    RelativePath = probePlan.PromptsProbe.ReplacementRelativePath,
                     Kind = MigrationControlArtifactKind.CapabilityProbeFile
                 });
             }
@@ -99,6 +89,7 @@ internal static class MigrationManifestBuilder
             SourcePhysicalRoot = sourcePhysicalRoot,
             TargetPhysicalRoot = targetPhysicalRoot,
             SourceLibrarySha256Hex = primaryArtifact.Sha256Hex,
+            SourcePayloadFingerprintSha256Hex = MigrationPayloadFingerprint.Compute(snapshot.Files),
             Phase = MigrationManifestPhase.Copying,
             Artifacts = artifacts,
             ControlArtifacts = controlArtifacts,

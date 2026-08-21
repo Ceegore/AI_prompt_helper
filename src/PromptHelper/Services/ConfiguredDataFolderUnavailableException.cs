@@ -10,5 +10,11 @@ public sealed class ConfiguredDataFolderUnavailableException : Exception
         DataFolderPath = path;
     }
 
+    public ConfiguredDataFolderUnavailableException(string path, string reason, Exception inner)
+        : base($"{reason} Configured data folder: {path}", inner)
+    {
+        DataFolderPath = path;
+    }
+
     public string DataFolderPath { get; }
 }

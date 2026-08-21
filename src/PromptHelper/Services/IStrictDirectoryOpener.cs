@@ -1,4 +1,3 @@
-
 using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
@@ -16,4 +15,6 @@ internal sealed record DirectoryOpenResult(
 internal interface IStrictDirectoryOpener
 {
     DirectoryOpenResult OpenDirectoryStrict(string path);
+
+    SafeFileHandle OpenManagedNodeLease(string path);
 }

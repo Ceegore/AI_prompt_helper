@@ -20,6 +20,8 @@ public sealed class AppPaths
 
     public string MigrationMarkerPath => Path.Combine(RootDirectory, ".prompthelper-migration.json");
 
+    public string LibraryMutationJournalPath => Path.Combine(RootDirectory, ".prompthelper-library-mutation.json");
+
     public string LibraryPath => Path.Combine(RootDirectory, "library.json");
 
     public string LibraryBackupPath => Path.Combine(RootDirectory, "library.backup.json");
@@ -29,6 +31,9 @@ public sealed class AppPaths
     public string RecoveryDirectory => Path.Combine(RootDirectory, "recovery");
 
     public string GetPromptPath(Guid id) => Path.Combine(PromptsDirectory, $"{id:N}.md");
+
+    public string GetMutationRecoveryBodyPath(Guid operationId, Guid promptId) =>
+        Path.Combine(RecoveryDirectory, $"mutation-{operationId:N}-old-{promptId:N}.md");
 
     public void EnsureRootDirectory()
     {

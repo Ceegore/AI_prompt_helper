@@ -6,7 +6,9 @@ namespace PromptHelper.Services;
 public sealed record MigrationRecoveryContext(
     string TargetPhysicalRoot,
     string? BootstrapPhysicalRoot = null,
-    string? ExpectedSourcePhysicalRoot = null)
+    string? ExpectedSourcePhysicalRoot = null,
+    string? ExpectedSourcePayloadFingerprint = null,
+    string? ExpectedSourceLibrarySha256 = null)
 {
     public bool IsExactBootstrapRoot =>
         !string.IsNullOrWhiteSpace(BootstrapPhysicalRoot) &&

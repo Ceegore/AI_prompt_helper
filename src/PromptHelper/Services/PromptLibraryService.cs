@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Security;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 
@@ -8,22 +12,63 @@ public sealed class PromptLibraryService
 {
     private readonly LibraryRepository _libraryRepo;
     private readonly PromptRepository _promptRepo;
+    private readonly PromptMutationCoordinator _mutationCoordinator;
     private readonly Func<Guid> _guidGenerator;
     private LibraryDocument _document;
+
+    internal PromptLibraryService(
+        LibraryDocument initialDocument,
+        LibraryRepository libraryRepo,
+        PromptRepository promptRepo,
+        PromptMutationCoordinator mutationCoordinator,
+        Func<Guid>? guidGenerator = null)
+    {
+        ArgumentNullException.ThrowIfNull(initialDocument);
+        _libraryRepo = libraryRepo ?? throw new ArgumentNullException(nameof(libraryRepo));
+        _promptRepo = promptRepo ?? throw new ArgumentNullException(nameof(promptRepo));
+        _mutationCoordinator = mutationCoordinator ?? throw new ArgumentNullException(nameof(mutationCoordinator));
+        _guidGenerator = guidGenerator ?? Guid.NewGuid;
+
+        LibraryValidator.Validate(initialDocument);
+        _document = LibraryDocumentCloner.Clone(initialDocument);
+    }
 
     public PromptLibraryService(
         LibraryDocument initialDocument,
         LibraryRepository libraryRepo,
         PromptRepository promptRepo,
         Func<Guid>? guidGenerator = null)
+        : this(
+            initialDocument,
+            libraryRepo,
+            promptRepo,
+            CreateDefaultCoordinator(promptRepo, libraryRepo),
+            guidGenerator)
     {
-        ArgumentNullException.ThrowIfNull(initialDocument);
-        _libraryRepo = libraryRepo ?? throw new ArgumentNullException(nameof(libraryRepo));
-        _promptRepo = promptRepo ?? throw new ArgumentNullException(nameof(promptRepo));
-        _guidGenerator = guidGenerator ?? Guid.NewGuid;
+    }
 
-        LibraryValidator.Validate(initialDocument);
-        _document = LibraryDocumentCloner.Clone(initialDocument);
+    private static PromptMutationCoordinator CreateDefaultCoordinator(
+        PromptRepository promptRepo,
+        LibraryRepository libraryRepo)
+    {
+        var paths = libraryRepo.Paths;
+        var writer = libraryRepo.DurableWriter ?? new WindowsDurableAtomicFileWriter();
+        var journalRepo = new LibraryMutationJournalRepository(paths, writer);
+        var deleter = promptRepo.Deleter is FileDeleter
+            ? (IVerifiedArtifactDeleter)new WindowsVerifiedArtifactDeleter()
+            : new FileDeleterVerifiedAdapter(promptRepo.Deleter);
+        var recovery = new LibraryMutationRecoveryService(paths, journalRepo, writer, deleter);
+        var inspector = new LibraryPackageInspector(paths);
+
+        return new PromptMutationCoordinator(
+            paths,
+            promptRepo,
+            libraryRepo,
+            inspector,
+            journalRepo,
+            recovery,
+            writer,
+            deleter);
     }
 
     public LibraryDocument CurrentDocument => LibraryDocumentCloner.Clone(_document);
@@ -184,7 +229,7 @@ public sealed class PromptLibraryService
             catch (Exception ex) when (
                 ex is IOException or
                 UnauthorizedAccessException or
-                System.Security.SecurityException)
+                SecurityException)
             {
                 loadError = ex.Message;
             }
@@ -219,25 +264,12 @@ public sealed class PromptLibraryService
         candidate.Prompts.Add(newPrompt);
         LibraryValidator.Validate(candidate);
 
-        _promptRepo.Create(newPromptId, content);
-
-        CommitResult commitResult;
-        try
-        {
-            commitResult = _libraryRepo.Commit(candidate);
-        }
-        catch
-        {
-            try
-            {
-                _promptRepo.DeleteIfExists(newPromptId);
-            }
-            catch
-            {
-                // Best effort rollback
-            }
-            throw;
-        }
+        CommitResult commitResult = _mutationCoordinator.CommitCreatePrompt(
+            _document,
+            candidate,
+            newPrompt,
+            content,
+            LibraryMutationKind.CreatePrompt);
 
         _document = candidate;
 
@@ -260,31 +292,16 @@ public sealed class PromptLibraryService
         var target = _document.Prompts.FirstOrDefault(p => p.Id == promptId)
                      ?? throw new InvalidOperationException($"Prompt does not exist in library: {promptId}");
 
-        string oldContent = _promptRepo.Read(promptId);
         var candidate = LibraryDocumentCloner.Clone(_document);
         var candidateTarget = candidate.Prompts.Single(p => p.Id == promptId);
         candidateTarget.Title = NormalizeAndValidatePromptTitle(title);
         LibraryValidator.Validate(candidate);
 
-        _promptRepo.Update(promptId, content);
-
-        CommitResult commitResult;
-        try
-        {
-            commitResult = _libraryRepo.Commit(candidate);
-        }
-        catch
-        {
-            try
-            {
-                _promptRepo.Update(promptId, oldContent);
-            }
-            catch
-            {
-                // Best effort rollback; do not hide original exception
-            }
-            throw;
-        }
+        CommitResult commitResult = _mutationCoordinator.CommitEditPrompt(
+            _document,
+            candidate,
+            promptId,
+            content);
 
         _document = candidate;
         return new OperationResult(commitResult.Warning);
@@ -307,34 +324,13 @@ public sealed class PromptLibraryService
         candidate.Prompts.Remove(target);
         LibraryValidator.Validate(candidate);
 
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        CommitResult commitResult = _mutationCoordinator.CommitDeletePrompt(
+            _document,
+            candidate,
+            promptId);
+
         _document = candidate;
-
-        string? combinedWarning = commitResult.Warning;
-
-        if (commitResult.BackupSynchronized)
-        {
-            try
-            {
-                _promptRepo.DeleteIfExists(promptId);
-            }
-            catch (Exception ex)
-            {
-                string deleteWarning = $"Prompt was removed from the library, but its file could not be deleted from disk: {ex.Message}";
-                combinedWarning = combinedWarning != null
-                    ? $"{combinedWarning}\r\n\r\n{deleteWarning}"
-                    : deleteWarning;
-            }
-        }
-        else
-        {
-            string backupWarning = "Prompt was removed from the primary library, but its safety backup could not be updated. Its .md file has been preserved to prevent potential corrupt recovery.";
-            combinedWarning = combinedWarning != null
-                ? $"{combinedWarning}\r\n\r\n{backupWarning}"
-                : backupWarning;
-        }
-
-        return new OperationResult(combinedWarning);
+        return new OperationResult(commitResult.Warning);
     }
 
     public OperationResult MovePrompt(Guid promptId, Guid? destinationCategoryId)
@@ -375,12 +371,55 @@ public sealed class PromptLibraryService
         {
             content = _promptRepo.Read(promptId);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            SecurityException)
         {
-            throw new InvalidOperationException($"Cannot duplicate prompt because its content file could not be read: {ex.Message}", ex);
+            throw new InvalidOperationException(
+                "The prompt content file could not be read for duplication.",
+                ex);
         }
 
-        return CreatePrompt(destinationCategoryId, content, target.Title);
+        var candidate = LibraryDocumentCloner.Clone(_document);
+
+        if (destinationCategoryId.HasValue && !candidate.Categories.Any(c => c.Id == destinationCategoryId.Value))
+        {
+            throw new InvalidOperationException($"Destination category does not exist: {destinationCategoryId.Value}");
+        }
+
+        var newPromptId = GenerateUniquePromptGuid(candidate);
+        long nextSortOrder = CalculateNextPromptSortOrder(candidate, destinationCategoryId, null);
+
+        var newPrompt = new PromptRecord
+        {
+            Id = newPromptId,
+            CategoryId = destinationCategoryId,
+            SortOrder = nextSortOrder,
+            Title = target.Title
+        };
+
+        candidate.Prompts.Add(newPrompt);
+        LibraryValidator.Validate(candidate);
+
+        CommitResult commitResult = _mutationCoordinator.CommitCreatePrompt(
+            _document,
+            candidate,
+            newPrompt,
+            content,
+            LibraryMutationKind.DuplicatePrompt);
+
+        _document = candidate;
+
+        var returnedPrompt = new PromptRecord
+        {
+            Id = newPrompt.Id,
+            CategoryId = newPrompt.CategoryId,
+            SortOrder = newPrompt.SortOrder,
+            Title = newPrompt.Title
+        };
+
+        return new OperationResult<PromptRecord>(returnedPrompt, commitResult.Warning);
     }
 
     #endregion

@@ -11,13 +11,14 @@ public enum MigrationManifestPhase
 
 public sealed class MigrationAttemptManifest
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Guid AttemptId { get; set; }
     public string SourcePhysicalRoot { get; set; } = string.Empty;
     public string TargetPhysicalRoot { get; set; } = string.Empty;
-    public string SourceLibrarySha256Hex { get; set; } = string.Empty;
+    public string SourceLibrarySha256Hex { get; set; } = "0000000000000000000000000000000000000000000000000000000000000000";
+    public string SourcePayloadFingerprintSha256Hex { get; set; } = "0000000000000000000000000000000000000000000000000000000000000000";
     public MigrationManifestPhase Phase { get; set; }
     public List<MigrationManifestArtifact> Artifacts { get; set; } = [];
     public List<MigrationControlArtifact> ControlArtifacts { get; set; } = [];
@@ -26,6 +27,15 @@ public sealed class MigrationAttemptManifest
 
 public sealed class MigrationTargetBaseline
 {
+    public MigrationTargetBaseline() { }
+
+    public MigrationTargetBaseline(bool targetRootExistedBefore, bool promptsDirectoryExistedBefore, bool recoveryDirectoryExistedBefore = false)
+    {
+        TargetRootExistedBefore = targetRootExistedBefore;
+        PromptsDirectoryExistedBefore = promptsDirectoryExistedBefore;
+        RecoveryDirectoryExistedBefore = recoveryDirectoryExistedBefore;
+    }
+
     public bool TargetRootExistedBefore { get; set; }
     public bool PromptsDirectoryExistedBefore { get; set; }
     public bool RecoveryDirectoryExistedBefore { get; set; }

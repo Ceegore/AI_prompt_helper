@@ -7,12 +7,19 @@ using PromptHelper.Models;
 
 namespace PromptHelper.Services;
 
+internal sealed record HealthyLibraryPackage(
+    LibraryDocument Document,
+    IReadOnlyDictionary<Guid, PromptBodySnapshot> Bodies);
+
 internal abstract record LibraryPackageState
 {
     public sealed record Healthy(
-        LibraryDocument Document,
-        IReadOnlyDictionary<Guid, PromptBodySnapshot> Bodies)
-        : LibraryPackageState;
+        HealthyLibraryPackage Package)
+        : LibraryPackageState
+    {
+        public LibraryDocument Document => Package.Document;
+        public IReadOnlyDictionary<Guid, PromptBodySnapshot> Bodies => Package.Bodies;
+    }
 
     public sealed record MetadataInvalid(Exception Error)
         : LibraryPackageState;
@@ -67,6 +74,8 @@ internal sealed class LibraryPackageInspector
             try
             {
                 bytes = File.ReadAllBytes(path);
+                // Strict UTF-8 validation
+                StrictUtf8Text.Decode(bytes, $"prompt body '{prompt.Id}'");
             }
             catch (FileNotFoundException)
             {
@@ -85,7 +94,8 @@ internal sealed class LibraryPackageInspector
             catch (Exception ex) when (
                 ex is IOException or
                 UnauthorizedAccessException or
-                SecurityException)
+                SecurityException or
+                InvalidDataException)
             {
                 return new LibraryPackageState.BodyUnreadable(
                     LibraryDocumentCloner.Clone(document),
@@ -101,8 +111,10 @@ internal sealed class LibraryPackageInspector
                     SHA256.HashData(bytes));
         }
 
-        return new LibraryPackageState.Healthy(
+        var healthyPackage = new HealthyLibraryPackage(
             LibraryDocumentCloner.Clone(document),
             bodies);
+
+        return new LibraryPackageState.Healthy(healthyPackage);
     }
 }

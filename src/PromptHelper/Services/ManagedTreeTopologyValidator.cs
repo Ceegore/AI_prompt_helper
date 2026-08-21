@@ -3,58 +3,108 @@ using System.IO;
 
 namespace PromptHelper.Services;
 
+internal enum ManagedTreeValidationMode
+{
+    PreCreation,
+    RuntimeRequired
+}
+
 internal sealed class ManagedTreeTopologyValidator
 {
     private readonly IPhysicalPathResolver _resolver;
-    private readonly StrictPathAuthority _strictPathAuthority = new();
+    private readonly StrictPathAuthority _paths;
+    private readonly IDirectoryCaseSensitivityInspector _caseInspector;
 
-    public ManagedTreeTopologyValidator(IPhysicalPathResolver? resolver = null)
+    public ManagedTreeTopologyValidator(
+        IPhysicalPathResolver? resolver = null,
+        StrictPathAuthority? paths = null,
+        IDirectoryCaseSensitivityInspector? caseInspector = null)
     {
         _resolver = resolver ?? new WindowsPhysicalPathResolver();
+        _paths = paths ?? new StrictPathAuthority();
+        _caseInspector = caseInspector ?? new WindowsDirectoryCaseSensitivityInspector();
     }
 
-    public void ValidateManagedTree(string physicalRoot)
+    public void ValidateManagedTree(
+        string physicalRoot,
+        ManagedTreeValidationMode mode = ManagedTreeValidationMode.RuntimeRequired)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
 
         string root = PathIdentity.NormalizeForComparison(physicalRoot);
-        ValidateManagedDirectory(root, "prompts");
-        ValidateManagedDirectory(root, "recovery");
+        ValidateChild(root, "prompts", ManagedTreeValidationMode.PreCreation);
+        ValidateChild(root, "recovery", ManagedTreeValidationMode.PreCreation);
+
+        if (mode == ManagedTreeValidationMode.RuntimeRequired)
+        {
+            ValidateChild(root, "prompts", ManagedTreeValidationMode.RuntimeRequired);
+            ValidateChild(root, "recovery", ManagedTreeValidationMode.RuntimeRequired);
+        }
     }
 
-    public void ValidateManagedDirectory(string physicalRoot, string childName)
+    public void ValidateManagedDirectory(
+        string physicalRoot,
+        string childName,
+        ManagedTreeValidationMode mode = ManagedTreeValidationMode.RuntimeRequired)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(childName);
 
+        string root = PathIdentity.NormalizeForComparison(physicalRoot);
+        ValidateChild(root, childName, mode);
+    }
+
+    private void ValidateChild(
+        string physicalRoot,
+        string childName,
+        ManagedTreeValidationMode mode)
+    {
         string child = Path.Combine(physicalRoot, childName);
-        StrictPathProbe probe = _strictPathAuthority.Probe(child);
-        
-        if (probe.Kind != StrictPathKind.Directory)
+
+        StrictPathProbe probe = _paths.Probe(child);
+
+        switch (probe.Kind)
         {
-            return;
+            case StrictPathKind.Missing:
+                if (mode == ManagedTreeValidationMode.PreCreation)
+                {
+                    return;
+                }
+
+                throw new DirectoryNotFoundException(
+                    $"Required managed directory is missing: '{child}'.");
+
+            case StrictPathKind.File:
+                throw new InvalidDataException(
+                    $"Managed path must be a directory: '{child}'.");
+
+            case StrictPathKind.Directory:
+                break;
+
+            default:
+                throw new InvalidOperationException(
+                    $"Unexpected path state: {probe.Kind}.");
         }
 
-        if (probe.Attributes.HasValue && (probe.Attributes.Value & FileAttributes.ReparsePoint) != 0)
+        if ((probe.Attributes!.Value & FileAttributes.ReparsePoint) != 0)
         {
             throw new InvalidDataException(
-                $"Prompt Helper managed directory '{child}' is a reparse point. " +
-                "Managed data directories may not be junctions or symbolic links.");
+                $"Managed directory must not be a reparse point: '{child}'.");
         }
 
-        string actual = DataRootTopologyValidator.ResolvePhysicalOrThrow(
-            _resolver,
-            child,
-            $"managed '{childName}' directory");
+        string physicalChild = _resolver.ResolveWithNearestExistingAncestor(child);
 
-        string expected = PathIdentity.NormalizeForComparison(
-            Path.Combine(physicalRoot, childName));
-
-        if (!PathIdentity.Equals(actual, expected))
+        if (!PathIdentity.Equals(physicalChild, child))
         {
             throw new InvalidDataException(
-                $"Managed directory '{child}' resolves outside its expected " +
-                $"physical location. Expected '{expected}', resolved '{actual}'.");
+                $"Managed directory resolves to unexpected physical path. " +
+                $"Expected='{child}', Actual='{physicalChild}'.");
+        }
+
+        if (_caseInspector.Inspect(child) == DirectoryCaseSensitivityState.CaseSensitive)
+        {
+            throw new InvalidOperationException(
+                $"Managed directory is case-sensitive: '{child}'.");
         }
     }
 }

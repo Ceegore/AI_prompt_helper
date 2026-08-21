@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
@@ -19,10 +18,10 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
     private const uint DELETE = 0x00010000;
     private const uint FILE_SHARE_NONE = 0x00000000;
     private const uint OPEN_EXISTING = 3;
-    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+    private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
     private const int FileDispositionInfo = 4;
-    private const uint FILE_NAME_NORMALIZED = 0x0;
-    private const uint VOLUME_NAME_DOS = 0x0;
+    private const int FileAttributeTagInfo = 9;
     private const int ERROR_FILE_NOT_FOUND = 2;
     private const int ERROR_PATH_NOT_FOUND = 3;
 
@@ -31,6 +30,13 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
     {
         [MarshalAs(UnmanagedType.U1)]
         public bool DeleteFile;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILE_ATTRIBUTE_TAG_INFO
+    {
+        public uint FileAttributes;
+        public uint ReparseTag;
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -51,12 +57,13 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
         ref FILE_DISPOSITION_INFO lpFileInformation,
         uint dwBufferSize);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern uint GetFinalPathNameByHandleW(
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
         SafeFileHandle hFile,
-        [Out] StringBuilder lpszFilePath,
-        uint cchFilePath,
-        uint dwFlags);
+        int fileInformationClass,
+        out FILE_ATTRIBUTE_TAG_INFO fileInformation,
+        uint bufferSize);
 
     public void VerifyAndDelete(string physicalRoot, string path, long expectedLength, string expectedSha256Hex)
     {
@@ -70,7 +77,7 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
             FILE_SHARE_NONE,
             IntPtr.Zero,
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT,
             IntPtr.Zero);
 
         if (handle.IsInvalid)
@@ -87,30 +94,25 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
                 new Win32Exception(error));
         }
 
-        // Verify physical containment within physicalRoot
-        var pathBuffer = new StringBuilder(1024);
-        uint length = GetFinalPathNameByHandleW(handle, pathBuffer, (uint)pathBuffer.Capacity, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-        if (length == 0)
+        if (!GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfo,
+                out FILE_ATTRIBUTE_TAG_INFO tagInfo,
+                (uint)Marshal.SizeOf<FILE_ATTRIBUTE_TAG_INFO>()))
         {
             throw new IOException(
-                $"Unable to query final path for verified deletion handle '{path}'.",
+                $"Unable to inspect opened artifact attributes for '{path}'.",
                 new Win32Exception(Marshal.GetLastWin32Error()));
         }
 
-        string finalHandlePath = pathBuffer.ToString();
-        if (finalHandlePath.StartsWith(@"\\?\", StringComparison.Ordinal))
-        {
-            finalHandlePath = finalHandlePath.Substring(4);
-        }
-
-        string normalizedHandlePath = PathIdentity.NormalizeForComparison(finalHandlePath);
-        string normalizedPhysicalRoot = PathIdentity.NormalizeForComparison(physicalRoot);
-
-        if (!normalizedHandlePath.StartsWith(normalizedPhysicalRoot, StringComparison.OrdinalIgnoreCase))
+        if ((tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
         {
             throw new InvalidDataException(
-                $"Artifact '{path}' resolved to physical path '{normalizedHandlePath}' which escapes bound root '{normalizedPhysicalRoot}'. Verified deletion aborted.");
+                $"Recovery refuses to delete reparse artifact '{path}'.");
         }
+
+        string finalPath = WindowsFinalPathHelper.GetNormalizedDosPath(handle);
+        WindowsFinalPathHelper.AssertStrictDescendantFile(physicalRoot, finalPath);
 
         using var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: false);
         long currentLength = stream.Length;

@@ -11,6 +11,7 @@ namespace PromptHelper;
 public partial class App : Application
 {
     private AppInstanceLock? _appLock;
+    private ManagedDataRootSessionLease? _managedTreeLease;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -20,8 +21,9 @@ public partial class App : Application
 
         try
         {
-            var writer = new AtomicTextWriter();
-            var settingsRepo = new AppSettingsRepository(writer);
+            var durableWriter = new WindowsDurableAtomicFileWriter();
+            var verifiedDeleter = new WindowsVerifiedArtifactDeleter();
+            var settingsRepo = new AppSettingsRepository();
             var settingsResult = settingsRepo.LoadOrRecover();
             var settings = settingsResult.Settings;
 
@@ -61,7 +63,7 @@ public partial class App : Application
             }
 
             var tree = new ManagedTreeTopologyValidator(physicalResolver);
-            tree.ValidateManagedTree(runtime.ActivePhysicalRoot);
+            tree.ValidateManagedTree(runtime.ActivePhysicalRoot, ManagedTreeValidationMode.PreCreation);
 
             var recoveryService = new MigrationRecoveryService(treeValidator: tree);
             var recoveryContext = new MigrationRecoveryContext(
@@ -84,12 +86,28 @@ public partial class App : Application
             }
 
             paths.EnsureDataDirectories();
-            tree.ValidateManagedTree(runtime.ActivePhysicalRoot);
+            tree.ValidateManagedTree(runtime.ActivePhysicalRoot, ManagedTreeValidationMode.RuntimeRequired);
+
+            _managedTreeLease = ManagedDataRootSessionLease.Acquire(paths.RootDirectory);
+
+            var journalRepo = new LibraryMutationJournalRepository(paths, durableWriter);
+            var mutationRecovery = new LibraryMutationRecoveryService(paths, journalRepo, durableWriter, verifiedDeleter);
+            var mutResult = mutationRecovery.RecoverIfPresent();
+            if (!mutResult.Success)
+            {
+                MessageBox.Show(
+                    $"Failed to recover incomplete library mutation: {mutResult.ErrorMessage}",
+                    "Library Mutation Recovery Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                Shutdown();
+                return;
+            }
 
             var deleter = new FileDeleter();
-            var libraryRepo = new LibraryRepository(paths, writer);
-            var promptRepo = new PromptRepository(paths, writer, deleter);
-            var startupService = new LibraryStartupService(paths, libraryRepo, promptRepo, deleter, writer);
+            var libraryRepo = new LibraryRepository(paths, durableWriter);
+            var promptRepo = new PromptRepository(paths, durableWriter, deleter);
+            var startupService = new LibraryStartupService(paths, libraryRepo, promptRepo, deleter, durableWriter);
 
             StartupResult startupResult;
             try
@@ -107,7 +125,30 @@ public partial class App : Application
                 return;
             }
 
-            var libraryService = new PromptLibraryService(startupResult.Document, libraryRepo, promptRepo);
+            // Reconcile unreferenced prompt body orphans if backup authority is current
+            try
+            {
+                var backupDoc = libraryRepo.ReadBackup();
+                var orphanReconciler = new PromptOrphanReconciler(paths, promptRepo, journalRepo);
+                orphanReconciler.Reconcile(new OrphanReconciliationAuthority(startupResult.Document, backupDoc));
+            }
+            catch
+            {
+                // Defer orphan cleanup if backup is missing, corrupt, or future schema
+            }
+
+            var inspector = new LibraryPackageInspector(paths);
+            var coordinator = new PromptMutationCoordinator(
+                paths,
+                promptRepo,
+                libraryRepo,
+                inspector,
+                journalRepo,
+                mutationRecovery,
+                durableWriter,
+                verifiedDeleter);
+
+            var libraryService = new PromptLibraryService(startupResult.Document, libraryRepo, promptRepo, coordinator);
             var clipboardService = new ClipboardService();
             var migrationService = new DataFolderMigrationService();
             var mainViewModel = new MainViewModel(libraryService, promptRepo, paths.RootDirectory);
@@ -184,7 +225,12 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _managedTreeLease?.Dispose();
+        _managedTreeLease = null;
+
         _appLock?.Dispose();
+        _appLock = null;
+
         base.OnExit(e);
     }
 }

@@ -66,7 +66,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         _fileOps = fileOps ?? new DefaultMigrationFileOps();
         _treeValidator = new ManagedTreeTopologyValidator(_physicalPathResolver);
         _recoveryService = new MigrationRecoveryService(_manifestRepo, _fileOps, treeValidator: _treeValidator);
-        _readyGate = new MigrationReadyGate(tree: _treeValidator);
+        _readyGate = new MigrationReadyGate(tree: _treeValidator, migrationService: _migrationService);
     }
 
     public DataFolderTransitionResult RequestTransition(string candidateRoot)
@@ -103,7 +103,14 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
 
         var runtimeContext = DataRootRuntimeContext.Create(activePhysicalRoot, bootstrapRoot, _physicalPathResolver);
 
-        _treeValidator.ValidateManagedTree(activePhysicalRoot);
+        try
+        {
+            _treeValidator.ValidateManagedTree(activePhysicalRoot);
+        }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException or InvalidDataException)
+        {
+            throw new InvalidOperationException($"Active data folder is invalid: {ex.Message}", ex);
+        }
 
         // 3. Initial topology check & target physical binding
         DataRootRelationship relationship = _rootPolicy.ValidateTransition(
@@ -238,7 +245,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         try
         {
             AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
-            _treeValidator.ValidateManagedTree(bound.PhysicalRoot);
+            _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
         }
         catch (Exception ex)
         {
@@ -296,7 +303,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         try
         {
             AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
-            _treeValidator.ValidateManagedTree(bound.PhysicalRoot);
+            _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
         }
         catch (Exception ex)
         {
@@ -374,15 +381,6 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         // 1. Capture snapshot of source FIRST before any target mutation
         MigrationPayloadSnapshot snapshot = _migrationService.CaptureSourcePayloadSnapshot(runtime.ActivePhysicalRoot);
 
-        Guid attemptId = Guid.NewGuid();
-        var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
-        var manifest = MigrationManifestBuilder.BuildCopying(
-            runtime.ActivePhysicalRoot,
-            bound.PhysicalRoot,
-            snapshot,
-            attemptId,
-            probePlan);
-
         // 2. Acquire target lock reservation ON BOUND PHYSICAL TARGET
         using var reservation = TargetRootReservation.TryAcquire(bound.PhysicalRoot);
         if (reservation is null)
@@ -409,10 +407,13 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         // 4. Resolve interrupted state if needed, then target must be empty
         if (isInterruptedRecovery)
         {
+            var primaryFile = snapshot.Files.FirstOrDefault(f => f.Role == MigrationPayloadRole.PrimaryMetadata);
             var recoveryContext = new MigrationRecoveryContext(
                 bound.PhysicalRoot,
                 runtime.BootstrapPhysicalRoot,
-                ExpectedSourcePhysicalRoot: runtime.ActivePhysicalRoot);
+                ExpectedSourcePhysicalRoot: runtime.ActivePhysicalRoot,
+                ExpectedSourcePayloadFingerprint: MigrationPayloadFingerprint.Compute(snapshot.Files),
+                ExpectedSourceLibrarySha256: primaryFile != null ? Convert.ToHexStringLower(primaryFile.Sha256) : null);
 
             RecoveryResult recoveryResult = _recoveryService.RecoverForRetry(recoveryContext);
             if (!recoveryResult.Success)
@@ -427,7 +428,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             }
         }
 
-        _treeValidator.ValidateManagedTree(bound.PhysicalRoot);
+        _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
 
         var targetInspection = _migrationService.InspectTarget(bound.PhysicalRoot, isReservationActive: true);
         if (targetInspection.Kind != DataFolderMigrationService.TargetLibraryKind.Empty)
@@ -442,7 +443,17 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw ex;
         }
 
-        // 5. Create durable Copying manifest directly at final path
+        // 5. Capture FRESH target baseline NOW and allocate new AttemptId
+        Guid attemptId = Guid.NewGuid();
+        var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
+        var manifest = MigrationManifestBuilder.BuildCopying(
+            runtime.ActivePhysicalRoot,
+            bound.PhysicalRoot,
+            snapshot,
+            attemptId,
+            probePlan);
+
+        // 6. Create durable Copying manifest directly at final path
         string markerPath = Path.Combine(bound.PhysicalRoot, ".prompthelper-migration.json");
 
         try
@@ -459,7 +470,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw;
         }
 
-        // 6. Perform migration under target transaction
+        // 7. Perform migration under target transaction
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction();
         bool settingsCommitted = false;
         CapabilityValidationResult? capResult = null;
@@ -467,8 +478,6 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
 
         try
         {
-            using ManagedDataRootSessionLease lease = ManagedDataRootSessionLease.Acquire(bound.PhysicalRoot);
-
             _migrationService.CopySnapshotToTarget(
                 runtime.ActivePhysicalRoot,
                 bound.PhysicalRoot,
@@ -483,17 +492,21 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                 probePlan);
 
             // Assert ready gate before phase change
-            _readyGate.AssertReady(bound.PhysicalRoot, manifest, snapshot);
+            _readyGate.AssertReady(
+                runtime.ActivePhysicalRoot,
+                bound.PhysicalRoot,
+                manifest,
+                snapshot);
 
             // Update manifest to ReadyToCommit via write-through staging
             manifest.Phase = MigrationManifestPhase.ReadyToCommit;
             _manifestRepo.WriteReadyManifestDurable(markerPath, manifest);
 
-            // 7. PHYSICAL REVALIDATION #2 immediately before settings commit
+            // 8. PHYSICAL REVALIDATION #2 immediately before settings commit
             AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
-            _treeValidator.ValidateManagedTree(bound.PhysicalRoot);
+            _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
 
-            // 8. Commit settings with precondition token
+            // 9. Commit settings with precondition token
             var newSettings = new AppSettings
             {
                 SchemaVersion = AppSettings.CurrentSchemaVersion,
