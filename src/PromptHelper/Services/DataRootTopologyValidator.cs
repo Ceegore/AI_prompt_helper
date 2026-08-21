@@ -6,6 +6,8 @@ namespace PromptHelper.Services;
 
 public static class DataRootTopologyValidator
 {
+    private static readonly StrictPathAuthority _strictPathAuthority = new();
+
     public static bool IsStrictDescendant(string candidate, string parent)
     {
         return PathIdentity.IsStrictDescendant(candidate, parent);
@@ -15,11 +17,40 @@ public static class DataRootTopologyValidator
     {
         string full = Path.GetFullPath(path);
         string? current = full;
-        while (!string.IsNullOrEmpty(current) && !Directory.Exists(current))
+        var strictAuthority = new StrictPathAuthority();
+
+        while (!string.IsNullOrEmpty(current))
         {
-            current = Path.GetDirectoryName(current);
+            try
+            {
+                StrictPathProbe probe = strictAuthority.Probe(current);
+
+                if (probe.Kind == StrictPathKind.Directory)
+                {
+                    return current;
+                }
+
+                if (probe.Kind == StrictPathKind.File)
+                {
+                    throw new InvalidDataException($"Path component is a file: '{current}'.");
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Not accessible, continue to parent
+            }
+
+            string? parent = Path.GetDirectoryName(current);
+
+            if (string.IsNullOrEmpty(parent) || PathIdentity.Equals(parent, current))
+            {
+                return Path.GetFullPath(path);
+            }
+
+            current = parent;
         }
-        return string.IsNullOrEmpty(current) ? full : current;
+
+        return full;
     }
 
     public static DataRootRelationship ValidateTransition(
@@ -43,7 +74,7 @@ public static class DataRootTopologyValidator
         string nearestTargetDir = FindNearestExistingDirectory(lexicalTarget);
         try
         {
-            if (caseSensitivityInspector.IsCaseSensitive(nearestTargetDir))
+            if (caseSensitivityInspector.Inspect(nearestTargetDir) == DirectoryCaseSensitivityState.CaseSensitive)
             {
                 throw new InvalidOperationException(
                     $"Case-sensitive directory '{nearestTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
@@ -63,7 +94,7 @@ public static class DataRootTopologyValidator
         string nearestPhysicalTargetDir = FindNearestExistingDirectory(physicalTarget);
         try
         {
-            if (caseSensitivityInspector.IsCaseSensitive(nearestPhysicalTargetDir))
+            if (caseSensitivityInspector.Inspect(nearestPhysicalTargetDir) == DirectoryCaseSensitivityState.CaseSensitive)
             {
                 throw new InvalidOperationException(
                     $"Case-sensitive directory '{nearestPhysicalTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");

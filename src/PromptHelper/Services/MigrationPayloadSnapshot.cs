@@ -4,7 +4,7 @@ using PromptHelper.Models;
 
 namespace PromptHelper.Services;
 
-internal enum MigrationPayloadRole
+public enum MigrationPayloadRole
 {
     PrimaryMetadata,
     SafetyBackup,

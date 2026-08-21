@@ -97,11 +97,6 @@ public sealed class WindowsDirectoryCaseSensitivityInspector : IDirectoryCaseSen
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(existingDirectory);
 
-        if (!Directory.Exists(existingDirectory))
-        {
-            throw new DirectoryNotFoundException($"Directory '{existingDirectory}' does not exist.");
-        }
-
         using SafeFileHandle handle = _nativeApi.OpenDirectoryHandle(existingDirectory);
 
         if (handle.IsInvalid)
@@ -118,15 +113,5 @@ public sealed class WindowsDirectoryCaseSensitivityInspector : IDirectoryCaseSen
         return (flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) != 0
             ? DirectoryCaseSensitivityState.CaseSensitive
             : DirectoryCaseSensitivityState.CaseInsensitive;
-    }
-
-    public bool IsCaseSensitive(string existingDirectory)
-    {
-        if (string.IsNullOrWhiteSpace(existingDirectory) || !Directory.Exists(existingDirectory))
-        {
-            return false;
-        }
-
-        return Inspect(existingDirectory) == DirectoryCaseSensitivityState.CaseSensitive;
     }
 }

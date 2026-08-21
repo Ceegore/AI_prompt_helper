@@ -12,33 +12,42 @@ public sealed class WindowsPhysicalPathResolver : IPhysicalPathResolver
 {
     private const uint FileFlagBackupSemantics = 0x02000000;
 
+    private readonly StrictPathAuthority _strictPathAuthority = new();
+
     public string ResolveWithNearestExistingAncestor(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         string full = Path.GetFullPath(path);
-
-        if (Directory.Exists(full))
-        {
-            return ResolveExistingDirectory(full);
-        }
-
         var remainder = new Stack<string>();
-        DirectoryInfo? current = new(full);
+        string current = full;
 
-        while (current is not null && !current.Exists)
+        while (true)
         {
-            remainder.Push(current.Name);
-            current = current.Parent;
+            StrictPathProbe probe = _strictPathAuthority.Probe(current);
+
+            if (probe.Kind == StrictPathKind.Directory)
+            {
+                break;
+            }
+
+            if (probe.Kind == StrictPathKind.File)
+            {
+                throw new InvalidDataException($"Path component is a file: '{current}'.");
+            }
+
+            string? parent = Path.GetDirectoryName(current);
+
+            if (string.IsNullOrEmpty(parent) || PathIdentity.Equals(parent, current))
+            {
+                throw new DirectoryNotFoundException($"No accessible existing ancestor exists for '{full}'.");
+            }
+
+            remainder.Push(Path.GetFileName(current));
+            current = parent;
         }
 
-        if (current is null)
-        {
-            throw new DirectoryNotFoundException(
-                $"Could not find an existing ancestor for '{full}'.");
-        }
-
-        string resolved = ResolveExistingDirectory(current.FullName);
+        string resolved = ResolveExistingDirectory(current);
 
         while (remainder.Count > 0)
         {

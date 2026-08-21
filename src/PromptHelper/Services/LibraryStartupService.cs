@@ -38,6 +38,8 @@ public sealed class LibraryStartupService
     {
         _paths.EnsureDataDirectories();
 
+        var inspector = new LibraryPackageInspector(_paths);
+
         // 1. Inspect Primary
         MetadataReadResult primaryResult = ReadMetadataState(_paths.LibraryPath);
         if (primaryResult is MetadataReadResult.FutureSchema primaryFuture)
@@ -50,17 +52,23 @@ public sealed class LibraryStartupService
             throw new IOException($"The library metadata could not be read: {primaryUnreadable.Error.Message}", primaryUnreadable.Error);
         }
 
-        // Valid primary always wins immediately
+        LibraryPackageState? primaryPackage = null;
         if (primaryResult is MetadataReadResult.Valid primaryValid)
         {
-            var syncResult = _libraryRepo.SynchronizeBackup(primaryValid.Document);
+            primaryPackage = inspector.Inspect(primaryValid.Document);
+        }
+
+        // Valid primary always wins immediately IF HEALTHY
+        if (primaryPackage is LibraryPackageState.Healthy primaryHealthy)
+        {
+            var syncResult = _libraryRepo.SynchronizeBackup(primaryHealthy.Document);
             string? backupWarning = syncResult.BackupSynchronized ? null : syncResult.Warning;
 
             TryRemoveStaleMarker();
-            return new StartupResult(primaryValid.Document, false, backupWarning);
+            return new StartupResult(primaryHealthy.Document, false, backupWarning);
         }
 
-        // 2. Inspect Backup only when primary is corrupt or missing
+        // 2. Inspect Backup
         MetadataReadResult backupResult = ReadMetadataState(_paths.LibraryBackupPath);
 
         if (backupResult is MetadataReadResult.FutureSchema backupFuture)
@@ -75,13 +83,46 @@ public sealed class LibraryStartupService
                 unreadableBackupRecovery.Error);
         }
 
+        LibraryPackageState? backupPackage = null;
+        if (backupResult is MetadataReadResult.Valid backupValid)
+        {
+            backupPackage = inspector.Inspect(backupValid.Document);
+        }
+
+        // Primary is metadata current, package incomplete
+        if (primaryPackage != null && primaryPackage is not LibraryPackageState.Healthy)
+        {
+            if (backupPackage is LibraryPackageState.Healthy backupHealthy1)
+            {
+                // recover metadata from complete backup; warn
+                if (primaryResult is MetadataReadResult.Valid pv)
+                {
+                    _libraryRepo.TryCreateIncompleteRecoveryCopy(pv.Document);
+                }
+                var commitResult = _libraryRepo.Commit(backupHealthy1.Document);
+                TryRemoveStaleMarker();
+
+                string warning = RecoveryWarning;
+                if (!commitResult.BackupSynchronized && commitResult.Warning != null)
+                {
+                    warning += "\r\n\r\n" + commitResult.Warning;
+                }
+                return new StartupResult(backupHealthy1.Document, true, warning);
+            }
+            else
+            {
+                // backup incomplete/missing/corrupt
+                throw new InvalidDataException("Primary library is incomplete and no complete backup is available.");
+            }
+        }
+
         // Primary is Corrupt
         if (primaryResult is MetadataReadResult.Corrupt primaryCorrupt)
         {
-            if (backupResult is MetadataReadResult.Valid backupValid)
+            if (backupPackage is LibraryPackageState.Healthy backupHealthy2)
             {
                 _libraryRepo.TryCreateCorruptRecoveryCopy(primaryCorrupt.RawContent);
-                var commitResult = _libraryRepo.Commit(backupValid.Document);
+                var commitResult = _libraryRepo.Commit(backupHealthy2.Document);
                 TryRemoveStaleMarker();
 
                 string warning = RecoveryWarning;
@@ -90,34 +131,44 @@ public sealed class LibraryStartupService
                     warning += "\r\n\r\n" + commitResult.Warning;
                 }
 
-                return new StartupResult(backupValid.Document, true, warning);
+                return new StartupResult(backupHealthy2.Document, true, warning);
             }
 
-            throw new InvalidDataException("Primary library metadata is corrupt and no valid backup is available.");
+            throw new InvalidDataException("Primary library metadata is corrupt and no complete backup is available.");
         }
 
         // Primary is Missing
-        if (backupResult is MetadataReadResult.Valid backupValidFromMissing)
+        if (primaryResult is MetadataReadResult.Missing)
         {
-            var commitResult = _libraryRepo.Commit(backupValidFromMissing.Document);
-            TryRemoveStaleMarker();
-
-            string warning = RecoveryWarning;
-            if (!commitResult.BackupSynchronized && commitResult.Warning != null)
+            if (backupPackage is LibraryPackageState.Healthy backupHealthy3)
             {
-                warning += "\r\n\r\n" + commitResult.Warning;
+                var commitResult = _libraryRepo.Commit(backupHealthy3.Document);
+                TryRemoveStaleMarker();
+
+                string warning = RecoveryWarning;
+                if (!commitResult.BackupSynchronized && commitResult.Warning != null)
+                {
+                    warning += "\r\n\r\n" + commitResult.Warning;
+                }
+
+                return new StartupResult(backupHealthy3.Document, true, warning);
             }
 
-            return new StartupResult(backupValidFromMissing.Document, true, warning);
-        }
+            if (backupResult is MetadataReadResult.Corrupt)
+            {
+                throw new InvalidDataException("Primary metadata is missing and backup metadata is corrupt.");
+            }
+            
+            if (backupPackage != null && backupPackage is not LibraryPackageState.Healthy)
+            {
+                throw new InvalidDataException("Primary metadata is missing and backup library is incomplete.");
+            }
 
-        if (backupResult is MetadataReadResult.Corrupt)
-        {
-            throw new InvalidDataException("Primary metadata is missing and backup metadata is corrupt.");
+            // Both primary and backup are missing -> First run or Interrupted initialization
+            return HandleFirstRunOrInterruptedInit();
         }
-
-        // Both primary and backup are missing -> First run or Interrupted initialization
-        return HandleFirstRunOrInterruptedInit();
+        
+        throw new InvalidOperationException("Unexpected startup state.");
     }
 
     private StartupResult HandleFirstRunOrInterruptedInit()

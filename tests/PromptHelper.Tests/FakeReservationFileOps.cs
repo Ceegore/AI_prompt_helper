@@ -14,10 +14,13 @@ internal sealed class FakeReservationFileOps : IReservationFileOps
     public Func<string, IReadOnlyList<string>>? OnEnumerateEntries { get; set; }
     public Action<string>? OnDeleteFile { get; set; }
     public Action<string>? OnDeleteDirectory { get; set; }
-    public Action<string>? OnCreateDirectory { get; set; }
+    public Func<string, DirectoryCreateOutcome>? OnTryCreateDirectoryOwned { get; set; }
+
+    public Func<string, StrictPathProbe>? OnProbePath { get; set; }
 
     public bool FileExists(string path) => OnFileExists?.Invoke(path) ?? _inner.FileExists(path);
     public bool DirectoryExists(string path) => OnDirectoryExists?.Invoke(path) ?? _inner.DirectoryExists(path);
+    public StrictPathProbe ProbePath(string path) => OnProbePath?.Invoke(path) ?? new StrictPathAuthority().Probe(path);
     public IReadOnlyList<string> EnumerateEntries(string path) => OnEnumerateEntries?.Invoke(path) ?? _inner.EnumerateEntries(path);
 
     public void DeleteFile(string path)
@@ -40,13 +43,12 @@ internal sealed class FakeReservationFileOps : IReservationFileOps
         _inner.DeleteDirectory(path);
     }
 
-    public void CreateDirectory(string path)
+    public DirectoryCreateOutcome TryCreateDirectoryOwned(string path)
     {
-        if (OnCreateDirectory != null)
+        if (OnTryCreateDirectoryOwned != null)
         {
-            OnCreateDirectory(path);
-            return;
+            return OnTryCreateDirectoryOwned(path);
         }
-        _inner.CreateDirectory(path);
+        return _inner.TryCreateDirectoryOwned(path);
     }
 }

@@ -40,14 +40,14 @@ public sealed class DataFolderTransitionCoordinatorTests
         string target = Path.Combine(targetParent.Root, "NewTarget");
         string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
 
-        var faultWriter = new FaultInjectingAtomicTextWriter(new AtomicTextWriter())
+        var faultDurable = new FakeDurableSettingsFileWriter
         {
-            ShouldFail = (path, _) => path.Equals(settingsPath, StringComparison.OrdinalIgnoreCase)
+            OnWriteDurable = (path, _) => throw new IOException("Disk error during durable settings write")
         };
 
         var settingsRepo = new AppSettingsRepository(
-            writer: faultWriter,
-            settingsPathOverride: settingsPath);
+            settingsPathOverride: settingsPath,
+            durableWriter: faultDurable);
 
         // Pre-seed valid settings pointing at source
         File.WriteAllText(settingsPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{source.Root.Replace("\\", "\\\\")}\"}}");
@@ -326,14 +326,14 @@ public sealed class DataFolderTransitionCoordinatorTests
         string target = Path.Combine(targetParent.Root, "CreatedTargetRoot");
         string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
 
-        var faultWriter = new FaultInjectingAtomicTextWriter(new AtomicTextWriter())
+        var faultDurable = new FakeDurableSettingsFileWriter
         {
-            ShouldFail = (path, _) => path.Equals(settingsPath, StringComparison.OrdinalIgnoreCase)
+            OnWriteDurable = (path, _) => throw new IOException("Disk error during durable settings write")
         };
 
         var settingsRepo = new AppSettingsRepository(
-            writer: faultWriter,
-            settingsPathOverride: settingsPath);
+            settingsPathOverride: settingsPath,
+            durableWriter: faultDurable);
 
         File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
 
@@ -363,14 +363,14 @@ public sealed class DataFolderTransitionCoordinatorTests
 
         string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
 
-        var faultWriter = new FaultInjectingAtomicTextWriter(new AtomicTextWriter())
+        var faultDurable = new FakeDurableSettingsFileWriter
         {
-            ShouldFail = (path, _) => path.Equals(settingsPath, StringComparison.OrdinalIgnoreCase)
+            OnWriteDurable = (path, _) => throw new IOException("Disk error during durable settings write")
         };
 
         var settingsRepo = new AppSettingsRepository(
-            writer: faultWriter,
-            settingsPathOverride: settingsPath);
+            settingsPathOverride: settingsPath,
+            durableWriter: faultDurable);
 
         File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
 
@@ -888,7 +888,7 @@ public sealed class DataFolderTransitionCoordinatorTests
                 new DataFolderMigrationService(fileOps: ops),
                 new FakeUserConfirmationService());
 
-            Assert.Throws<Exception>(() => coordinator.RequestTransition(target));
+            Assert.Throws<IOException>(() => coordinator.RequestTransition(target));
         }
         finally
         {
@@ -951,6 +951,6 @@ public sealed class DataFolderTransitionCoordinatorTests
             confirmation);
 
         // When settings save runs with future schema in settings.json, UnsupportedSettingsSchemaException or InvalidOperationException (CAS mismatch) is thrown
-        Assert.Throws<Exception>(() => coordinator.RequestTransition(target.Root));
+        Assert.Throws<InvalidOperationException>(() => coordinator.RequestTransition(target.Root));
     }
 }

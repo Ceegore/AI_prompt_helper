@@ -52,8 +52,21 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
         return _inner.EnumeratePromptFiles(directory);
     }
 
-    public bool FileExists(string path) => _inner.FileExists(path);
-    public bool DirectoryExists(string path) => _inner.DirectoryExists(path);
+    public bool FileExists(string path)
+    {
+        return _inner.FileExists(path);
+    }
+
+    public bool DirectoryExists(string path)
+    {
+        return _inner.DirectoryExists(path);
+    }
+
+    public StrictPathProbe ProbePath(string path)
+    {
+        return _inner.ProbePath(path);
+    }
+
     public void DeleteFile(string path) => _inner.DeleteFile(path);
     public void DeleteDirectory(string path) => _inner.DeleteDirectory(path);
     public IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*") => _inner.EnumerateFiles(directory, searchPattern);

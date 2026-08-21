@@ -16,6 +16,7 @@ internal interface IMigrationFileOps
     IEnumerable<string> EnumeratePromptFiles(string directory);
     bool FileExists(string path);
     bool DirectoryExists(string path);
+    StrictPathProbe ProbePath(string path);
     void DeleteFile(string path);
     void DeleteDirectory(string path);
     IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*");
@@ -25,6 +26,7 @@ internal interface IMigrationFileOps
 internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 {
     private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
+    private readonly StrictPathAuthority _strictPathAuthority = new();
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool MoveFileExW(
@@ -72,7 +74,8 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {
-        if (!Directory.Exists(directory))
+        StrictPathProbe probe = ProbePath(directory);
+        if (probe.Kind != StrictPathKind.Directory)
         {
             return [];
         }
@@ -80,28 +83,45 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
         return Directory.EnumerateFiles(directory, "*.md");
     }
 
-    public bool FileExists(string path) => File.Exists(path);
-    public bool DirectoryExists(string path) => Directory.Exists(path);
+    // Retained for interfaces that haven't migrated completely, but implemented strictly
+    public bool FileExists(string path) => ProbePath(path).Kind == StrictPathKind.File;
+    public bool DirectoryExists(string path) => ProbePath(path).Kind == StrictPathKind.Directory;
+
+    public StrictPathProbe ProbePath(string path)
+    {
+        return _strictPathAuthority.Probe(path);
+    }
 
     public void DeleteFile(string path)
     {
-        if (File.Exists(path))
+        StrictPathProbe probe = ProbePath(path);
+        if (probe.Kind == StrictPathKind.File)
         {
             File.Delete(path);
+        }
+        else if (probe.Kind == StrictPathKind.Directory)
+        {
+            throw new InvalidOperationException($"Expected a file but found a directory at '{path}'.");
         }
     }
 
     public void DeleteDirectory(string path)
     {
-        if (Directory.Exists(path))
+        StrictPathProbe probe = ProbePath(path);
+        if (probe.Kind == StrictPathKind.Directory)
         {
             Directory.Delete(path);
+        }
+        else if (probe.Kind == StrictPathKind.File)
+        {
+            throw new InvalidOperationException($"Expected a directory but found a file at '{path}'.");
         }
     }
 
     public IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*")
     {
-        if (!Directory.Exists(directory))
+        StrictPathProbe probe = ProbePath(directory);
+        if (probe.Kind != StrictPathKind.Directory)
         {
             return [];
         }
@@ -116,7 +136,8 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     public IReadOnlyList<string> EnumerateEntries(string directory)
     {
-        if (!Directory.Exists(directory))
+        StrictPathProbe probe = ProbePath(directory);
+        if (probe.Kind != StrictPathKind.Directory)
         {
             return [];
         }

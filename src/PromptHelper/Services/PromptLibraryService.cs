@@ -181,7 +181,10 @@ public sealed class PromptLibraryService
                 content = _promptRepo.Read(p.Id);
                 isAvailable = true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (
+                ex is IOException or
+                UnauthorizedAccessException or
+                System.Security.SecurityException)
             {
                 loadError = ex.Message;
             }
@@ -569,19 +572,14 @@ public sealed class PromptLibraryService
 
     private static string? NormalizeAndValidatePromptTitle(string? input)
     {
+        string? validationError = LibraryValidator.ValidatePromptTitleInput(input);
+        if (validationError != null)
+        {
+            throw new InvalidOperationException(validationError);
+        }
+
         string trimmed = (input ?? string.Empty).Trim();
-        if (trimmed.Length == 0)
-        {
-            return null;
-        }
-
-        if (TextUtilities.ContainsForbiddenSingleLineCharacter(trimmed))
-        {
-            throw new InvalidOperationException(
-                "Headline cannot contain line breaks, tabs, or other control characters.");
-        }
-
-        return trimmed;
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     #endregion

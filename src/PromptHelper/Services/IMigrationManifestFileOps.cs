@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace PromptHelper.Services;
 
-internal interface IMigrationManifestFileOps
+public interface IMigrationManifestFileOps
 {
     Stream CreateNew(string path);
     void FlushToDisk(Stream stream);
@@ -16,7 +16,7 @@ internal interface IMigrationManifestFileOps
     byte[] ReadAllBytes(string path);
 }
 
-internal sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
+public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
 {
     private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
     private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
@@ -62,13 +62,20 @@ internal sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOp
         }
     }
 
-    public bool FileExists(string path) => File.Exists(path);
+    private readonly StrictPathAuthority _strictPathAuthority = new();
+
+    public bool FileExists(string path) => _strictPathAuthority.Probe(path).Kind == StrictPathKind.File;
 
     public void DeleteFile(string path)
     {
-        if (File.Exists(path))
+        StrictPathProbe probe = _strictPathAuthority.Probe(path);
+        if (probe.Kind == StrictPathKind.File)
         {
             File.Delete(path);
+        }
+        else if (probe.Kind == StrictPathKind.Directory)
+        {
+            throw new InvalidOperationException($"Expected a file but found a directory at '{path}'.");
         }
     }
 

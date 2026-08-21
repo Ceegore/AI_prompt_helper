@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 
 namespace PromptHelper.Services;
 
-internal sealed record RecoveryResult(
+public sealed record RecoveryResult(
     bool Success,
     string? ErrorMessage = null,
     Exception? Error = null);
@@ -15,31 +15,57 @@ internal sealed class TargetRecoveryInventory
     public HashSet<string> AllowedPersistentBaseline { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> ManifestFinals { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> ManifestTemps { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> EphemeralControlArtifacts { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> UnknownEntries { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public bool HasUnknownEntries => UnknownEntries.Count > 0;
 }
 
-internal sealed class MigrationRecoveryService
+public sealed class MigrationRecoveryService
 {
     private readonly MigrationManifestRepository _manifestRepo;
     private readonly IMigrationFileOps _fileOps;
+    private readonly IAuthorityFileOps _authorityOps;
     private readonly IVerifiedArtifactDeleter _verifiedDeleter;
+    private readonly ManagedTreeTopologyValidator _treeValidator;
 
-    public MigrationRecoveryService(
+    internal MigrationRecoveryService(
         MigrationManifestRepository? manifestRepo = null,
         IMigrationFileOps? fileOps = null,
-        IVerifiedArtifactDeleter? verifiedDeleter = null)
+        IAuthorityFileOps? authorityOps = null,
+        IVerifiedArtifactDeleter? verifiedDeleter = null,
+        ManagedTreeTopologyValidator? treeValidator = null)
     {
         _manifestRepo = manifestRepo ?? new MigrationManifestRepository();
         _fileOps = fileOps ?? new DefaultMigrationFileOps();
+        _authorityOps = authorityOps ?? new DefaultAuthorityFileOps();
         _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        _treeValidator = treeValidator ?? new ManagedTreeTopologyValidator();
     }
 
     private static string NormalizeRel(string p) =>
         p.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
 
-    public TargetRecoveryInventory BuildInventory(
+    private static bool IsRootControlPath(string relativePath)
+    {
+        string rel = NormalizeRel(relativePath);
+        if (rel.Equals(".app.lock", StringComparison.OrdinalIgnoreCase) ||
+            rel.Equals(".prompthelper-migration.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        
+        string fileName = Path.GetFileName(rel);
+        if (string.Equals(rel, fileName, StringComparison.OrdinalIgnoreCase) && 
+            SettingsTempName.TryParse(fileName, out _))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    internal TargetRecoveryInventory BuildInventory(
         string targetRoot,
         MigrationAttemptManifest manifest,
         MigrationRecoveryContext context)
@@ -57,6 +83,11 @@ internal sealed class MigrationRecoveryService
             inventory.ManifestTemps.Add(NormalizeRel(artifact.TempRelativePath));
         }
 
+        foreach (MigrationControlArtifact control in manifest.ControlArtifacts)
+        {
+            inventory.EphemeralControlArtifacts.Add(NormalizeRel(control.RelativePath));
+        }
+
         if (!_fileOps.DirectoryExists(targetRoot))
         {
             return inventory;
@@ -64,20 +95,20 @@ internal sealed class MigrationRecoveryService
 
         void ScanDirectory(string dir)
         {
-            foreach (string file in _fileOps.EnumerateFiles(dir, "*"))
+            var files = _fileOps.EnumerateFiles(dir, "*").OrderBy(x => x, StringComparer.Ordinal).ToList();
+            foreach (string file in files)
             {
                 string rel = NormalizeRel(Path.GetRelativePath(targetRoot, file));
-                string fileName = Path.GetFileName(file);
 
-                if (string.Equals(fileName, ".prompthelper-migration.json", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(fileName, ".app.lock", StringComparison.OrdinalIgnoreCase))
+                if (IsRootControlPath(rel))
                 {
                     continue;
                 }
 
                 if (inventory.AllowedPersistentBaseline.Contains(rel) ||
                     inventory.ManifestFinals.Contains(rel) ||
-                    inventory.ManifestTemps.Contains(rel))
+                    inventory.ManifestTemps.Contains(rel) ||
+                    inventory.EphemeralControlArtifacts.Contains(rel))
                 {
                     continue;
                 }
@@ -85,19 +116,25 @@ internal sealed class MigrationRecoveryService
                 inventory.UnknownEntries.Add(rel);
             }
 
-            foreach (string entry in _fileOps.EnumerateEntries(dir))
+            var entries = _fileOps.EnumerateEntries(dir).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            foreach (string entry in entries)
             {
                 if (_fileOps.DirectoryExists(entry))
                 {
                     string dirName = Path.GetFileName(entry);
+                    string relDir = NormalizeRel(Path.GetRelativePath(targetRoot, entry));
+
                     if (string.Equals(dirName, "prompts", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(dirName, "recovery", StringComparison.OrdinalIgnoreCase))
                     {
                         ScanDirectory(entry);
                     }
+                    else if (inventory.EphemeralControlArtifacts.Contains(relDir))
+                    {
+                        ScanDirectory(entry);
+                    }
                     else
                     {
-                        string relDir = NormalizeRel(Path.GetRelativePath(targetRoot, entry));
                         inventory.UnknownEntries.Add(relDir);
                     }
                 }
@@ -113,208 +150,239 @@ internal sealed class MigrationRecoveryService
         ArgumentNullException.ThrowIfNull(context);
 
         string markerPath = Path.Combine(context.TargetPhysicalRoot, ".prompthelper-migration.json");
-        if (!_fileOps.FileExists(markerPath))
+
+        MigrationAttemptManifest? manifest;
+        try
+        {
+            manifest = _manifestRepo.TryReadStrict(markerPath);
+        }
+        catch (Exception ex)
+        {
+            var recEx = new MigrationRecoveryException(context.TargetPhysicalRoot, "ReadManifest", ex);
+            return new RecoveryResult(false, recEx.Message, recEx);
+        }
+
+        if (manifest is null)
         {
             return new RecoveryResult(true);
         }
 
-        MigrationAttemptManifest manifest;
         try
         {
-            var maybe = _manifestRepo.TryRead(markerPath);
-            if (maybe == null)
+            if (!PathIdentity.Equals(context.TargetPhysicalRoot, manifest.TargetPhysicalRoot))
             {
-                throw new InvalidDataException($"Corrupted or unreadable migration manifest at '{markerPath}'.");
+                throw new InvalidDataException(
+                    $"Migration manifest target root '{manifest.TargetPhysicalRoot}' does not match physical directory '{context.TargetPhysicalRoot}'.");
             }
-            manifest = maybe;
+
+            if (string.IsNullOrWhiteSpace(context.ExpectedSourcePhysicalRoot) ||
+                !PathIdentity.Equals(context.ExpectedSourcePhysicalRoot, manifest.SourcePhysicalRoot))
+            {
+                throw new InvalidDataException(
+                    "The interrupted migration belongs to a different source library. " +
+                    "Prompt Helper will not delete it automatically.");
+            }
+
+            _treeValidator.ValidateManagedTree(context.TargetPhysicalRoot);
+
+            using (ManagedDataRootSessionLease.Acquire(context.TargetPhysicalRoot))
+            {
+                TargetRecoveryInventory before = BuildInventory(context.TargetPhysicalRoot, manifest, context);
+                if (before.HasUnknownEntries)
+                {
+                    throw new InvalidDataException(
+                        $"Unrecognized or foreign files in migration target '{context.TargetPhysicalRoot}': {string.Join(", ", before.UnknownEntries)}. Recovery aborted to protect data.");
+                }
+
+                // 1. Delete declared control artifacts (probe files and directories, staging files)
+                foreach (MigrationControlArtifact control in manifest.ControlArtifacts)
+                {
+                    string controlPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, control.RelativePath);
+                    if (_fileOps.FileExists(controlPath))
+                    {
+                        _fileOps.DeleteFile(controlPath);
+                    }
+                    else if (_fileOps.DirectoryExists(controlPath))
+                    {
+                        _fileOps.DeleteDirectory(controlPath);
+                    }
+                }
+
+                // 2. Delete declared payload temps
+                foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
+                {
+                    string tempFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.TempRelativePath);
+                    if (_fileOps.FileExists(tempFullPath))
+                    {
+                        _fileOps.DeleteFile(tempFullPath);
+                    }
+                }
+
+                // 3. Verify and delete finals using verified deleter
+                foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
+                {
+                    string finalFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.RelativePath);
+                    _verifiedDeleter.VerifyAndDelete(context.TargetPhysicalRoot, finalFullPath, artifact.Length, artifact.Sha256Hex);
+                }
+
+                // 4. Rebuild inventory and assert restored baseline before deleting marker
+                TargetRecoveryInventory after = BuildInventory(context.TargetPhysicalRoot, manifest, context);
+                RecoveryBaselineVerifier.AssertRestored(context.TargetPhysicalRoot, after, _authorityOps);
+
+                // 5. Delete marker last
+                _manifestRepo.DeleteStrict(markerPath);
+
+                if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)
+                {
+                    throw new IOException($"Migration marker still exists after deletion: '{markerPath}'.");
+                }
+            }
+
+            // Clean empty attempt directories after lease release
+            string promptsDir = Path.Combine(context.TargetPhysicalRoot, "prompts");
+            if ((manifest.TargetBaseline == null || !manifest.TargetBaseline.PromptsDirectoryExistedBefore) &&
+                _fileOps.DirectoryExists(promptsDir) && _fileOps.EnumerateEntries(promptsDir).Count == 0)
+            {
+                try { _fileOps.DeleteDirectory(promptsDir); } catch { }
+            }
+
+            string recoveryDir = Path.Combine(context.TargetPhysicalRoot, "recovery");
+            if ((manifest.TargetBaseline == null || !manifest.TargetBaseline.RecoveryDirectoryExistedBefore) &&
+                _fileOps.DirectoryExists(recoveryDir) && _fileOps.EnumerateEntries(recoveryDir).Count == 0)
+            {
+                try { _fileOps.DeleteDirectory(recoveryDir); } catch { }
+            }
+
+            return new RecoveryResult(true);
         }
         catch (Exception ex)
         {
-            return new RecoveryResult(false, ex.Message, ex);
+            var recEx = ex as MigrationRecoveryException ?? new MigrationRecoveryException(context.TargetPhysicalRoot, "RecoverForRetry", ex);
+            return new RecoveryResult(false, recEx.Message, recEx);
         }
-
-        if (!PathIdentity.Equals(context.TargetPhysicalRoot, manifest.TargetPhysicalRoot))
-        {
-            var ex = new InvalidDataException(
-                $"Migration manifest target root '{manifest.TargetPhysicalRoot}' does not match physical directory '{context.TargetPhysicalRoot}'.");
-            return new RecoveryResult(false, ex.Message, ex);
-        }
-
-        TargetRecoveryInventory inventory = BuildInventory(context.TargetPhysicalRoot, manifest, context);
-        if (inventory.HasUnknownEntries)
-        {
-            var ex = new InvalidDataException(
-                $"Unrecognized or foreign files in migration target '{context.TargetPhysicalRoot}': {string.Join(", ", inventory.UnknownEntries)}. Recovery aborted to protect data.");
-            return new RecoveryResult(false, ex.Message, ex);
-        }
-
-        // 1. Delete declared attempt temps
-        foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
-        {
-            string tempFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.TempRelativePath);
-            if (_fileOps.FileExists(tempFullPath))
-            {
-                _fileOps.DeleteFile(tempFullPath);
-            }
-        }
-
-        // 2. Verify and delete finals using verified deleter
-        foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
-        {
-            string finalFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.RelativePath);
-            if (_fileOps.FileExists(finalFullPath))
-            {
-                try
-                {
-                    _verifiedDeleter.VerifyAndDelete(finalFullPath, artifact.Length, artifact.Sha256Hex);
-                }
-                catch (Exception ex)
-                {
-                    return new RecoveryResult(false, $"Failed verified deletion of '{artifact.RelativePath}': {ex.Message}", ex);
-                }
-            }
-        }
-
-        // 3. Clean empty subdirectories (prompts, recovery)
-        string promptsDir = Path.Combine(context.TargetPhysicalRoot, "prompts");
-        if (_fileOps.DirectoryExists(promptsDir) && _fileOps.EnumerateEntries(promptsDir).Count == 0)
-        {
-            _fileOps.DeleteDirectory(promptsDir);
-        }
-
-        string recoveryDir = Path.Combine(context.TargetPhysicalRoot, "recovery");
-        if (_fileOps.DirectoryExists(recoveryDir) && _fileOps.EnumerateEntries(recoveryDir).Count == 0)
-        {
-            _fileOps.DeleteDirectory(recoveryDir);
-        }
-
-        // 4. Re-inventory before marker delete
-        TargetRecoveryInventory postCleanInventory = BuildInventory(context.TargetPhysicalRoot, manifest, context);
-        if (postCleanInventory.ManifestFinals.Count > 0)
-        {
-            foreach (string finalRel in postCleanInventory.ManifestFinals)
-            {
-                string path = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, finalRel);
-                if (_fileOps.FileExists(path))
-                {
-                    var ex = new InvalidDataException($"Manifest artifact '{finalRel}' still exists after cleanup.");
-                    return new RecoveryResult(false, ex.Message, ex);
-                }
-            }
-        }
-
-        // 5. Delete marker last
-        _manifestRepo.DeleteDurable(markerPath);
-        return new RecoveryResult(true);
     }
 
     public RecoveryResult FinalizeCommittedStartup(MigrationRecoveryContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        string markerPath = Path.Combine(context.TargetPhysicalRoot, ".prompthelper-migration.json");
-        if (!_fileOps.FileExists(markerPath))
+        try
         {
+            _treeValidator.ValidateManagedTree(context.TargetPhysicalRoot);
+
+            string markerPath = Path.Combine(context.TargetPhysicalRoot, ".prompthelper-migration.json");
+
+            MigrationAttemptManifest? manifest;
+            try
+            {
+                manifest = _manifestRepo.TryReadStrict(markerPath);
+            }
+            catch (Exception ex)
+            {
+                var recEx = new MigrationRecoveryException(context.TargetPhysicalRoot, "ReadManifest", ex);
+                return new RecoveryResult(false, recEx.Message, recEx);
+            }
+
+            if (manifest is null)
+            {
+                return new RecoveryResult(true);
+            }
+
+            if (manifest.Phase != MigrationManifestPhase.ReadyToCommit)
+            {
+                throw new InvalidDataException(
+                    $"Incomplete migration attempt ({manifest.Phase}) found at configured data root '{context.TargetPhysicalRoot}'. Startup aborted.");
+            }
+
+            if (!PathIdentity.Equals(context.TargetPhysicalRoot, manifest.TargetPhysicalRoot))
+            {
+                throw new InvalidDataException(
+                    $"Migration manifest target root '{manifest.TargetPhysicalRoot}' does not match configured physical root '{context.TargetPhysicalRoot}'.");
+            }
+
+            _treeValidator.ValidateManagedTree(context.TargetPhysicalRoot);
+
+            using ManagedDataRootSessionLease lease = ManagedDataRootSessionLease.Acquire(context.TargetPhysicalRoot);
+
+            // Verify no declared temps exist
+            foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
+            {
+                string tempFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.TempRelativePath);
+                if (_authorityOps.GetPresenceStrict(tempFullPath) != StrictFilePresence.Missing)
+                {
+                    throw new InvalidDataException(
+                        $"Incomplete migration state: declared temporary file '{artifact.TempRelativePath}' still exists at '{context.TargetPhysicalRoot}'.");
+                }
+            }
+
+            // Verify no ephemeral controls exist
+            foreach (MigrationControlArtifact control in manifest.ControlArtifacts)
+            {
+                if (control.Kind != MigrationControlArtifactKind.ManifestPhaseStaging)
+                {
+                    string controlPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, control.RelativePath);
+                    if (new StrictPathAuthority().Probe(controlPath).Kind != StrictPathKind.Missing)
+                    {
+                        throw new InvalidDataException(
+                            $"Incomplete migration state: ephemeral control '{control.RelativePath}' still exists at '{context.TargetPhysicalRoot}'.");
+                    }
+                }
+            }
+
+            // Verify all finals exist and match
+            foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
+            {
+                string finalFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.RelativePath);
+                if (_authorityOps.GetPresenceStrict(finalFullPath) != StrictFilePresence.Present)
+                {
+                    throw new InvalidDataException(
+                        $"Missing migration artifact '{artifact.RelativePath}' at configured root '{context.TargetPhysicalRoot}'.");
+                }
+
+                byte[]? bytes = _authorityOps.ReadOptionalBytesStrict(finalFullPath);
+                if (bytes is null)
+                {
+                    throw new InvalidDataException($"Unreadable migration artifact '{artifact.RelativePath}'.");
+                }
+
+                if (bytes.Length != artifact.Length)
+                {
+                    throw new InvalidDataException(
+                        $"Migration artifact '{artifact.RelativePath}' length mismatch at '{context.TargetPhysicalRoot}'. Expected {artifact.Length}, found {bytes.Length}.");
+                }
+
+                byte[] hash = SHA256.HashData(bytes);
+                string hex = Convert.ToHexStringLower(hash);
+                if (!string.Equals(hex, artifact.Sha256Hex, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        $"Migration artifact '{artifact.RelativePath}' hash mismatch at '{context.TargetPhysicalRoot}'. Expected {artifact.Sha256Hex}, found {hex}.");
+                }
+            }
+
+            // Verify no foreign files
+            TargetRecoveryInventory inventory = BuildInventory(context.TargetPhysicalRoot, manifest, context);
+            if (inventory.HasUnknownEntries)
+            {
+                throw new InvalidDataException(
+                    $"Unrecognized or foreign files in configured target root '{context.TargetPhysicalRoot}': {string.Join(", ", inventory.UnknownEntries)}.");
+            }
+
+            // Retire marker
+            _manifestRepo.DeleteStrict(markerPath);
+            if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)
+            {
+                throw new IOException(
+                    "Migration completed and data is intact, but Prompt Helper could not retire its migration completion marker. " +
+                    "No data was modified. Fix folder permissions and retry.");
+            }
+
             return new RecoveryResult(true);
         }
-
-        MigrationAttemptManifest manifest;
-        try
-        {
-            var maybe = _manifestRepo.TryRead(markerPath);
-            if (maybe == null)
-            {
-                throw new InvalidDataException($"Corrupted or unreadable migration manifest at '{markerPath}'.");
-            }
-            manifest = maybe;
-        }
         catch (Exception ex)
         {
-            return new RecoveryResult(false, $"Failed to inspect migration manifest: {ex.Message}", ex);
+            var recEx = ex as MigrationRecoveryException ?? new MigrationRecoveryException(context.TargetPhysicalRoot, "FinalizeCommittedStartup", ex);
+            return new RecoveryResult(false, recEx.Message, recEx);
         }
-
-        if (manifest.Phase != MigrationManifestPhase.ReadyToCommit)
-        {
-            var ex = new InvalidDataException(
-                $"Incomplete migration attempt ({manifest.Phase}) found at configured data root '{context.TargetPhysicalRoot}'. Startup aborted.");
-            return new RecoveryResult(false, ex.Message, ex);
-        }
-
-        if (!PathIdentity.Equals(context.TargetPhysicalRoot, manifest.TargetPhysicalRoot))
-        {
-            var ex = new InvalidDataException(
-                $"Migration manifest target root '{manifest.TargetPhysicalRoot}' does not match configured physical root '{context.TargetPhysicalRoot}'.");
-            return new RecoveryResult(false, ex.Message, ex);
-        }
-
-        // Verify no declared temps exist
-        foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
-        {
-            string tempFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.TempRelativePath);
-            if (_fileOps.FileExists(tempFullPath))
-            {
-                var ex = new InvalidDataException(
-                    $"Incomplete migration state: declared temporary file '{artifact.TempRelativePath}' still exists at '{context.TargetPhysicalRoot}'.");
-                return new RecoveryResult(false, ex.Message, ex);
-            }
-        }
-
-        // Verify all finals exist and match
-        foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
-        {
-            string finalFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.RelativePath);
-            if (!_fileOps.FileExists(finalFullPath))
-            {
-                var ex = new InvalidDataException(
-                    $"Missing migration artifact '{artifact.RelativePath}' at configured root '{context.TargetPhysicalRoot}'.");
-                return new RecoveryResult(false, ex.Message, ex);
-            }
-
-            byte[] bytes = _fileOps.ReadAllBytes(finalFullPath);
-            if (bytes.Length != artifact.Length)
-            {
-                var ex = new InvalidDataException(
-                    $"Migration artifact '{artifact.RelativePath}' length mismatch at '{context.TargetPhysicalRoot}'. Expected {artifact.Length}, found {bytes.Length}.");
-                return new RecoveryResult(false, ex.Message, ex);
-            }
-
-            byte[] hash = SHA256.HashData(bytes);
-            string hex = Convert.ToHexStringLower(hash);
-            if (!string.Equals(hex, artifact.Sha256Hex, StringComparison.OrdinalIgnoreCase))
-            {
-                var ex = new InvalidDataException(
-                    $"Migration artifact '{artifact.RelativePath}' hash mismatch at '{context.TargetPhysicalRoot}'. Expected {artifact.Sha256Hex}, found {hex}.");
-                return new RecoveryResult(false, ex.Message, ex);
-            }
-        }
-
-        // Verify no foreign files
-        TargetRecoveryInventory inventory = BuildInventory(context.TargetPhysicalRoot, manifest, context);
-        if (inventory.HasUnknownEntries)
-        {
-            var ex = new InvalidDataException(
-                $"Unrecognized or foreign files in configured target root '{context.TargetPhysicalRoot}': {string.Join(", ", inventory.UnknownEntries)}.");
-            return new RecoveryResult(false, ex.Message, ex);
-        }
-
-        // Retire marker
-        try
-        {
-            _manifestRepo.DeleteDurable(markerPath);
-            if (_fileOps.FileExists(markerPath))
-            {
-                throw new IOException($"Migration marker file '{markerPath}' could not be deleted.");
-            }
-        }
-        catch (Exception ex)
-        {
-            return new RecoveryResult(
-                false,
-                "Migration completed and data is intact, but Prompt Helper could not retire its migration completion marker. " +
-                "No data was modified. Fix folder permissions and retry.",
-                ex);
-        }
-
-        return new RecoveryResult(true);
     }
 }

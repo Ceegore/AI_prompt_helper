@@ -3,9 +3,10 @@ using System.Collections.Generic;
 
 namespace PromptHelper.Services;
 
-internal sealed record MigrationRecoveryContext(
+public sealed record MigrationRecoveryContext(
     string TargetPhysicalRoot,
-    string? BootstrapPhysicalRoot = null)
+    string? BootstrapPhysicalRoot = null,
+    string? ExpectedSourcePhysicalRoot = null)
 {
     public bool IsExactBootstrapRoot =>
         !string.IsNullOrWhiteSpace(BootstrapPhysicalRoot) &&

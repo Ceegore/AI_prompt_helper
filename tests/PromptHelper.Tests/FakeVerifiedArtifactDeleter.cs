@@ -8,16 +8,16 @@ internal sealed class FakeVerifiedArtifactDeleter : IVerifiedArtifactDeleter
 {
     private readonly IVerifiedArtifactDeleter _inner = new WindowsVerifiedArtifactDeleter();
 
-    public Action<string, long, string>? OnVerifyAndDelete { get; set; }
+    public Action<string, string, long, string>? OnVerifyAndDelete { get; set; }
 
-    public void VerifyAndDelete(string path, long expectedLength, string expectedSha256Hex)
+    public void VerifyAndDelete(string physicalRoot, string path, long expectedLength, string expectedSha256Hex)
     {
         if (OnVerifyAndDelete != null)
         {
-            OnVerifyAndDelete(path, expectedLength, expectedSha256Hex);
+            OnVerifyAndDelete(physicalRoot, path, expectedLength, expectedSha256Hex);
             return;
         }
 
-        _inner.VerifyAndDelete(path, expectedLength, expectedSha256Hex);
+        _inner.VerifyAndDelete(physicalRoot, path, expectedLength, expectedSha256Hex);
     }
 }

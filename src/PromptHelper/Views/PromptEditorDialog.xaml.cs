@@ -79,6 +79,14 @@ public partial class PromptEditorDialog : Window
         }
         else
         {
+            string? validationError = Services.LibraryValidator.ValidatePromptTitleInput(trimmed);
+            if (validationError != null)
+            {
+                MessageBox.Show(this, validationError, "Invalid Headline", MessageBoxButton.OK, MessageBoxImage.Warning);
+                HeadlineTextBox.Focus();
+                return;
+            }
+
             ResultUsesAutomaticHeadline = false;
             ResultHeadline = trimmed;
         }

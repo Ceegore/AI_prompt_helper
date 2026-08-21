@@ -80,7 +80,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
             fileOps: ops,
             caseInspector: null);
 
-        Assert.Throws<Exception>(() => coordinator.RequestTransition(target.Root));
+        Assert.Throws<IOException>(() => coordinator.RequestTransition(target.Root));
     }
 
     [TestMethod]
@@ -88,15 +88,16 @@ public sealed class Cruu8ComprehensiveVerificationTests
     public void CRUU8_002_Predeclared_nonces_used_for_temps_and_cleaned_on_recovery()
     {
         using var target = new TestDirectory();
-        string tempRel = Path.Combine("prompts", ".test.migration-nonce.tmp");
+        Guid attemptId = Guid.NewGuid();
+        string tempRel = Path.Combine("prompts", $".test.md.migration-{attemptId:N}-{new string('b', 32)}.tmp");
         string tempFullPath = Path.Combine(target.Root, tempRel);
         Directory.CreateDirectory(Path.GetDirectoryName(tempFullPath)!);
         File.WriteAllText(tempFullPath, "partial temp content");
 
         var manifest = new MigrationAttemptManifest
         {
-            SchemaVersion = 2,
-            AttemptId = Guid.NewGuid(),
+            SchemaVersion = 3,
+            AttemptId = attemptId,
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = target.Root,
             SourceLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
@@ -106,7 +107,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Length = 10,
                     Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
                     Role = MigrationPayloadRole.PrimaryMetadata
@@ -126,9 +127,9 @@ public sealed class Cruu8ComprehensiveVerificationTests
         repo.WriteDurable(Path.Combine(target.Root, ".prompthelper-migration.json"), manifest);
 
         var recovery = new MigrationRecoveryService(repo);
-        var result = recovery.RecoverForRetry(new MigrationRecoveryContext(target.Root));
+        var result = recovery.RecoverForRetry(new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: @"C:\Source"));
 
-        Assert.IsTrue(result.Success);
+        Assert.IsTrue(result.Success, result.ErrorMessage);
         Assert.IsFalse(File.Exists(tempFullPath));
         Assert.IsFalse(File.Exists(Path.Combine(target.Root, ".prompthelper-migration.json")));
     }
@@ -153,28 +154,30 @@ public sealed class Cruu8ComprehensiveVerificationTests
     {
         using var temp = new TestDirectory();
         string markerPath = Path.Combine(temp.Root, ".prompthelper-migration.json");
+        Guid attemptId = Guid.NewGuid();
 
         var fakeOps = new FakeManifestFileOps
         {
-            OnMoveNoOverwriteWriteThrough = (src, dst) => throw new IOException("Disk error during move"),
+            OnMoveNoOverwriteWriteThrough = (src, dst) => throw new IOException("Disk write failure"),
+            OnReplaceWriteThrough = (src, dst) => throw new IOException("Disk write failure"),
             OnDeleteFile = path => throw new IOException("Delete temp failed")
         };
 
         var repo = new MigrationManifestRepository(fakeOps);
         var manifest = new MigrationAttemptManifest
         {
-            SchemaVersion = 2,
-            AttemptId = Guid.NewGuid(),
+            SchemaVersion = 3,
+            AttemptId = attemptId,
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = temp.Root,
             SourceLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
-            Phase = MigrationManifestPhase.Copying,
+            Phase = MigrationManifestPhase.ReadyToCommit,
             Artifacts =
             [
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Length = 10,
                     Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
                     Role = MigrationPayloadRole.PrimaryMetadata
@@ -182,7 +185,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
             ]
         };
 
-        Assert.Throws<ManifestWriteCleanupException>(() => repo.WriteDurable(markerPath, manifest));
+        Assert.Throws<ManifestWriteCleanupException>(() => repo.WriteReadyManifestDurable(markerPath, manifest));
     }
 
     [TestMethod]
@@ -206,11 +209,12 @@ public sealed class Cruu8ComprehensiveVerificationTests
 
         string libPath = Path.Combine(target.Root, "library.json");
         string promptPath = Path.Combine(target.Root, "prompts", $"{promptId:N}.md");
+        Guid attemptId = Guid.NewGuid();
 
         var manifest = new MigrationAttemptManifest
         {
-            SchemaVersion = 2,
-            AttemptId = Guid.NewGuid(),
+            SchemaVersion = 3,
+            AttemptId = attemptId,
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = target.Root,
             SourceLibrarySha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(libPath))),
@@ -220,7 +224,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Length = new FileInfo(libPath).Length,
                     Sha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(libPath))),
                     Role = MigrationPayloadRole.PrimaryMetadata
@@ -228,7 +232,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = $"prompts/{promptId:N}.md",
-                    TempRelativePath = $"prompts/.{promptId:N}.md.tmp",
+                    TempRelativePath = $"prompts/.{promptId:N}.md.migration-{attemptId:N}-{new string('b', 32)}.tmp",
                     Length = new FileInfo(promptPath).Length,
                     Sha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(promptPath))),
                     Role = MigrationPayloadRole.PromptBody
@@ -260,13 +264,13 @@ public sealed class Cruu8ComprehensiveVerificationTests
         File.WriteAllText(backupSettings, "{\"schemaVersion\":1,\"dataRootPath\":\"\"}");
         File.WriteAllText(lockFile, "");
 
+        Guid attemptId = Guid.NewGuid();
         var manifest = new MigrationAttemptManifest
         {
-            SchemaVersion = 2,
-            AttemptId = Guid.NewGuid(),
+            SchemaVersion = 3,
+            AttemptId = attemptId,
             SourcePhysicalRoot = @"C:\CustomSource",
             TargetPhysicalRoot = bootstrap.Root,
-            TargetIsBootstrapRoot = true,
             SourceLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
             Phase = MigrationManifestPhase.Copying,
             Artifacts =
@@ -274,7 +278,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Length = 10,
                     Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
                     Role = MigrationPayloadRole.PrimaryMetadata
@@ -286,7 +290,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
         repo.WriteDurable(Path.Combine(bootstrap.Root, ".prompthelper-migration.json"), manifest);
 
         var recovery = new MigrationRecoveryService(repo);
-        var context = new MigrationRecoveryContext(bootstrap.Root, bootstrap.Root);
+        var context = new MigrationRecoveryContext(bootstrap.Root, bootstrap.Root, ExpectedSourcePhysicalRoot: @"C:\CustomSource");
         var result = recovery.RecoverForRetry(context);
 
         Assert.IsTrue(result.Success, result.ErrorMessage);
@@ -496,7 +500,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
         string sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
 
         var deleter = new WindowsVerifiedArtifactDeleter();
-        deleter.VerifyAndDelete(file, bytes.Length, sha);
+        deleter.VerifyAndDelete(temp.Root, file, bytes.Length, sha);
 
         Assert.IsFalse(File.Exists(file));
     }
@@ -512,7 +516,7 @@ public sealed class Cruu8ComprehensiveVerificationTests
 
         var deleter = new WindowsVerifiedArtifactDeleter();
         Assert.Throws<InvalidDataException>(() =>
-            deleter.VerifyAndDelete(file, bytes.Length, "0000000000000000000000000000000000000000000000000000000000000000"));
+            deleter.VerifyAndDelete(temp.Root, file, bytes.Length, "0000000000000000000000000000000000000000000000000000000000000000"));
 
         Assert.IsTrue(File.Exists(file));
     }

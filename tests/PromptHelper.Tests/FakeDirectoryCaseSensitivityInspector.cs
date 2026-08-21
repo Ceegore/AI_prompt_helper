@@ -31,9 +31,4 @@ internal sealed class FakeDirectoryCaseSensitivityInspector : IDirectoryCaseSens
             ? DirectoryCaseSensitivityState.CaseSensitive
             : DirectoryCaseSensitivityState.CaseInsensitive;
     }
-
-    public bool IsCaseSensitive(string existingDirectory)
-    {
-        return Inspect(existingDirectory) == DirectoryCaseSensitivityState.CaseSensitive;
-    }
 }

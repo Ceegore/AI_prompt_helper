@@ -43,12 +43,14 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
         File.Replace(sourceFileName, destinationFileName, destinationBackupFileName);
     }
 
-    public bool FileExists(string path) => File.Exists(path);
-    public bool DirectoryExists(string path) => Directory.Exists(path);
+    private readonly StrictPathAuthority _authority = new();
+
+    public bool FileExists(string path) => _authority.Probe(path).Kind == StrictPathKind.File;
+    public bool DirectoryExists(string path) => _authority.Probe(path).Kind == StrictPathKind.Directory;
 
     public IReadOnlyList<string> EnumerateEntries(string path)
     {
-        if (!Directory.Exists(path))
+        if (_authority.Probe(path).Kind != StrictPathKind.Directory)
         {
             return [];
         }
@@ -63,7 +65,7 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
 
     public void DeleteFile(string path)
     {
-        if (File.Exists(path))
+        if (_authority.Probe(path).Kind == StrictPathKind.File)
         {
             File.Delete(path);
         }
@@ -71,7 +73,7 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
 
     public void DeleteDirectory(string path)
     {
-        if (Directory.Exists(path))
+        if (_authority.Probe(path).Kind == StrictPathKind.Directory)
         {
             Directory.Delete(path);
         }

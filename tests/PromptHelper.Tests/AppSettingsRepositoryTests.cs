@@ -319,16 +319,21 @@ public sealed class AppSettingsRepositoryTests
         string settingsPath = Path.Combine(testDir.Root, "settings.json");
         string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
 
-        var baseWriter = new AtomicTextWriter();
-        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        var faultDurable = new FakeDurableSettingsFileWriter
         {
-            ShouldFail = (path, _) => path.EndsWith("settings.backup.json")
+            OnWriteDurable = (path, _) =>
+            {
+                if (path.Equals(backupPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException("Backup write failed");
+                }
+            }
         };
 
         var repo = new AppSettingsRepository(
-            writer: faultWriter,
             settingsPathOverride: settingsPath,
-            backupPathOverride: backupPath);
+            backupPathOverride: backupPath,
+            durableWriter: faultDurable);
 
         var saveResult = repo.Save(new AppSettings
         {

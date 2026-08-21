@@ -26,5 +26,4 @@ public sealed class DirectoryCaseSensitivityInspectionException : IOException
 public interface IDirectoryCaseSensitivityInspector
 {
     DirectoryCaseSensitivityState Inspect(string existingDirectory);
-    bool IsCaseSensitive(string existingDirectory);
 }

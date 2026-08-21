@@ -160,8 +160,9 @@ public sealed class Cruu7ComprehensiveVerificationTests
         var migration = new DataFolderMigrationService(fileOps: recordingOps);
 
         var snapshot = migration.CaptureSourcePayloadSnapshot(source.Root);
+        var manifest = MigrationManifestBuilder.BuildCopying(source.Root, target.Root, snapshot, Guid.NewGuid());
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction();
-        migration.CopySnapshotToTarget(source.Root, target.Root, snapshot, Guid.NewGuid(), tx);
+        migration.CopySnapshotToTarget(source.Root, target.Root, snapshot, manifest, tx);
         tx.Commit();
 
         Assert.IsTrue(recordingOps.Trace.Any(t => t.StartsWith("MoveWriteThrough:")));
@@ -179,8 +180,9 @@ public sealed class Cruu7ComprehensiveVerificationTests
         var migration = new DataFolderMigrationService(fileOps: recordingOps);
 
         var snapshot = migration.CaptureSourcePayloadSnapshot(source.Root);
+        var manifest = MigrationManifestBuilder.BuildCopying(source.Root, target.Root, snapshot, Guid.NewGuid());
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction();
-        migration.CopySnapshotToTarget(source.Root, target.Root, snapshot, Guid.NewGuid(), tx);
+        migration.CopySnapshotToTarget(source.Root, target.Root, snapshot, manifest, tx);
         tx.Commit();
 
         int flushIndex = recordingOps.Trace.IndexOf("FlushToDisk");
@@ -274,10 +276,11 @@ public sealed class Cruu7ComprehensiveVerificationTests
         string libJson = File.ReadAllText(Path.Combine(source.Root, "library.json"));
         File.WriteAllText(targetLib, libJson);
 
+        Guid attemptId = Guid.NewGuid();
         var manifest = new MigrationAttemptManifest
         {
             SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
-            AttemptId = Guid.NewGuid(),
+            AttemptId = attemptId,
             SourcePhysicalRoot = source.Root,
             TargetPhysicalRoot = target.Root,
             SourceLibrarySha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(targetLib))),
@@ -287,7 +290,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Role = MigrationPayloadRole.PrimaryMetadata,
                     Length = new FileInfo(targetLib).Length,
                     Sha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(targetLib)))
@@ -295,7 +298,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = Path.Combine("prompts", $"{promptId:N}.md"),
-                    TempRelativePath = Path.Combine("prompts", $".{promptId:N}.md.tmp"),
+                    TempRelativePath = Path.Combine("prompts", $".{promptId:N}.md.migration-{attemptId:N}-{new string('b', 32)}.tmp"),
                     Role = MigrationPayloadRole.PromptBody,
                     Length = new FileInfo(targetPrompt).Length,
                     Sha256Hex = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(targetPrompt)))
@@ -334,10 +337,11 @@ public sealed class Cruu7ComprehensiveVerificationTests
         string foreignFile = Path.Combine(target.Root, "untracked-foreign.txt");
         File.WriteAllText(foreignFile, "foreign");
 
+        Guid attemptId = Guid.NewGuid();
         var manifest = new MigrationAttemptManifest
         {
             SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
-            AttemptId = Guid.NewGuid(),
+            AttemptId = attemptId,
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = target.Root,
             SourceLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
@@ -347,7 +351,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Role = MigrationPayloadRole.PrimaryMetadata,
                     Length = 10,
                     Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -367,13 +371,11 @@ public sealed class Cruu7ComprehensiveVerificationTests
     {
         using var target = new TestDirectory();
 
-        string file = Path.Combine(target.Root, "library.json");
-        File.WriteAllText(file, "tampered content");
-
+        Guid attemptId = Guid.NewGuid();
         var manifest = new MigrationAttemptManifest
         {
             SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
-            AttemptId = Guid.NewGuid(),
+            AttemptId = attemptId,
             SourcePhysicalRoot = @"C:\Source",
             TargetPhysicalRoot = target.Root,
             SourceLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
@@ -383,7 +385,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
                 new MigrationManifestArtifact
                 {
                     RelativePath = "library.json",
-                    TempRelativePath = ".library.json.tmp",
+                    TempRelativePath = $".library.json.migration-{attemptId:N}-{new string('a', 32)}.tmp",
                     Role = MigrationPayloadRole.PrimaryMetadata,
                     Length = 10,
                     Sha256Hex = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -807,7 +809,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
     public void CRUU7_014_B_Lease_fails_immediately_on_access_denied_or_file_not_found()
     {
         string invalidPath = @"Z:\NonExistentDrive\lock.file";
-        Assert.Throws<Exception>(() => SettingsMutationLease.TryAcquire(invalidPath, SettingsLeasePolicy.FastTest));
+        Assert.Throws<IOException>(() => SettingsMutationLease.TryAcquire(invalidPath, SettingsLeasePolicy.FastTest));
     }
 
     [TestMethod]

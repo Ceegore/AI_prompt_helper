@@ -35,7 +35,8 @@ public sealed class ManagedDataRootPolicy
         string nearestDir = DataRootTopologyValidator.FindNearestExistingDirectory(lexical);
         try
         {
-            if (_caseInspector.IsCaseSensitive(nearestDir))
+            if (new StrictPathAuthority().Probe(nearestDir).Kind == StrictPathKind.Directory &&
+                _caseInspector.Inspect(nearestDir) == DirectoryCaseSensitivityState.CaseSensitive)
             {
                 throw new InvalidDataException(
                     $"Case-sensitive directory '{nearestDir}' cannot be used as a Prompt Helper data folder.");
@@ -44,7 +45,7 @@ public sealed class ManagedDataRootPolicy
         catch (DirectoryCaseSensitivityInspectionException ex)
         {
             throw new InvalidDataException(
-                $"Failed to verify case-insensitivity for configured data folder '{nearestDir}': {ex.Message}", ex);
+                $"Failed to verify case-insensitivity for configured data folder '{lexical}': {ex.Message}", ex);
         }
 
         string physicalTarget;
@@ -71,7 +72,8 @@ public sealed class ManagedDataRootPolicy
         string nearestPhysicalDir = DataRootTopologyValidator.FindNearestExistingDirectory(physicalTarget);
         try
         {
-            if (_caseInspector.IsCaseSensitive(nearestPhysicalDir))
+            if (new StrictPathAuthority().Probe(nearestPhysicalDir).Kind == StrictPathKind.Directory &&
+                _caseInspector.Inspect(nearestPhysicalDir) == DirectoryCaseSensitivityState.CaseSensitive)
             {
                 throw new InvalidDataException(
                     $"Case-sensitive directory '{nearestPhysicalDir}' cannot be used as a Prompt Helper data folder.");

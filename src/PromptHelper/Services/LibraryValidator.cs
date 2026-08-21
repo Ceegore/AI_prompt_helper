@@ -7,6 +7,21 @@ namespace PromptHelper.Services;
 public static class LibraryValidator
 {
     public const int MaximumCategoryNameLength = 80;
+    public const int MaximumPromptTitleTextElements = 160;
+
+    public static string? ValidatePromptTitleInput(string? title)
+    {
+        string trimmed = (title ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return null;
+
+        if (TextUtilities.ContainsForbiddenSingleLineCharacter(trimmed))
+            return "Headline cannot contain line breaks, tabs, or other control characters.";
+
+        if (TextUtilities.GetTextElementCount(trimmed) > MaximumPromptTitleTextElements)
+            return $"Headline cannot exceed {MaximumPromptTitleTextElements} characters.";
+
+        return null;
+    }
 
     public static void Validate(LibraryDocument document)
     {
@@ -133,6 +148,11 @@ public static class LibraryValidator
                 if (TextUtilities.ContainsForbiddenSingleLineCharacter(prompt.Title))
                 {
                     throw new InvalidDataException($"Prompt '{prompt.Id}' title cannot contain control characters or line breaks.");
+                }
+
+                if (TextUtilities.GetTextElementCount(prompt.Title) > 160)
+                {
+                    throw new InvalidDataException($"Prompt '{prompt.Id}' title cannot exceed 160 characters.");
                 }
             }
         }

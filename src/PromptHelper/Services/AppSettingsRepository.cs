@@ -43,15 +43,18 @@ public sealed class AppSettingsRepository
     private readonly string _lockPath;
     private readonly string _bootstrapRoot;
     private readonly IAtomicTextWriter _writer;
+    private readonly IDurableSettingsFileWriter _durableWriter;
     private readonly SettingsLeasePolicy _leasePolicy;
 
     public AppSettingsRepository(
         IAtomicTextWriter? writer = null,
         string? settingsPathOverride = null,
         string? backupPathOverride = null,
-        SettingsLeasePolicy? leasePolicy = null)
+        SettingsLeasePolicy? leasePolicy = null,
+        IDurableSettingsFileWriter? durableWriter = null)
     {
         _writer = writer ?? new AtomicTextWriter();
+        _durableWriter = durableWriter ?? new WindowsDurableSettingsFileWriter();
         _leasePolicy = leasePolicy ?? SettingsLeasePolicy.Default;
 
         if (settingsPathOverride != null)
@@ -192,6 +195,8 @@ public sealed class AppSettingsRepository
 
     internal SettingsLoadResult LoadOrRecoverCore()
     {
+        CleanupStaleSettingsTempsCore();
+
         SettingsReadState primaryState = ReadState(_settingsPath);
 
         // Future primary: authoritative incompatibility. Do not even inspect backup.
@@ -363,7 +368,9 @@ public sealed class AppSettingsRepository
             Directory.CreateDirectory(settingsDir);
         }
 
-        _writer.Write(_settingsPath, json);
+        CleanupStaleSettingsTempsCore();
+
+        _durableWriter.WriteDurable(_settingsPath, json);
 
         if (backupBefore is SettingsReadState.FutureSchema futureBackup)
         {
@@ -387,7 +394,7 @@ public sealed class AppSettingsRepository
                 Directory.CreateDirectory(backupDir);
             }
 
-            _writer.Write(_backupPath, json);
+            _durableWriter.WriteDurable(_backupPath, json);
             return new SettingsSaveResult(null);
         }
         catch (Exception ex)
@@ -395,6 +402,36 @@ public sealed class AppSettingsRepository
             return new SettingsSaveResult(
                 "The data folder was saved, but the settings backup could not be " +
                 $"synchronized: {ex.Message}");
+        }
+    }
+
+    private void CleanupStaleSettingsTempsCore()
+    {
+        string? directory = Path.GetDirectoryName(_settingsPath);
+        if (string.IsNullOrEmpty(directory) || new StrictPathAuthority().Probe(directory).Kind != StrictPathKind.Directory)
+        {
+            return;
+        }
+
+        foreach (string path in Directory.EnumerateFiles(
+                     directory,
+                     ".prompthelper-settings-*.tmp",
+                     SearchOption.TopDirectoryOnly))
+        {
+            string name = Path.GetFileName(path);
+            if (!SettingsTempName.TryParse(name, out _))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                throw new IOException($"Failed to clean stale settings temp file '{path}': {ex.Message}", ex);
+            }
         }
     }
 
@@ -517,55 +554,49 @@ public sealed class AppSettingsRepository
         {
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
-                throw new InvalidDataException(
-                    $"Root of settings JSON must be an object: '{path}'.");
+                throw new InvalidDataException($"Root of settings JSON must be an object: '{path}'.");
             }
 
-            int count = 0;
-            int version = 0;
+            int schemaCount = 0;
+            int schemaVersion = 0;
 
-            foreach (JsonProperty property in document.RootElement.EnumerateObject())
+            foreach (JsonProperty prop in document.RootElement.EnumerateObject())
             {
-                if (!string.Equals(
-                        property.Name,
-                        "schemaVersion",
-                        StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(prop.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase))
                 {
-                    continue;
-                }
-
-                count++;
-
-                if (property.Value.ValueKind != JsonValueKind.Number ||
-                    !property.Value.TryGetInt32(out version))
-                {
-                    throw new InvalidDataException(
-                        $"Property 'schemaVersion' must be an integer in '{path}'.");
+                    schemaCount++;
+                    if (prop.Value.ValueKind != JsonValueKind.Number || !prop.Value.TryGetInt32(out schemaVersion))
+                    {
+                        throw new InvalidDataException($"Property 'schemaVersion' must be an integer in '{path}'.");
+                    }
                 }
             }
 
-            if (count == 0)
+            if (schemaCount == 0)
             {
-                throw new InvalidDataException(
-                    $"Missing required 'schemaVersion' property in '{path}'.");
+                throw new InvalidDataException($"Missing required 'schemaVersion' property in '{path}'.");
             }
 
-            if (count > 1)
+            if (schemaCount > 1)
             {
-                throw new InvalidDataException(
-                    $"Multiple 'schemaVersion' properties found in '{path}'.");
+                throw new InvalidDataException($"Multiple 'schemaVersion' properties found in '{path}'.");
             }
 
-            if (version > AppSettings.CurrentSchemaVersion)
+            if (schemaVersion > AppSettings.CurrentSchemaVersion)
             {
-                throw new UnsupportedSettingsSchemaException(version);
+                throw new UnsupportedSettingsSchemaException(schemaVersion);
             }
 
-            if (version != AppSettings.CurrentSchemaVersion)
+            if (schemaVersion != AppSettings.CurrentSchemaVersion)
             {
-                throw new InvalidDataException(
-                    $"Unsupported settings schema version: {version}.");
+                throw new InvalidDataException($"Unsupported settings schema version: {schemaVersion}.");
             }
+
+            StrictJsonObjectAuthority.ValidateExactObject(
+                document.RootElement,
+                allowedMembers: ["schemaVersion", "dataRootPath"],
+                requiredMembers: ["schemaVersion"],
+                description: $"settings root '{path}'");
         }
     }
 

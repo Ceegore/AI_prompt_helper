@@ -1,10 +1,24 @@
+using System;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PromptHelper.Services;
 
 public sealed class AtomicTextWriter : IAtomicTextWriter
 {
+    private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
+    private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool MoveFileExW(
+        string lpExistingFileName,
+        string lpNewFileName,
+        uint dwFlags);
+
+    private readonly StrictPathAuthority _strictPathAuthority = new();
+
     public void Write(string targetPath, string content)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
@@ -28,38 +42,32 @@ public sealed class AtomicTextWriter : IAtomicTextWriter
                 FileShare.None))
             using (var writer = new StreamWriter(
                 stream,
-                new UTF8Encoding(false)))
+                new UTF8Encoding(false, true))) // throwOnInvalidBytes: true
             {
                 writer.Write(content);
                 writer.Flush();
                 stream.Flush(flushToDisk: true);
             }
 
-            if (File.Exists(targetPath))
+            if (!MoveFileExW(tempPath, targetPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             {
-                File.Replace(
-                    tempPath,
-                    targetPath,
-                    destinationBackupFileName: null,
-                    ignoreMetadataErrors: true);
-            }
-            else
-            {
-                File.Move(tempPath, targetPath);
+                throw new IOException(
+                    $"Failed to atomically promote file '{tempPath}' to '{targetPath}'.",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
             }
         }
         finally
         {
-            if (File.Exists(tempPath))
+            try
             {
-                try
+                if (_strictPathAuthority.Probe(tempPath).Kind == StrictPathKind.File)
                 {
                     File.Delete(tempPath);
                 }
-                catch
-                {
-                    // Explicit best-effort temp cleanup only.
-                }
+            }
+            catch
+            {
+                // Explicit best-effort temp cleanup only.
             }
         }
     }

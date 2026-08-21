@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -8,22 +9,36 @@ using System.Text.Json.Serialization;
 
 namespace PromptHelper.Services;
 
-internal sealed class ManifestWriteCleanupException : IOException
+public sealed class ManifestWriteCleanupException : IOException
 {
+    public string MarkerPath { get; }
     public string TempPath { get; }
-    public ManifestWriteCleanupException(string tempPath, Exception inner)
-        : base($"Failed to clean manifest temp file at '{tempPath}': {inner.Message}", inner)
+    public Exception OriginalFailure { get; }
+    public Exception CleanupFailure { get; }
+
+    public ManifestWriteCleanupException(
+        string markerPath,
+        string tempPath,
+        Exception originalFailure,
+        Exception cleanupFailure)
+        : base(
+            $"Migration manifest write failed for '{markerPath}', and staging cleanup also failed for '{tempPath}': {originalFailure.Message} | Cleanup: {cleanupFailure.Message}",
+            originalFailure)
     {
+        MarkerPath = markerPath;
         TempPath = tempPath;
+        OriginalFailure = originalFailure;
+        CleanupFailure = cleanupFailure;
     }
 }
 
-internal sealed class MigrationManifestRepository
+public sealed class MigrationManifestRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true,
+        AllowTrailingCommas = false,
         Converters = { new JsonStringEnumConverter() }
     };
 
@@ -46,7 +61,6 @@ internal sealed class MigrationManifestRepository
             throw new InvalidDataException("Migration artifact path must be relative.");
         }
 
-        // Canonical relative check: reject aliases like 'prompts\..\library.json' or '.\library.json'
         string normalizedRoot = PathIdentity.NormalizeForComparison(root);
         string full = Path.GetFullPath(Path.Combine(normalizedRoot, relativePath));
 
@@ -62,8 +76,7 @@ internal sealed class MigrationManifestRepository
         }
 
         string fileName = Path.GetFileName(full);
-        if (fileName.StartsWith(".prompthelper", StringComparison.OrdinalIgnoreCase) ||
-            fileName.StartsWith(".app.lock", StringComparison.OrdinalIgnoreCase) ||
+        if (fileName.StartsWith(".app.lock", StringComparison.OrdinalIgnoreCase) ||
             fileName.StartsWith(".settings.lock", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(fileName, "settings.json", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(fileName, "settings.backup.json", StringComparison.OrdinalIgnoreCase))
@@ -74,22 +87,39 @@ internal sealed class MigrationManifestRepository
         return full;
     }
 
-    public MigrationAttemptManifest? TryRead(string markerPath)
+    public MigrationAttemptManifest? TryRead(string markerPath) => TryReadStrict(markerPath);
+
+    public MigrationAttemptManifest? TryReadStrict(string markerPath)
     {
-        if (string.IsNullOrWhiteSpace(markerPath) || !_fileOps.FileExists(markerPath))
+        ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
+
+        byte[] rawBytes;
+        try
+        {
+            rawBytes = _fileOps.ReadAllBytes(markerPath);
+        }
+        catch (FileNotFoundException)
         {
             return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException($"Failed to read migration manifest from '{markerPath}': {ex.Message}", ex);
         }
 
         string json;
         try
         {
-            byte[] rawBytes = _fileOps.ReadAllBytes(markerPath);
-            json = Encoding.UTF8.GetString(rawBytes);
+            var utf8Strict = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+            json = utf8Strict.GetString(rawBytes);
         }
-        catch (Exception ex) when (ex is not InvalidDataException)
+        catch (Exception ex)
         {
-            throw new InvalidDataException($"Failed to read migration manifest from '{markerPath}': {ex.Message}", ex);
+            throw new InvalidDataException($"Migration manifest is not valid UTF-8: '{markerPath}'.", ex);
         }
 
         if (string.IsNullOrWhiteSpace(json))
@@ -118,15 +148,20 @@ internal sealed class MigrationManifestRepository
         return manifest;
     }
 
-    public void WriteDurable(string markerPath, MigrationAttemptManifest manifest)
+    public void CreateInitialCopyingManifestDurable(string markerPath, MigrationAttemptManifest manifest)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
         ArgumentNullException.ThrowIfNull(manifest);
 
+        if (manifest.Phase != MigrationManifestPhase.Copying)
+        {
+            throw new InvalidDataException("Initial migration manifest must be in Copying phase.");
+        }
+
         ValidateManifestInvariants(manifest, markerPath);
 
         string? dir = Path.GetDirectoryName(markerPath);
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        if (!string.IsNullOrEmpty(dir) && new StrictPathAuthority().Probe(dir).Kind != StrictPathKind.Directory)
         {
             Directory.CreateDirectory(dir);
         }
@@ -134,96 +169,203 @@ internal sealed class MigrationManifestRepository
         string json = JsonSerializer.Serialize(manifest, JsonOptions);
         byte[] bytes = Encoding.UTF8.GetBytes(json);
 
-        string tempPath = Path.Combine(
-            dir ?? string.Empty,
-            $".{Path.GetFileName(markerPath)}.{manifest.AttemptId:N}-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}.tmp");
+        using (Stream stream = _fileOps.CreateNew(markerPath))
+        {
+            stream.Write(bytes, 0, bytes.Length);
+            _fileOps.FlushToDisk(stream);
+        }
+    }
+
+    public void WriteReadyManifestDurable(string markerPath, MigrationAttemptManifest manifest)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
+        ArgumentNullException.ThrowIfNull(manifest);
+
+        if (manifest.Phase != MigrationManifestPhase.ReadyToCommit)
+        {
+            throw new InvalidDataException("WriteReadyManifestDurable requires ReadyToCommit phase.");
+        }
+
+        ValidateManifestInvariants(manifest, markerPath);
+
+        string? dir = Path.GetDirectoryName(markerPath) ?? string.Empty;
+        string stagePath = Path.Combine(dir, $".prompthelper-migration.stage-{manifest.AttemptId:N}.tmp");
+
+        string json = JsonSerializer.Serialize(manifest, JsonOptions);
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
 
         bool promoted = false;
+        Exception? primaryFailure = null;
+
         try
         {
-            using (Stream stream = _fileOps.CreateNew(tempPath))
+            using (Stream stream = _fileOps.CreateNew(stagePath))
             {
-                stream.Write(bytes);
+                stream.Write(bytes, 0, bytes.Length);
                 _fileOps.FlushToDisk(stream);
             }
 
             if (_fileOps.FileExists(markerPath))
             {
-                _fileOps.ReplaceWriteThrough(tempPath, markerPath);
+                _fileOps.ReplaceWriteThrough(stagePath, markerPath);
             }
             else
             {
-                _fileOps.MoveNoOverwriteWriteThrough(tempPath, markerPath);
+                _fileOps.MoveNoOverwriteWriteThrough(stagePath, markerPath);
             }
 
             promoted = true;
         }
+        catch (Exception ex)
+        {
+            primaryFailure = ex;
+            throw;
+        }
         finally
         {
-            if (!promoted && _fileOps.FileExists(tempPath))
+            if (!promoted && _fileOps.FileExists(stagePath))
             {
                 try
                 {
-                    _fileOps.DeleteFile(tempPath);
+                    _fileOps.DeleteFile(stagePath);
                 }
                 catch (Exception cleanupEx)
                 {
-                    throw new ManifestWriteCleanupException(tempPath, cleanupEx);
+                    throw new ManifestWriteCleanupException(
+                        markerPath,
+                        stagePath,
+                        primaryFailure ?? cleanupEx,
+                        cleanupEx);
                 }
             }
         }
     }
 
-    public void DeleteDurable(string markerPath)
+    public void WriteDurable(string markerPath, MigrationAttemptManifest manifest)
     {
-        Delete(markerPath);
+        if (manifest.Phase == MigrationManifestPhase.Copying)
+        {
+            if (_fileOps.FileExists(markerPath))
+            {
+                WriteReadyManifestDurable(markerPath, manifest);
+            }
+            else
+            {
+                CreateInitialCopyingManifestDurable(markerPath, manifest);
+            }
+        }
+        else
+        {
+            WriteReadyManifestDurable(markerPath, manifest);
+        }
     }
 
-    public void Delete(string markerPath)
+    public void DeleteStrict(string markerPath)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
         if (_fileOps.FileExists(markerPath))
         {
             _fileOps.DeleteFile(markerPath);
         }
     }
 
+    public void DeleteDurable(string markerPath) => DeleteStrict(markerPath);
+
     private static void ValidateJsonStructure(string json, string path)
     {
-        using JsonDocument document = JsonDocument.Parse(json);
-        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        try
         {
-            throw new InvalidDataException($"Root of migration manifest must be an object: '{path}'.");
-        }
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
 
-        int schemaVersionCount = 0;
-        int schemaVersion = 0;
+            StrictJsonObjectAuthority.ValidateExactObject(
+                root,
+                allowedMembers: [
+                    "schemaVersion",
+                    "attemptId",
+                    "sourcePhysicalRoot",
+                    "targetPhysicalRoot",
+                    "sourceLibrarySha256Hex",
+                    "phase",
+                    "artifacts",
+                    "controlArtifacts",
+                    "targetBaseline"
+                ],
+                requiredMembers: [
+                    "schemaVersion",
+                    "attemptId",
+                    "sourcePhysicalRoot",
+                    "targetPhysicalRoot",
+                    "sourceLibrarySha256Hex",
+                    "phase",
+                    "artifacts",
+                    "controlArtifacts"
+                ],
+                description: $"migration manifest root '{path}'");
 
-        foreach (JsonProperty property in document.RootElement.EnumerateObject())
-        {
-            if (string.Equals(property.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase))
+            if (!StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "schemaVersion", out JsonProperty schemaProp) ||
+                schemaProp.Value.ValueKind != JsonValueKind.Number ||
+                !schemaProp.Value.TryGetInt32(out int schemaVersion))
             {
-                schemaVersionCount++;
-                if (property.Value.ValueKind != JsonValueKind.Number ||
-                    !property.Value.TryGetInt32(out schemaVersion))
+                throw new InvalidDataException($"Property 'schemaVersion' must be an integer in '{path}'.");
+            }
+
+            if (schemaVersion != MigrationAttemptManifest.CurrentSchemaVersion)
+            {
+                throw new InvalidDataException($"Unsupported migration manifest schema version: {schemaVersion}. Expected {MigrationAttemptManifest.CurrentSchemaVersion}.");
+            }
+
+            if (StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "artifacts", out JsonProperty artifactsProp))
+            {
+                if (artifactsProp.Value.ValueKind != JsonValueKind.Array)
                 {
-                    throw new InvalidDataException($"Property 'schemaVersion' must be an integer in '{path}'.");
+                    throw new InvalidDataException($"Property 'artifacts' must be an array in '{path}'.");
+                }
+
+                int index = 0;
+                foreach (JsonElement artifact in artifactsProp.Value.EnumerateArray())
+                {
+                    StrictJsonObjectAuthority.ValidateExactObject(
+                        artifact,
+                        allowedMembers: ["relativePath", "tempRelativePath", "sha256Hex", "length", "role"],
+                        requiredMembers: ["relativePath", "tempRelativePath", "sha256Hex", "length", "role"],
+                        description: $"manifest.artifacts[{index}] in '{path}'");
+                    index++;
                 }
             }
-        }
 
-        if (schemaVersionCount == 0)
-        {
-            throw new InvalidDataException($"Missing required 'schemaVersion' property in '{path}'.");
-        }
+            if (StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "controlArtifacts", out JsonProperty controlsProp))
+            {
+                if (controlsProp.Value.ValueKind != JsonValueKind.Array)
+                {
+                    throw new InvalidDataException($"Property 'controlArtifacts' must be an array in '{path}'.");
+                }
 
-        if (schemaVersionCount > 1)
-        {
-            throw new InvalidDataException($"Multiple 'schemaVersion' properties found in '{path}'.");
-        }
+                int index = 0;
+                foreach (JsonElement control in controlsProp.Value.EnumerateArray())
+                {
+                    StrictJsonObjectAuthority.ValidateExactObject(
+                        control,
+                        allowedMembers: ["relativePath", "kind"],
+                        requiredMembers: ["relativePath", "kind"],
+                        description: $"manifest.controlArtifacts[{index}] in '{path}'");
+                    index++;
+                }
+            }
 
-        if (schemaVersion != MigrationAttemptManifest.CurrentSchemaVersion)
+            if (StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "targetBaseline", out JsonProperty baselineProp) &&
+                baselineProp.Value.ValueKind == JsonValueKind.Object)
+            {
+                StrictJsonObjectAuthority.ValidateExactObject(
+                    baselineProp.Value,
+                    allowedMembers: ["targetRootExistedBefore", "promptsDirectoryExistedBefore", "recoveryDirectoryExistedBefore"],
+                    requiredMembers: ["targetRootExistedBefore", "promptsDirectoryExistedBefore", "recoveryDirectoryExistedBefore"],
+                    description: $"manifest.targetBaseline in '{path}'");
+            }
+        }
+        catch (JsonException ex)
         {
-            throw new InvalidDataException($"Unsupported migration manifest schema version: {schemaVersion}. Expected {MigrationAttemptManifest.CurrentSchemaVersion}.");
+            throw new InvalidDataException($"Failed to validate JSON structure in '{path}': {ex.Message}", ex);
         }
     }
 
@@ -273,8 +415,12 @@ internal sealed class MigrationManifestRepository
             throw new InvalidDataException("Migration manifest artifacts list cannot be null or empty.");
         }
 
-        var finalFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var tempFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (manifest.ControlArtifacts is null)
+        {
+            throw new InvalidDataException("Migration manifest controlArtifacts list cannot be null.");
+        }
+
+        var allOwnedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         int primaryCount = 0;
         int safetyBackupCount = 0;
@@ -287,9 +433,9 @@ internal sealed class MigrationManifestRepository
             }
 
             string finalFull = ResolveManifestArtifactPath(manifest.TargetPhysicalRoot, artifact.RelativePath);
-            if (!finalFullPaths.Add(finalFull))
+            if (!allOwnedPaths.Add(finalFull))
             {
-                throw new InvalidDataException($"Duplicate resolved artifact final path in migration manifest: '{artifact.RelativePath}'.");
+                throw new InvalidDataException($"Duplicate owned migration path '{artifact.RelativePath}'.");
             }
 
             if (string.IsNullOrWhiteSpace(artifact.TempRelativePath))
@@ -298,15 +444,12 @@ internal sealed class MigrationManifestRepository
             }
 
             string tempFull = ResolveManifestArtifactPath(manifest.TargetPhysicalRoot, artifact.TempRelativePath);
-            if (!tempFullPaths.Add(tempFull))
+            if (!allOwnedPaths.Add(tempFull))
             {
-                throw new InvalidDataException($"Duplicate resolved artifact temp path in migration manifest: '{artifact.TempRelativePath}'.");
+                throw new InvalidDataException($"Migration temp/final path collision '{artifact.TempRelativePath}'.");
             }
 
-            if (PathIdentity.Equals(finalFull, tempFull))
-            {
-                throw new InvalidDataException($"Artifact final path and temp path must not be identical: '{artifact.RelativePath}'.");
-            }
+            ValidateTempPath(manifest.AttemptId, artifact.RelativePath, artifact.TempRelativePath);
 
             if (artifact.Length < 0)
             {
@@ -369,6 +512,84 @@ internal sealed class MigrationManifestRepository
         if (safetyBackupCount > 1)
         {
             throw new InvalidDataException($"Migration manifest may contain at most one SafetyBackup artifact, found {safetyBackupCount}.");
+        }
+
+        foreach (MigrationControlArtifact control in manifest.ControlArtifacts)
+        {
+            if (!Enum.IsDefined(control.Kind))
+            {
+                throw new InvalidDataException($"Undefined control kind: {control.Kind} for '{control.RelativePath}'.");
+            }
+
+            string controlFull = ResolveManifestArtifactPath(manifest.TargetPhysicalRoot, control.RelativePath);
+            if (!allOwnedPaths.Add(controlFull))
+            {
+                throw new InvalidDataException($"Migration control path collision '{control.RelativePath}'.");
+            }
+
+            ValidateControlGrammar(manifest.AttemptId, control);
+        }
+    }
+
+    private static void ValidateTempPath(Guid attemptId, string finalRelative, string tempRelative)
+    {
+        string finalDir = Path.GetDirectoryName(finalRelative) ?? string.Empty;
+        string tempDir = Path.GetDirectoryName(tempRelative) ?? string.Empty;
+
+        if (!string.Equals(finalDir.Replace('/', '\\'), tempDir.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"Migration temp must be in the same directory as its final artifact: '{tempRelative}'.");
+        }
+
+        string finalName = Path.GetFileName(finalRelative);
+        string tempName = Path.GetFileName(tempRelative);
+        string prefix = $".{finalName}.migration-{attemptId:N}-";
+        const string suffix = ".tmp";
+
+        if (!tempName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            !tempName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"Invalid migration temp name '{tempRelative}'.");
+        }
+
+        string nonce = tempName.Substring(prefix.Length, tempName.Length - prefix.Length - suffix.Length);
+        if (nonce.Length != 32 || !IsHex(nonce))
+        {
+            throw new InvalidDataException($"Migration temp nonce must contain exactly 32 hexadecimal characters: '{tempRelative}'.");
+        }
+    }
+
+    private static void ValidateControlGrammar(Guid attemptId, MigrationControlArtifact control)
+    {
+        string rel = control.RelativePath.Replace('/', '\\').TrimStart('\\');
+
+        switch (control.Kind)
+        {
+            case MigrationControlArtifactKind.ManifestPhaseStaging:
+                if (!string.Equals(rel, $".prompthelper-migration.stage-{attemptId:N}.tmp", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"Invalid manifest phase stage name: '{control.RelativePath}'.");
+                }
+                break;
+
+            case MigrationControlArtifactKind.CapabilityProbeDirectory:
+                string rootProbeDir = $".prompthelper-write-probe-{attemptId:N}-root";
+                string promptsProbeDir = Path.Combine("prompts", $".prompthelper-write-probe-{attemptId:N}-prompts");
+                if (!string.Equals(rel, rootProbeDir, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(rel, promptsProbeDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"Invalid capability probe directory name: '{control.RelativePath}'.");
+                }
+                break;
+
+            case MigrationControlArtifactKind.CapabilityProbeFile:
+                string fileName = Path.GetFileName(rel);
+                if (!string.Equals(fileName, "probe-current.txt", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(fileName, "probe-replacement.tmp", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"Invalid capability probe file name: '{control.RelativePath}'.");
+                }
+                break;
         }
     }
 

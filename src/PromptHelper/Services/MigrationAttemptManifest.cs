@@ -3,27 +3,35 @@ using System.Collections.Generic;
 
 namespace PromptHelper.Services;
 
-internal enum MigrationManifestPhase
+public enum MigrationManifestPhase
 {
     Copying,
     ReadyToCommit
 }
 
-internal sealed class MigrationAttemptManifest
+public sealed class MigrationAttemptManifest
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Guid AttemptId { get; set; }
     public string SourcePhysicalRoot { get; set; } = string.Empty;
     public string TargetPhysicalRoot { get; set; } = string.Empty;
-    public bool TargetIsBootstrapRoot { get; set; }
     public string SourceLibrarySha256Hex { get; set; } = string.Empty;
     public MigrationManifestPhase Phase { get; set; }
     public List<MigrationManifestArtifact> Artifacts { get; set; } = [];
+    public List<MigrationControlArtifact> ControlArtifacts { get; set; } = [];
+    public MigrationTargetBaseline? TargetBaseline { get; set; }
 }
 
-internal sealed class MigrationManifestArtifact
+public sealed class MigrationTargetBaseline
+{
+    public bool TargetRootExistedBefore { get; set; }
+    public bool PromptsDirectoryExistedBefore { get; set; }
+    public bool RecoveryDirectoryExistedBefore { get; set; }
+}
+
+public sealed class MigrationManifestArtifact
 {
     public string RelativePath { get; set; } = string.Empty;
     public string TempRelativePath { get; set; } = string.Empty;

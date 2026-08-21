@@ -16,13 +16,15 @@ public partial class MainWindow : Window
     private readonly AppSettingsRepository _settingsRepo;
     private readonly DataFolderMigrationService _migrationService;
     private readonly IApplicationLifetime _applicationLifetime;
+    private readonly Action<string, string>? _showRestartMessage;
 
     public MainWindow(
         MainViewModel viewModel,
         IClipboardService clipboardService,
         AppSettingsRepository? settingsRepo = null,
         DataFolderMigrationService? migrationService = null,
-        IApplicationLifetime? applicationLifetime = null)
+        IApplicationLifetime? applicationLifetime = null,
+        Action<string, string>? showRestartMessage = null)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
@@ -31,6 +33,7 @@ public partial class MainWindow : Window
         _settingsRepo = settingsRepo ?? new AppSettingsRepository();
         _migrationService = migrationService ?? new DataFolderMigrationService();
         _applicationLifetime = applicationLifetime ?? new WpfApplicationLifetime();
+        _showRestartMessage = showRestartMessage;
         DataContext = _viewModel;
 
         TryApplyApplicationIcon();
@@ -61,16 +64,38 @@ public partial class MainWindow : Window
             Owner = this
         };
         bool? result = dialog.ShowDialog();
+        CompleteSettingsDialog(result, dialog.RestartRequired);
+    }
 
-        if (result == true && dialog.RestartRequired)
+    internal void CompleteSettingsDialog(
+        bool? dialogResult,
+        bool restartRequired)
+    {
+        if (!restartRequired)
         {
-            MessageBox.Show(
-                this,
-                "Data folder changed\n\nPrompt Helper must close now so the previous data folder cannot be modified after the migration snapshot.\n\nOpen Prompt Helper again to use the selected data folder.",
-                "Restart Required",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            return;
+        }
 
+        try
+        {
+            if (_showRestartMessage != null)
+            {
+                _showRestartMessage(
+                    "Data folder changed\n\nPrompt Helper must close now so the previous data folder cannot be modified after the migration snapshot.\n\nOpen Prompt Helper again to use the selected data folder.",
+                    "Restart Required");
+            }
+            else
+            {
+                MessageBox.Show(
+                    this,
+                    "Data folder changed\n\nPrompt Helper must close now so the previous data folder cannot be modified after the migration snapshot.\n\nOpen Prompt Helper again to use the selected data folder.",
+                    "Restart Required",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+        }
+        finally
+        {
             _applicationLifetime.RequestShutdown();
         }
     }

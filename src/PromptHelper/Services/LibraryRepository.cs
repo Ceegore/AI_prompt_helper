@@ -176,6 +176,25 @@ public sealed class LibraryRepository
         }
     }
 
+    public void TryCreateIncompleteRecoveryCopy(LibraryDocument document)
+    {
+        try
+        {
+            Directory.CreateDirectory(_paths.RecoveryDirectory);
+            string timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff");
+            string recoveryFile = Path.Combine(
+                _paths.RecoveryDirectory,
+                $"library.incomplete-{timestamp}-{Guid.NewGuid():N}.json");
+
+            string json = JsonSerializer.Serialize(document, JsonOptions);
+            _writer.Write(recoveryFile, json);
+        }
+        catch
+        {
+            // Explicit best-effort only
+        }
+    }
+
     public static LibraryMetadataCompatibility InspectCompatibility(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson))
@@ -225,6 +244,14 @@ public sealed class LibraryRepository
             {
                 return new LibraryMetadataCompatibility.Corrupt(new InvalidDataException($"Unsupported schema version: {foundSchemaVersion}."));
             }
+
+            StrictJsonObjectAuthority.ValidateExactObject(
+                doc.RootElement,
+                allowedMembers: ["schemaVersion", "categories", "prompts"],
+                requiredMembers: ["schemaVersion", "categories", "prompts"],
+                description: "library root");
+
+            ValidateLibraryJsonStructure(doc.RootElement);
 
             LibraryDocument? document = JsonSerializer.Deserialize<LibraryDocument>(rawJson, JsonOptions);
             if (document == null)
@@ -294,6 +321,14 @@ public sealed class LibraryRepository
             {
                 throw new InvalidDataException($"Unsupported schema version: {foundSchemaVersion}.");
             }
+
+            StrictJsonObjectAuthority.ValidateExactObject(
+                doc.RootElement,
+                allowedMembers: ["schemaVersion", "categories", "prompts"],
+                requiredMembers: ["schemaVersion", "categories", "prompts"],
+                description: "library root");
+
+            ValidateLibraryJsonStructure(doc.RootElement);
         }
 
         LibraryDocument? document = JsonSerializer.Deserialize<LibraryDocument>(json, JsonOptions);
@@ -304,5 +339,42 @@ public sealed class LibraryRepository
 
         LibraryValidator.Validate(document);
         return document;
+    }
+
+    private static void ValidateLibraryJsonStructure(JsonElement root)
+    {
+        if (!StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "categories", out JsonProperty categoriesProp) ||
+            categoriesProp.Value.ValueKind != JsonValueKind.Array)
+        {
+            throw new JsonException("library.categories must be an array.");
+        }
+
+        int categoryIndex = 0;
+        foreach (JsonElement category in categoriesProp.Value.EnumerateArray())
+        {
+            StrictJsonObjectAuthority.ValidateExactObject(
+                category,
+                allowedMembers: ["id", "parentId", "name", "sortOrder"],
+                requiredMembers: ["id", "parentId", "name", "sortOrder"],
+                description: $"library.categories[{categoryIndex}]");
+            categoryIndex++;
+        }
+
+        if (!StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "prompts", out JsonProperty promptsProp) ||
+            promptsProp.Value.ValueKind != JsonValueKind.Array)
+        {
+            throw new JsonException("library.prompts must be an array.");
+        }
+
+        int promptIndex = 0;
+        foreach (JsonElement prompt in promptsProp.Value.EnumerateArray())
+        {
+            StrictJsonObjectAuthority.ValidateExactObject(
+                prompt,
+                allowedMembers: ["id", "categoryId", "sortOrder", "title"],
+                requiredMembers: ["id", "categoryId", "sortOrder"],
+                description: $"library.prompts[{promptIndex}]");
+            promptIndex++;
+        }
     }
 }

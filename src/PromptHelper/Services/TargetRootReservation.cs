@@ -32,6 +32,7 @@ public sealed class TargetRootReservation : IDisposable
     private readonly bool _deleteLockFileOnDispose;
     private readonly IReadOnlyList<string> _createdDirectories;
     private readonly IReservationFileOps _fileOps;
+    private bool _createdDirectoriesCommitted;
     private TargetReservationCleanupResult? _releaseResult;
 
     private TargetRootReservation(
@@ -48,6 +49,11 @@ public sealed class TargetRootReservation : IDisposable
         _deleteLockFileOnDispose = deleteLockFileOnDispose;
         _createdDirectories = createdDirectories;
         _fileOps = fileOps;
+    }
+
+    public void CommitRootOwnership()
+    {
+        _createdDirectoriesCommitted = true;
     }
 
     internal static IReadOnlyList<string> GetMissingDirectoryChain(string root, IReservationFileOps ops)
@@ -71,6 +77,40 @@ public sealed class TargetRootReservation : IDisposable
         return chain;
     }
 
+    private static IReadOnlyList<string> CreateMissingDirectoryChainOwned(
+        string root,
+        IReservationFileOps ops)
+    {
+        List<string> candidates = GetMissingDirectoryChain(root, ops).ToList();
+        var owned = new List<string>();
+
+        try
+        {
+            foreach (string candidate in candidates)
+            {
+                DirectoryCreateOutcome result = ops.TryCreateDirectoryOwned(candidate);
+                if (result == DirectoryCreateOutcome.CreatedByCaller)
+                {
+                    owned.Add(candidate);
+                }
+            }
+
+            return owned;
+        }
+        catch (Exception original)
+        {
+            var failures = new List<MigrationRollbackFailure>();
+            CleanupCreatedDirectories(owned, ops, failures);
+
+            if (failures.Count > 0)
+            {
+                throw new TargetRootReservationAcquireException(root, original, failures);
+            }
+
+            throw;
+        }
+    }
+
     public static TargetRootReservation? TryAcquire(string root)
     {
         return TryAcquire(root, null);
@@ -81,12 +121,7 @@ public sealed class TargetRootReservation : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
         IReservationFileOps ops = fileOps ?? new DefaultReservationFileOps();
-        IReadOnlyList<string> createdDirectories = GetMissingDirectoryChain(root, ops);
-
-        if (createdDirectories.Count > 0)
-        {
-            ops.CreateDirectory(root);
-        }
+        IReadOnlyList<string> createdDirectories = CreateMissingDirectoryChainOwned(root, ops);
 
         string lockPath = Path.Combine(root, ".app.lock");
         bool lockExistedBefore = ops.FileExists(lockPath);
@@ -96,11 +131,16 @@ public sealed class TargetRootReservation : IDisposable
         {
             @lock = AppInstanceLock.TryAcquire(lockPath);
         }
-        catch
+        catch (Exception original)
         {
             if (createdDirectories.Count > 0)
             {
-                CleanupCreatedDirectories(createdDirectories, ops, null);
+                var failures = new List<MigrationRollbackFailure>();
+                CleanupCreatedDirectories(createdDirectories, ops, failures);
+                if (failures.Count > 0)
+                {
+                    throw new TargetRootReservationAcquireException(root, original, failures);
+                }
             }
             throw;
         }
@@ -109,7 +149,15 @@ public sealed class TargetRootReservation : IDisposable
         {
             if (createdDirectories.Count > 0)
             {
-                CleanupCreatedDirectories(createdDirectories, ops, null);
+                var failures = new List<MigrationRollbackFailure>();
+                CleanupCreatedDirectories(createdDirectories, ops, failures);
+                if (failures.Count > 0)
+                {
+                    throw new TargetRootReservationAcquireException(
+                        root,
+                        new IOException("Could not acquire lock on target root."),
+                        failures);
+                }
             }
             return null;
         }
@@ -198,7 +246,7 @@ public sealed class TargetRootReservation : IDisposable
             }
         }
 
-        if (_createdDirectories.Count > 0)
+        if (!_createdDirectoriesCommitted && _createdDirectories.Count > 0)
         {
             CleanupCreatedDirectories(_createdDirectories, _fileOps, failures);
         }

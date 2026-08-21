@@ -99,11 +99,13 @@ public sealed class DataFolderMigrationService
             _rolledBack = true;
             var failures = new List<MigrationRollbackFailure>();
 
+            var authority = new StrictPathAuthority();
+
             foreach (string file in _createdFiles.AsEnumerable().Reverse())
             {
                 try
                 {
-                    if (File.Exists(file))
+                    if (authority.Probe(file).Kind == StrictPathKind.File)
                     {
                         File.Delete(file);
                     }
@@ -118,7 +120,7 @@ public sealed class DataFolderMigrationService
             {
                 try
                 {
-                    if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                    if (authority.Probe(dir).Kind == StrictPathKind.Directory && !Directory.EnumerateFileSystemEntries(dir).Any())
                     {
                         Directory.Delete(dir);
                     }
@@ -194,7 +196,7 @@ public sealed class DataFolderMigrationService
 
         DataRootTopologyValidator.ValidateDisjointOrSame(cleanCurrent, cleanTarget, _defaultBootstrapRoot, _pathResolver);
 
-        if (File.Exists(cleanTarget))
+        if (new StrictPathAuthority().Probe(cleanTarget).Kind == StrictPathKind.File)
         {
             throw new ArgumentException($"Selected path is a file, not a directory: {cleanTarget}", nameof(selectedRoot));
         }
@@ -259,10 +261,13 @@ public sealed class DataFolderMigrationService
 
         // Empty target copy workflow
         MigrationPayloadSnapshot snapshot = CaptureSourcePayloadSnapshot(cleanCurrent);
+        Guid attemptId = Guid.NewGuid();
+        var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
+        var manifest = MigrationManifestBuilder.BuildCopying(cleanCurrent, cleanTarget, snapshot, attemptId, probePlan);
 
         using var tx = new MigrationTargetTransaction();
-        CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, Guid.NewGuid(), tx);
-        _capabilityValidator.ValidateWritable(cleanTarget, tx, null);
+        CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, manifest, tx);
+        _capabilityValidator.ValidateWritable(cleanTarget, tx, null, probePlan);
         tx.Commit();
 
         return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: false, Copied: true);
@@ -697,30 +702,49 @@ public sealed class DataFolderMigrationService
         string currentRoot,
         string targetRoot,
         MigrationPayloadSnapshot snapshot,
-        Guid attemptId,
-        MigrationTargetTransaction tx,
-        IReadOnlyDictionary<string, string>? declaredTempMap = null)
+        MigrationAttemptManifest manifest,
+        MigrationTargetTransaction tx)
     {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (manifest.Artifacts.Count != snapshot.Files.Count)
+        {
+            throw new InvalidDataException(
+                $"Manifest artifact count ({manifest.Artifacts.Count}) does not match snapshot file count ({snapshot.Files.Count}).");
+        }
+
+        var artifactMap = new Dictionary<string, MigrationManifestArtifact>(StringComparer.OrdinalIgnoreCase);
+        foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
+        {
+            if (!artifactMap.TryAdd(artifact.RelativePath, artifact))
+            {
+                throw new InvalidDataException($"Duplicate artifact relative path in manifest: '{artifact.RelativePath}'.");
+            }
+        }
+
+        var treeValidator = new ManagedTreeTopologyValidator(_pathResolver);
+        treeValidator.ValidateManagedTree(targetRoot);
+
         EnsureDirectoryTracked(targetRoot, tx);
 
         // Copy all files listed in snapshot
         foreach (MigrationPayloadFile item in snapshot.Files)
         {
+            if (!artifactMap.TryGetValue(item.RelativePath, out MigrationManifestArtifact? artifact))
+            {
+                throw new InvalidDataException($"Snapshot file '{item.RelativePath}' is missing from migration manifest.");
+            }
+
+            if (artifact.Role != item.Role || artifact.Length != item.Length ||
+                !string.Equals(artifact.Sha256Hex, Convert.ToHexStringLower(item.Sha256), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException($"Manifest artifact metadata mismatch for '{item.RelativePath}'.");
+            }
+
             string sourcePath = Path.Combine(currentRoot, item.RelativePath);
             string destPath = Path.Combine(targetRoot, item.RelativePath);
-
-            string tempPath;
-            if (declaredTempMap != null && declaredTempMap.TryGetValue(item.RelativePath, out string? declaredTempRel))
-            {
-                tempPath = Path.Combine(targetRoot, declaredTempRel);
-            }
-            else
-            {
-                string directory = Path.GetDirectoryName(destPath) ?? targetRoot;
-                tempPath = Path.Combine(
-                    directory,
-                    $".{Path.GetFileName(destPath)}.migration-{attemptId:N}-{RandomNumberGenerator.GetHexString(16).ToLowerInvariant()}.tmp");
-            }
+            string tempPath = Path.Combine(targetRoot, artifact.TempRelativePath);
 
             CopyPayloadFileDurablyWithTemp(sourcePath, destPath, tempPath, tx);
         }
@@ -848,7 +872,7 @@ public sealed class DataFolderMigrationService
                 promptsDir,
                 $"{prompt.Id:N}.md");
 
-            if (!File.Exists(promptPath))
+            if (new StrictPathAuthority().Probe(promptPath).Kind != StrictPathKind.File)
             {
                 throw new InvalidDataException(
                     $"{metadataDescription} references prompt file " +
@@ -885,7 +909,7 @@ public sealed class DataFolderMigrationService
         string path,
         MigrationTargetTransaction tx)
     {
-        if (!Directory.Exists(path))
+        if (new StrictPathAuthority().Probe(path).Kind != StrictPathKind.Directory)
         {
             Directory.CreateDirectory(path);
             tx.TrackCreatedDirectory(path);

@@ -31,7 +31,8 @@ public sealed class DataRootCapabilityValidator
     internal CapabilityValidationResult ValidateWritable(
         string root,
         ICreatedPathJournal? journal = null,
-        ExistingLibraryCapabilityContext? existing = null)
+        ExistingLibraryCapabilityContext? existing = null,
+        MigrationCapabilityProbePlan? probePlan = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
@@ -41,12 +42,25 @@ public sealed class DataRootCapabilityValidator
             journal?.TrackCreatedDirectory(root);
         }
 
-        ProbeLocation(root, journal);
-
-        string promptsDir = Path.Combine(root, "prompts");
-        if (_fileOps.DirectoryExists(promptsDir))
+        if (probePlan != null)
         {
-            ProbeLocation(promptsDir, journal);
+            ProbeLocationWithPlan(root, probePlan.RootProbe, journal);
+
+            string promptsDir = Path.Combine(root, "prompts");
+            if (probePlan.PromptsProbe != null && _fileOps.DirectoryExists(promptsDir))
+            {
+                ProbeLocationWithPlan(root, probePlan.PromptsProbe, journal);
+            }
+        }
+        else
+        {
+            ProbeLocation(root, journal);
+
+            string promptsDir = Path.Combine(root, "prompts");
+            if (_fileOps.DirectoryExists(promptsDir))
+            {
+                ProbeLocation(promptsDir, journal);
+            }
         }
 
         string? warning = null;
@@ -60,7 +74,7 @@ public sealed class DataRootCapabilityValidator
 
     public CapabilityValidationResult ValidateWritable(string root)
     {
-        return ValidateWritable(root, null, null);
+        return ValidateWritable(root, null, null, null);
     }
 
     private string? ValidateExistingManagedFiles(
@@ -200,6 +214,119 @@ public sealed class DataRootCapabilityValidator
             throw new UnauthorizedAccessException(
                 $"{description} cannot be opened for writing: '{filePath}'. {ex.Message}",
                 ex);
+        }
+    }
+
+    private void ProbeLocationWithPlan(
+        string root,
+        CapabilityProbeLocationPlan plan,
+        ICreatedPathJournal? journal)
+    {
+        string probeDir = Path.Combine(root, plan.DirectoryRelativePath);
+        string currentFile = Path.Combine(root, plan.CurrentFileRelativePath);
+        string replacementFile = Path.Combine(root, plan.ReplacementFileRelativePath);
+
+        bool dirCreated = false;
+        bool currentCreated = false;
+        bool replacementCreated = false;
+
+        try
+        {
+            Directory.CreateDirectory(probeDir);
+            dirCreated = true;
+            journal?.TrackCreatedDirectory(probeDir);
+
+            using (Stream curStream = _fileOps.CreateNew(currentFile))
+            {
+                currentCreated = true;
+                journal?.TrackCreatedFile(currentFile);
+                byte[] data = Encoding.UTF8.GetBytes("create");
+                curStream.Write(data, 0, data.Length);
+                _fileOps.FlushToDisk(curStream);
+            }
+
+            using (Stream repStream = _fileOps.CreateNew(replacementFile))
+            {
+                replacementCreated = true;
+                journal?.TrackCreatedFile(replacementFile);
+                byte[] data = Encoding.UTF8.GetBytes("replace");
+                repStream.Write(data, 0, data.Length);
+                _fileOps.FlushToDisk(repStream);
+            }
+
+            _fileOps.Replace(replacementFile, currentFile, null);
+            replacementCreated = false;
+
+            _fileOps.DeleteFile(currentFile);
+            currentCreated = false;
+
+            IReadOnlyList<string> entries = _fileOps.EnumerateEntries(probeDir);
+            if (entries.Count > 0)
+            {
+                throw new IOException($"Probe directory '{probeDir}' is unexpectedly non-empty after test.");
+            }
+
+            _fileOps.DeleteDirectory(probeDir);
+            dirCreated = false;
+        }
+        catch (Exception ex)
+        {
+            var cleanupFailures = new List<MigrationRollbackFailure>();
+
+            if (currentCreated)
+            {
+                try
+                {
+                    if (_fileOps.FileExists(currentFile))
+                    {
+                        _fileOps.DeleteFile(currentFile);
+                    }
+                }
+                catch (Exception deleteEx)
+                {
+                    cleanupFailures.Add(new MigrationRollbackFailure(currentFile, "DeleteProbeCurrentFile", deleteEx.Message));
+                }
+            }
+
+            if (replacementCreated)
+            {
+                try
+                {
+                    if (_fileOps.FileExists(replacementFile))
+                    {
+                        _fileOps.DeleteFile(replacementFile);
+                    }
+                }
+                catch (Exception deleteEx)
+                {
+                    cleanupFailures.Add(new MigrationRollbackFailure(replacementFile, "DeleteProbeReplacementFile", deleteEx.Message));
+                }
+            }
+
+            if (dirCreated)
+            {
+                try
+                {
+                    if (_fileOps.DirectoryExists(probeDir))
+                    {
+                        _fileOps.DeleteDirectory(probeDir);
+                    }
+                }
+                catch (Exception deleteEx)
+                {
+                    cleanupFailures.Add(new MigrationRollbackFailure(probeDir, "DeleteProbeDirectory", deleteEx.Message));
+                }
+            }
+
+            if (cleanupFailures.Count > 0)
+            {
+                throw new DataRootCapabilityProbeException(
+                    probeDir,
+                    ex,
+                    cleanupFailures);
+            }
+
+            throw;
         }
     }
 

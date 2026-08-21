@@ -43,7 +43,9 @@ public partial class App : Application
                 DataRootBootstrapValidator.ValidateConfiguredRoot(effectiveDataRoot);
             }
 
-            var paths = new AppPaths(effectiveDataRoot);
+            var runtime = DataRootRuntimeContext.Create(effectiveDataRoot, bootstrapRoot, physicalResolver);
+
+            var paths = new AppPaths(runtime.ActivePhysicalRoot);
             paths.EnsureRootDirectory();
 
             _appLock = AppInstanceLock.TryAcquire(paths.LockPath);
@@ -58,28 +60,31 @@ public partial class App : Application
                 return;
             }
 
-            // CRUU8-006 & CRUU8-007: Delegate migration marker finalization
-            if (File.Exists(paths.MigrationMarkerPath))
-            {
-                var recoveryService = new MigrationRecoveryService();
-                var recoveryContext = new MigrationRecoveryContext(paths.RootDirectory, bootstrapRoot);
-                var recoveryResult = recoveryService.FinalizeCommittedStartup(recoveryContext);
+            var tree = new ManagedTreeTopologyValidator(physicalResolver);
+            tree.ValidateManagedTree(runtime.ActivePhysicalRoot);
 
-                if (!recoveryResult.Success)
-                {
-                    MessageBox.Show(
-                        "Prompt Helper detected an incomplete or modified migration attempt in the configured data folder:\n\n" +
-                        paths.RootDirectory +
-                        $"\n\nDetails: {recoveryResult.ErrorMessage}\n\nTo protect your data, Prompt Helper will close without modifying this folder.\nReview the folder contents or remove unfinished migration artifacts before restarting.",
-                        "Migration Residue Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                    Shutdown();
-                    return;
-                }
+            var recoveryService = new MigrationRecoveryService(treeValidator: tree);
+            var recoveryContext = new MigrationRecoveryContext(
+                runtime.ActivePhysicalRoot,
+                runtime.BootstrapPhysicalRoot,
+                ExpectedSourcePhysicalRoot: null);
+            var recoveryResult = recoveryService.FinalizeCommittedStartup(recoveryContext);
+
+            if (!recoveryResult.Success)
+            {
+                MessageBox.Show(
+                    "Prompt Helper detected an incomplete or modified migration attempt in the configured data folder:\n\n" +
+                    paths.RootDirectory +
+                    $"\n\nDetails: {recoveryResult.ErrorMessage}\n\nTo protect your data, Prompt Helper will close without modifying this folder.\nReview the folder contents or remove unfinished migration artifacts before restarting.",
+                    "Migration Residue Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                Shutdown();
+                return;
             }
 
             paths.EnsureDataDirectories();
+            tree.ValidateManagedTree(runtime.ActivePhysicalRoot);
 
             var deleter = new FileDeleter();
             var libraryRepo = new LibraryRepository(paths, writer);

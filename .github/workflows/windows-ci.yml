@@ -46,7 +46,37 @@ jobs:
       - name: Build Release
         run: dotnet build PromptHelper.slnx -c Release --no-restore
 
-      - name: Test Release
+      - name: Test Crash Recovery Category
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=CrashRecovery" `
+            --logger "trx;LogFileName=cruu9-crash.trx"
+          ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/cruu9-crash.trx -RequiredTests CRUU8_006_FinalizeCommittedStartup_verifies_all_finals_and_retires_marker,CRUU9_002_Unreadable_marker_is_not_treated_as_missing,CRUU9_005_Different_source_interrupted_retry_fails_closed
+
+      - name: Test WPF Integration Category
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=WpfIntegration" `
+            --logger "trx;LogFileName=cruu9-wpf.trx"
+          ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/cruu9-wpf.trx -RequiredTests CRUU9_020_RestartRequired_true_Result_null_shuts_down,CRUU9_020_Restart_message_failure_still_requests_shutdown,CRUU9_020_RestartRequired_false_does_not_shutdown
+
+      - name: Test Windows Filesystem Integration Category
+        shell: pwsh
+        run: |
+          dotnet test PromptHelper.slnx `
+            -c Release `
+            --no-build `
+            --filter "TestCategory=WindowsFilesystemIntegration" `
+            --logger "trx;LogFileName=cruu9-winfs.trx"
+          ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/cruu9-winfs.trx -RequiredTests CRUU9_001_Empty_prompts_junction_outside_target_is_rejected,CRUU9_001_Empty_recovery_junction_outside_target_is_rejected,CRUU9_001_Migration_never_writes_through_prompts_junction,CRUU9_001_Retry_never_deletes_through_prompts_junction
+
+      - name: Test Full Suite
         shell: pwsh
         run: |
           $runs = if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.stress }}' -eq 'true') { 5 } else { 1 }
@@ -61,6 +91,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
+            ./tools/VerifyTestEvidence.ps1 -TrxPath tests/PromptHelper.Tests/TestResults/test-results-$i.trx
           }
 
       - name: Publish self-contained win-x64

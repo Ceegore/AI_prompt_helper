@@ -45,7 +45,8 @@ public sealed class AppInstanceLock : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
         string lockPath = Path.Combine(root, ".app.lock");
-        if (!File.Exists(lockPath))
+        StrictPathProbe probe = new StrictPathAuthority().Probe(lockPath);
+        if (probe.Kind == StrictPathKind.Missing)
         {
             return false;
         }

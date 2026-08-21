@@ -9,10 +9,11 @@ internal static class MigrationTargetRecoveryService
         string targetRoot,
         MigrationManifestRepository? manifestRepo = null,
         IMigrationFileOps? fileOps = null,
-        string? bootstrapRoot = null)
+        string? bootstrapRoot = null,
+        string? expectedSourceRoot = null)
     {
         var service = new MigrationRecoveryService(manifestRepo, fileOps);
-        var context = new MigrationRecoveryContext(targetRoot, bootstrapRoot);
+        var context = new MigrationRecoveryContext(targetRoot, bootstrapRoot, expectedSourceRoot);
         var result = service.RecoverForRetry(context);
         if (!result.Success)
         {

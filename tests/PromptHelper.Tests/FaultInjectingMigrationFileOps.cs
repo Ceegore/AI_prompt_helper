@@ -94,6 +94,8 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         return _inner.EnumeratePromptFiles(directory);
     }
 
+    public Func<string, StrictPathProbe>? OnProbePath { get; set; }
+
     public bool FileExists(string path)
     {
         if (OnFileExists != null)
@@ -112,6 +114,16 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         }
 
         return _inner.DirectoryExists(path);
+    }
+
+    public StrictPathProbe ProbePath(string path)
+    {
+        if (OnProbePath != null)
+        {
+            return OnProbePath(path);
+        }
+
+        return _inner.ProbePath(path);
     }
 
     public void DeleteFile(string path)
