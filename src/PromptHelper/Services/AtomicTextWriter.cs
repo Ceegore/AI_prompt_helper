@@ -6,7 +6,7 @@ using System.Text;
 
 namespace PromptHelper.Services;
 
-public sealed class AtomicTextWriter : IAtomicTextWriter
+public sealed class AtomicTextWriter : IAtomicTextWriter, IDurableAtomicFileWriter, IDurableSettingsFileWriter
 {
     private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
     private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
@@ -18,6 +18,7 @@ public sealed class AtomicTextWriter : IAtomicTextWriter
         uint dwFlags);
 
     private readonly StrictPathAuthority _strictPathAuthority = new();
+    private readonly WindowsDurableAtomicFileWriter _durableWriter = new();
 
     public void Write(string targetPath, string content)
     {
@@ -70,5 +71,26 @@ public sealed class AtomicTextWriter : IAtomicTextWriter
                 // Explicit best-effort temp cleanup only.
             }
         }
+    }
+
+    void IDurableSettingsFileWriter.WriteDurable(string targetPath, string content)
+    {
+        Write(targetPath, content);
+    }
+
+    void IDurableAtomicFileWriter.ReplaceDurable(
+        string targetPath,
+        ReadOnlySpan<byte> bytes,
+        DurableFileClass fileClass)
+    {
+        _durableWriter.ReplaceDurable(targetPath, bytes, fileClass);
+    }
+
+    void IDurableAtomicFileWriter.CreateNewDurable(
+        string targetPath,
+        ReadOnlySpan<byte> bytes,
+        DurableFileClass fileClass)
+    {
+        _durableWriter.CreateNewDurable(targetPath, bytes, fileClass);
     }
 }

@@ -82,30 +82,22 @@ public sealed class AppSettingsRepository
         }
     }
 
-    public AppSettingsRepository(
-        IAtomicTextWriter writer,
-        string? settingsPathOverride = null,
-        string? backupPathOverride = null,
-        SettingsLeasePolicy? leasePolicy = null)
-        : this(new AtomicTextWriterSettingsDurableAdapter(writer), settingsPathOverride, backupPathOverride, leasePolicy)
-    {
-    }
-
     public AppSettings Load() => LoadOrRecover().Settings;
 
-    public static string NormalizeAndValidateDataRoot(string? path)
+    public static string? NormalizeAndValidateDataRoot(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
-            return string.Empty;
+            return null;
         }
 
-        if (!Path.IsPathRooted(path))
+        string trimmed = path.Trim();
+        if (!Path.IsPathFullyQualified(trimmed))
         {
-            throw new InvalidDataException($"Data root path must be absolute: '{path}'.");
+            throw new InvalidDataException("Configured data-root path must be fully qualified.");
         }
 
-        return PathIdentity.NormalizeForComparison(path);
+        return PathIdentity.NormalizeForComparison(trimmed);
     }
 
     internal SettingsWritePrecondition CaptureWritePreconditionCore() => CapturePrecondition();
@@ -128,18 +120,22 @@ public sealed class AppSettingsRepository
     {
         try
         {
-            if (!File.Exists(path))
-            {
-                return new SettingsFileToken(false, null);
-            }
-
             byte[] bytes = File.ReadAllBytes(path);
-            byte[] hash = SHA256.HashData(bytes);
-            return new SettingsFileToken(true, hash);
+            return new SettingsFileToken(
+                Exists: true,
+                Sha256: SHA256.HashData(bytes));
         }
-        catch
+        catch (FileNotFoundException)
         {
             return new SettingsFileToken(false, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new SettingsFileToken(false, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            throw new SettingsReadException(path, "Settings CAS token could not be read.", ex);
         }
     }
 
@@ -154,10 +150,9 @@ public sealed class AppSettingsRepository
     {
         using var lease = AcquireMutationLease();
 
-        DurableTempReconciler.ReconcileSettingsTemps(
+        SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath,
-            _durableWriter);
+            _backupPath);
 
         SettingsLoadResult loadResult = LoadOrRecoverInternal();
         SettingsWritePrecondition precondition = CapturePrecondition();
@@ -172,10 +167,9 @@ public sealed class AppSettingsRepository
     {
         using var lease = AcquireMutationLease();
 
-        DurableTempReconciler.ReconcileSettingsTemps(
+        SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath,
-            _durableWriter);
+            _backupPath);
 
         return LoadOrRecoverInternal();
     }
@@ -253,17 +247,16 @@ public sealed class AppSettingsRepository
     public SettingsSaveResult Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        if (settings.SchemaVersion <= 0 || settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
+        if (settings.SchemaVersion != AppSettings.CurrentSchemaVersion)
         {
-            throw new InvalidDataException($"Invalid settings schema version: {settings.SchemaVersion}.");
+            throw new InvalidDataException($"Invalid settings schema version: {settings.SchemaVersion}. Expected {AppSettings.CurrentSchemaVersion}.");
         }
 
         using var lease = AcquireMutationLease();
 
-        DurableTempReconciler.ReconcileSettingsTemps(
+        SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath,
-            _durableWriter);
+            _backupPath);
 
         return SaveCore(settings);
     }
@@ -274,17 +267,16 @@ public sealed class AppSettingsRepository
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(precondition);
-        if (settings.SchemaVersion <= 0 || settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
+        if (settings.SchemaVersion != AppSettings.CurrentSchemaVersion)
         {
-            throw new InvalidDataException($"Invalid settings schema version: {settings.SchemaVersion}.");
+            throw new InvalidDataException($"Invalid settings schema version: {settings.SchemaVersion}. Expected {AppSettings.CurrentSchemaVersion}.");
         }
 
         using var lease = AcquireMutationLease();
 
-        DurableTempReconciler.ReconcileSettingsTemps(
+        SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath,
-            _durableWriter);
+            _backupPath);
 
         SettingsWritePrecondition current = CapturePrecondition();
         if (!PreconditionsMatch(precondition, current))
@@ -333,13 +325,19 @@ public sealed class AppSettingsRepository
             throw new SettingsReadException(_settingsPath, primaryUnreadable.Error.Message, primaryUnreadable.Error);
         }
 
-        string json = JsonSerializer.Serialize(settings, JsonOptions);
+        AppSettings normalized = new()
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+        };
+
+        string json = JsonSerializer.Serialize(normalized, JsonOptions);
 
         _durableWriter.WriteDurable(
             _settingsPath,
             json);
 
-        string? backupWarning = TrySynchronizeBackupInternal(settings);
+        string? backupWarning = TrySynchronizeBackupInternal(normalized);
         return new SettingsSaveResult(backupWarning);
     }
 
@@ -357,7 +355,13 @@ public sealed class AppSettingsRepository
 
         try
         {
-            string json = JsonSerializer.Serialize(settings, JsonOptions);
+            AppSettings normalized = new()
+            {
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
+                DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+            };
+
+            string json = JsonSerializer.Serialize(normalized, JsonOptions);
             _durableWriter.WriteDurable(
                 _backupPath,
                 json);
@@ -431,6 +435,11 @@ public sealed class AppSettingsRepository
                 return new SettingsReadState.FutureSchema(schemaVersion.Value);
             }
 
+            if (schemaVersion.Value <= 0 || schemaVersion.Value < AppSettings.CurrentSchemaVersion)
+            {
+                return new SettingsReadState.Corrupt(new InvalidDataException($"Unsupported settings schema version: {schemaVersion.Value}. Expected {AppSettings.CurrentSchemaVersion}."));
+            }
+
             StrictJsonObjectAuthority.ValidateExactObject(
                 doc.RootElement,
                 allowedMembers: ["schemaVersion", "dataRootPath"],
@@ -442,6 +451,8 @@ public sealed class AppSettingsRepository
             {
                 return new SettingsReadState.Corrupt(new InvalidDataException("Failed to deserialize settings."));
             }
+
+            settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
 
             return new SettingsReadState.Valid(settings);
         }

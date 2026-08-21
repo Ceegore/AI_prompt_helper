@@ -617,7 +617,9 @@ public class Cruu11ComprehensiveVerificationTests
             PromptId = promptId,
             BodyRelativePath = Path.Combine("prompts", $"{promptId:N}.md"),
             OldLibrarySha256Hex = "0000000000000000000000000000000000000000000000000000000000000000",
-            NewLibrarySha256Hex = "1111111111111111111111111111111111111111111111111111111111111111"
+            NewLibrarySha256Hex = "1111111111111111111111111111111111111111111111111111111111111111",
+            NewBodyLength = 4,
+            NewBodySha256Hex = "2222222222222222222222222222222222222222222222222222222222222222"
         };
 
         var writer = new WindowsDurableAtomicFileWriter();

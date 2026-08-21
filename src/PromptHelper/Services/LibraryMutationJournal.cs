@@ -24,6 +24,7 @@ public sealed class LibraryMutationJournal
     public const int CurrentSchemaVersion = 1;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    public long Revision { get; set; } = 0;
     public Guid OperationId { get; set; }
     public LibraryMutationKind Kind { get; set; }
     public LibraryMutationPhase Phase { get; set; }

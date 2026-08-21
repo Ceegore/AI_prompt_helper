@@ -68,26 +68,73 @@ public sealed class DataFolderMigrationService
         Exception? Error,
         byte[]? Fingerprint);
 
+    public enum MigrationOwnedFileState
+    {
+        TempPlanned,
+        TempOwned,
+        FinalOwned
+    }
+
+    public sealed class MigrationOwnedFile
+    {
+        public required string TempPath { get; init; }
+        public required string FinalPath { get; init; }
+        public required long ExpectedLength { get; init; }
+        public required string ExpectedSha256Hex { get; init; }
+
+        public MigrationOwnedFileState State { get; private set; } = MigrationOwnedFileState.TempPlanned;
+
+        public void MarkTempOwned()
+        {
+            if (State != MigrationOwnedFileState.TempPlanned)
+                throw new InvalidOperationException($"Cannot transition to TempOwned from {State}.");
+
+            State = MigrationOwnedFileState.TempOwned;
+        }
+
+        public void MarkFinalOwnedAfterMove()
+        {
+            State = MigrationOwnedFileState.FinalOwned;
+        }
+    }
+
     internal sealed class MigrationTargetTransaction : IDisposable, ICreatedPathJournal
     {
-        private readonly List<string> _createdFiles = [];
+        private readonly List<MigrationOwnedFile> _ownedFiles = [];
         private readonly List<string> _createdDirectories = [];
+        private readonly IVerifiedArtifactDeleter _verifiedDeleter;
+        private readonly string _targetPhysicalRoot;
         private bool _committed;
         private bool _rolledBack;
 
-        public void TrackCreatedFile(string path) => _createdFiles.Add(path);
+        public MigrationTargetTransaction(string targetPhysicalRoot = "", IVerifiedArtifactDeleter? verifiedDeleter = null)
+        {
+            _targetPhysicalRoot = string.IsNullOrWhiteSpace(targetPhysicalRoot) ? Directory.GetCurrentDirectory() : targetPhysicalRoot;
+            _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        }
+
+        public MigrationOwnedFile RegisterPlannedFile(
+            string tempPath,
+            string finalPath,
+            long expectedLength,
+            string expectedSha256Hex)
+        {
+            var file = new MigrationOwnedFile
+            {
+                TempPath = tempPath,
+                FinalPath = finalPath,
+                ExpectedLength = expectedLength,
+                ExpectedSha256Hex = expectedSha256Hex
+            };
+            _ownedFiles.Add(file);
+            return file;
+        }
+
+        public void TrackCreatedFile(string path) { }
         public void TrackCreatedDirectory(string path) => _createdDirectories.Add(path);
         public void Commit() => _committed = true;
 
-        public void PromoteCreatedFile(string oldOwnedPath, string newOwnedPath)
-        {
-            int index = _createdFiles.FindIndex(x => PathIdentity.Equals(x, oldOwnedPath));
-            if (index < 0)
-            {
-                throw new InvalidOperationException("Cannot promote an untracked migration file.");
-            }
-            _createdFiles[index] = newOwnedPath;
-        }
+        public void PromoteCreatedFile(string oldOwnedPath, string newOwnedPath) { }
 
         public MigrationRollbackResult Rollback()
         {
@@ -98,21 +145,61 @@ public sealed class DataFolderMigrationService
 
             _rolledBack = true;
             var failures = new List<MigrationRollbackFailure>();
-
             var authority = new StrictPathAuthority();
 
-            foreach (string file in _createdFiles.AsEnumerable().Reverse())
+            foreach (MigrationOwnedFile file in _ownedFiles.AsEnumerable().Reverse())
             {
-                try
+                if (file.State == MigrationOwnedFileState.FinalOwned)
                 {
-                    if (authority.Probe(file).Kind == StrictPathKind.File)
+                    try
                     {
-                        File.Delete(file);
+                        if (authority.Probe(file.FinalPath).Kind == StrictPathKind.File)
+                        {
+                            _verifiedDeleter.VerifyAndDelete(
+                                _targetPhysicalRoot,
+                                file.FinalPath,
+                                file.ExpectedLength,
+                                file.ExpectedSha256Hex);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add(new MigrationRollbackFailure(file.FinalPath, "DeleteFinal", ex.Message));
                     }
                 }
-                catch (Exception ex)
+                else if (file.State == MigrationOwnedFileState.TempOwned)
                 {
-                    failures.Add(new MigrationRollbackFailure(file, "DeleteFile", ex.Message));
+                    try
+                    {
+                        if (authority.Probe(file.TempPath).Kind == StrictPathKind.File)
+                        {
+                            _verifiedDeleter.VerifyAndDelete(
+                                _targetPhysicalRoot,
+                                file.TempPath,
+                                file.ExpectedLength,
+                                file.ExpectedSha256Hex);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add(new MigrationRollbackFailure(file.TempPath, "DeleteTemp", ex.Message));
+                    }
+
+                    try
+                    {
+                        if (authority.Probe(file.FinalPath).Kind == StrictPathKind.File)
+                        {
+                            _verifiedDeleter.VerifyAndDelete(
+                                _targetPhysicalRoot,
+                                file.FinalPath,
+                                file.ExpectedLength,
+                                file.ExpectedSha256Hex);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add(new MigrationRollbackFailure(file.FinalPath, "DeleteUnexpectedFinal", ex.Message));
+                    }
                 }
             }
 
@@ -534,6 +621,17 @@ public sealed class DataFolderMigrationService
         if (_fileOps.FileExists(backupPath))
         {
             byte[] backupBytes = _fileOps.ReadAllBytes(backupPath);
+            string backupJson = DecodeUtf8Text(backupBytes);
+            try
+            {
+                LibraryDocument backupDoc = LibraryRepository.InspectAndDeserialize(backupJson);
+                LibraryValidator.Validate(backupDoc);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException($"Safety backup at '{backupPath}' is invalid: {ex.Message}", ex);
+            }
+
             files.Add(new MigrationPayloadFile(
                 "library.backup.json",
                 MigrationPayloadRole.SafetyBackup,
@@ -555,6 +653,13 @@ public sealed class DataFolderMigrationService
                 string fileName = Path.GetFileName(promptFile);
                 string relPath = Path.Combine("prompts", fileName);
                 byte[] bytes = _fileOps.ReadAllBytes(promptFile);
+
+                // Strict UTF-8 validation for all markdown prompt bodies
+                if (fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                {
+                    StrictUtf8Text.Decode(bytes, $"prompt body '{fileName}'");
+                }
+
                 MigrationPayloadRole role = activePromptFileNames.Contains(fileName)
                     ? MigrationPayloadRole.PromptBody
                     : MigrationPayloadRole.OrphanPromptBody;
@@ -652,7 +757,7 @@ public sealed class DataFolderMigrationService
             string destPath = Path.Combine(targetRoot, item.RelativePath);
             string tempPath = Path.Combine(targetRoot, artifact.TempRelativePath);
 
-            CopyPayloadFileDurablyWithTemp(sourcePath, destPath, tempPath, tx);
+            CopyPayloadFileDurablyWithTemp(sourcePath, destPath, tempPath, artifact, tx);
         }
 
         // Verify eligible source file set has not changed
@@ -741,6 +846,7 @@ public sealed class DataFolderMigrationService
         string sourcePath,
         string finalPath,
         string tempPath,
+        MigrationManifestArtifact artifact,
         MigrationTargetTransaction tx)
     {
         if (_fileOps.FileExists(finalPath))
@@ -753,16 +859,22 @@ public sealed class DataFolderMigrationService
 
         EnsureDirectoryTracked(directory, tx);
 
+        MigrationOwnedFile owned = tx.RegisterPlannedFile(
+            tempPath,
+            finalPath,
+            artifact.Length,
+            artifact.Sha256Hex);
+
         using (Stream source = _fileOps.OpenRead(sourcePath))
         using (Stream destination = _fileOps.CreateNewFile(tempPath))
         {
-            tx.TrackCreatedFile(tempPath);
             source.CopyTo(destination);
             _fileOps.FlushToDisk(destination);
         }
+        owned.MarkTempOwned();
 
         _fileOps.MoveNoOverwriteWriteThrough(tempPath, finalPath);
-        tx.PromoteCreatedFile(tempPath, finalPath);
+        owned.MarkFinalOwnedAfterMove();
     }
 
     private static void ValidateDocumentPromptBodies(
@@ -787,21 +899,13 @@ public sealed class DataFolderMigrationService
 
             try
             {
-                using FileStream stream = new(
-                    promptPath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-
-                if (!stream.CanRead)
-                {
-                    throw new IOException("File stream is not readable.");
-                }
+                StrictUtf8Text.ReadAllText(promptPath, $"{metadataDescription} prompt file '{prompt.Id:N}.md'");
             }
             catch (Exception ex) when (
                 ex is IOException or
                 UnauthorizedAccessException or
-                SecurityException)
+                SecurityException or
+                InvalidDataException)
             {
                 throw new InvalidDataException(
                     $"{metadataDescription} references unreadable prompt file " +
@@ -813,12 +917,21 @@ public sealed class DataFolderMigrationService
 
     private static void EnsureDirectoryTracked(
         string path,
-        MigrationTargetTransaction tx)
+        MigrationTargetTransaction tx,
+        IOwnedDirectoryCreator? creator = null)
     {
-        if (new StrictPathAuthority().Probe(path).Kind != StrictPathKind.Directory)
+        var activeCreator = creator ?? new WindowsOwnedDirectoryCreator();
+        DirectoryCreateOutcome outcome = activeCreator.TryCreateOwned(path);
+        if (outcome == DirectoryCreateOutcome.CreatedByCaller)
         {
-            Directory.CreateDirectory(path);
             tx.TrackCreatedDirectory(path);
+        }
+        else
+        {
+            if (new StrictPathAuthority().Probe(path).Kind != StrictPathKind.Directory)
+            {
+                throw new InvalidDataException($"Expected directory at '{path}'.");
+            }
         }
     }
 

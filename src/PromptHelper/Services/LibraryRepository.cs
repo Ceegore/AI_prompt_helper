@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text.Json;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
@@ -43,13 +44,32 @@ public sealed class LibraryRepository
         _durableWriter = durableWriter;
     }
 
-    public LibraryRepository(AppPaths paths, IAtomicTextWriter writer)
-        : this(paths, new AtomicTextWriterDurableAdapter(writer))
+    public LibraryRepository(AppPaths paths)
+        : this(paths, new WindowsDurableAtomicFileWriter())
     {
     }
 
     internal AppPaths Paths => _paths;
     internal IDurableAtomicFileWriter DurableWriter => _durableWriter;
+
+    public LibraryPrimarySnapshot CapturePrimarySnapshot()
+    {
+        byte[] raw = File.ReadAllBytes(_paths.LibraryPath);
+        string json = StrictUtf8Text.Decode(raw, "primary library metadata");
+        LibraryDocument parsed = InspectAndDeserialize(json);
+        LibraryValidator.Validate(parsed);
+        byte[] canonical = SerializeCanonicalBytes(parsed);
+
+        return new LibraryPrimarySnapshot(
+            RawBytes: raw,
+            Document: parsed,
+            CanonicalBytes: canonical,
+            RawSha256Hex: Convert.ToHexStringLower(SHA256.HashData(raw)),
+            CanonicalSha256Hex: Convert.ToHexStringLower(SHA256.HashData(canonical)));
+    }
+
+    public CanonicalLibraryPackage CreateCanonicalPackage(LibraryDocument document)
+        => CanonicalLibraryPackage.Create(document);
 
     public byte[] SerializeCanonicalBytes(LibraryDocument document)
     {
@@ -59,10 +79,9 @@ public sealed class LibraryRepository
         return StrictUtf8Text.Encode(json);
     }
 
-    public CommitResult CommitCanonicalBytes(LibraryDocument document, byte[] canonicalBytes)
+    public CommitResult Commit(CanonicalLibraryPackage package)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        ArgumentNullException.ThrowIfNull(canonicalBytes);
+        ArgumentNullException.ThrowIfNull(package);
 
         MetadataFileState primaryState = ReadMetadataFileState(_paths.LibraryPath);
 
@@ -80,10 +99,10 @@ public sealed class LibraryRepository
 
         _durableWriter.ReplaceDurable(
             _paths.LibraryPath,
-            canonicalBytes,
+            package.CanonicalBytes,
             DurableFileClass.LibraryMetadata);
 
-        return SynchronizeBackupCore(document);
+        return SynchronizeBackup(package);
     }
 
     public LibraryDocument ReadPrimary()
@@ -100,27 +119,13 @@ public sealed class LibraryRepository
 
     public CommitResult Commit(LibraryDocument document)
     {
-        byte[] bytes = SerializeCanonicalBytes(document);
-        return CommitCanonicalBytes(document, bytes);
+        CanonicalLibraryPackage package = CreateCanonicalPackage(document);
+        return Commit(package);
     }
 
-    public CommitResult SynchronizeBackup(LibraryDocument document)
-    {
-        return SynchronizeBackupCore(document);
-    }
-
-    internal CommitResult SynchronizeBackup(HealthyLibraryPackage package)
+    public CommitResult SynchronizeBackup(CanonicalLibraryPackage package)
     {
         ArgumentNullException.ThrowIfNull(package);
-        return SynchronizeBackupCore(package.Document);
-    }
-
-    internal CommitResult SynchronizeBackupCore(LibraryDocument document)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        LibraryValidator.Validate(document);
-
-        byte[] bytes = SerializeCanonicalBytes(document);
         MetadataFileState state = ReadMetadataFileState(_paths.LibraryBackupPath);
 
         if (state is MetadataFileState.Future future)
@@ -143,7 +148,7 @@ public sealed class LibraryRepository
         {
             _durableWriter.ReplaceDurable(
                 _paths.LibraryBackupPath,
-                bytes,
+                package.CanonicalBytes,
                 DurableFileClass.LibraryMetadata);
             return new CommitResult(true, null);
         }
@@ -154,6 +159,20 @@ public sealed class LibraryRepository
                 "The library was saved, but its safety backup could not be synchronized (safety backup could not be updated). " +
                 $"Current data remains stored in library.json. {ex.Message}");
         }
+    }
+
+    public CommitResult SynchronizeBackup(LibraryDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        CanonicalLibraryPackage package = CreateCanonicalPackage(document);
+        return SynchronizeBackup(package);
+    }
+
+    internal CommitResult SynchronizeBackup(HealthyLibraryPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        CanonicalLibraryPackage canonicalPackage = CreateCanonicalPackage(package.Document);
+        return SynchronizeBackup(canonicalPackage);
     }
 
     private static MetadataFileState ReadMetadataFileState(string path)

@@ -12,7 +12,7 @@ internal sealed class LibraryMutationJournalRepository
         WriteIndented = true,
         PropertyNameCaseInsensitive = true,
         AllowTrailingCommas = false,
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: false) }
     };
 
     private readonly AppPaths _paths;
@@ -56,6 +56,7 @@ internal sealed class LibraryMutationJournalRepository
             throw new InvalidOperationException("New mutation journal must begin in Prepared phase.");
         }
 
+        journal.Revision = 0;
         byte[] bytes = SerializeValidate(journal);
 
         _writer.CreateNewDurable(
@@ -68,19 +69,66 @@ internal sealed class LibraryMutationJournalRepository
     {
         ArgumentNullException.ThrowIfNull(journal);
 
+        LibraryMutationJournal persisted = TryReadStrict()
+            ?? throw new InvalidDataException("Mutation journal disappeared.");
+
+        if (persisted.OperationId != journal.OperationId)
+        {
+            throw new InvalidDataException("Mutation journal operation changed.");
+        }
+
+        if (persisted.Revision != journal.Revision)
+        {
+            throw new InvalidDataException(
+                $"Mutation journal revision changed. Expected {journal.Revision}, found {persisted.Revision}.");
+        }
+
+        if (persisted.Phase != journal.Phase)
+        {
+            throw new InvalidDataException(
+                $"Mutation journal phase changed. Expected {journal.Phase}, found {persisted.Phase}.");
+        }
+
         if (!IsAllowedTransition(journal.Kind, journal.Phase, next))
         {
             throw new InvalidOperationException(
                 $"Invalid mutation phase transition for {journal.Kind}: {journal.Phase} -> {next}.");
         }
 
-        journal.Phase = next;
-        byte[] bytes = SerializeValidate(journal);
+        LibraryMutationJournal candidate = Clone(journal);
+        candidate.Phase = next;
+        candidate.Revision = journal.Revision + 1;
+
+        byte[] bytes = SerializeValidate(candidate);
 
         _writer.ReplaceDurable(
             _paths.LibraryMutationJournalPath,
             bytes,
             DurableFileClass.MutationControl);
+
+        // Only after durable success
+        journal.Phase = next;
+        journal.Revision = candidate.Revision;
+    }
+
+    public void DeleteStrict(Guid expectedOperationId, long expectedRevision)
+    {
+        LibraryMutationJournal? current = TryReadStrict();
+        if (current is null)
+        {
+            return;
+        }
+
+        if (current.OperationId != expectedOperationId || current.Revision != expectedRevision)
+        {
+            throw new InvalidDataException("Mutation journal changed before retire.");
+        }
+
+        StrictPathProbe state = _strictPaths.Probe(_paths.LibraryMutationJournalPath);
+        if (state.Kind == StrictPathKind.File)
+        {
+            File.Delete(_paths.LibraryMutationJournalPath);
+        }
     }
 
     public void DeleteStrict()
@@ -139,6 +187,7 @@ internal sealed class LibraryMutationJournalRepository
                 root,
                 allowedMembers: [
                     "schemaVersion",
+                    "revision",
                     "operationId",
                     "kind",
                     "phase",
@@ -175,11 +224,50 @@ internal sealed class LibraryMutationJournalRepository
         return journal;
     }
 
+    private static LibraryMutationJournal Clone(LibraryMutationJournal j) => new()
+    {
+        SchemaVersion = j.SchemaVersion,
+        Revision = j.Revision,
+        OperationId = j.OperationId,
+        Kind = j.Kind,
+        Phase = j.Phase,
+        PromptId = j.PromptId,
+        BodyRelativePath = j.BodyRelativePath,
+        OldLibrarySha256Hex = j.OldLibrarySha256Hex,
+        NewLibrarySha256Hex = j.NewLibrarySha256Hex,
+        OldBodyLength = j.OldBodyLength,
+        OldBodySha256Hex = j.OldBodySha256Hex,
+        NewBodyLength = j.NewBodyLength,
+        NewBodySha256Hex = j.NewBodySha256Hex,
+        RecoveryBodyRelativePath = j.RecoveryBodyRelativePath
+    };
+
+    private static void RequireSha256(string? value, string fieldName)
+    {
+        if (value is null || value.Length != 64)
+        {
+            throw new InvalidDataException($"{fieldName} must contain exactly 64 hexadecimal characters.");
+        }
+
+        foreach (char c in value)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            {
+                throw new InvalidDataException($"{fieldName} must contain only hexadecimal characters.");
+            }
+        }
+    }
+
     private static void ValidateJournalInvariants(LibraryMutationJournal journal)
     {
         if (journal.SchemaVersion != LibraryMutationJournal.CurrentSchemaVersion)
         {
             throw new InvalidDataException($"Unsupported mutation journal schema version: {journal.SchemaVersion}.");
+        }
+
+        if (journal.Revision < 0)
+        {
+            throw new InvalidDataException("Mutation journal Revision cannot be negative.");
         }
 
         if (journal.OperationId == Guid.Empty)
@@ -209,24 +297,66 @@ internal sealed class LibraryMutationJournalRepository
             throw new InvalidDataException($"Invalid body relative path: '{journal.BodyRelativePath}'. Expected '{expectedBodyRel}'.");
         }
 
-        if (string.IsNullOrWhiteSpace(journal.OldLibrarySha256Hex) || journal.OldLibrarySha256Hex.Length != 64)
-        {
-            throw new InvalidDataException("Invalid OldLibrarySha256Hex in mutation journal.");
-        }
+        RequireSha256(journal.OldLibrarySha256Hex, nameof(journal.OldLibrarySha256Hex));
+        RequireSha256(journal.NewLibrarySha256Hex, nameof(journal.NewLibrarySha256Hex));
 
-        if (string.IsNullOrWhiteSpace(journal.NewLibrarySha256Hex) || journal.NewLibrarySha256Hex.Length != 64)
+        switch (journal.Kind)
         {
-            throw new InvalidDataException("Invalid NewLibrarySha256Hex in mutation journal.");
-        }
+            case LibraryMutationKind.CreatePrompt:
+            case LibraryMutationKind.DuplicatePrompt:
+                if (journal.NewBodyLength is null or < 0)
+                {
+                    throw new InvalidDataException("Create/Duplicate journal requires non-negative NewBodyLength.");
+                }
+                RequireSha256(journal.NewBodySha256Hex, nameof(journal.NewBodySha256Hex));
+                if (journal.OldBodyLength is not null || journal.OldBodySha256Hex is not null)
+                {
+                    throw new InvalidDataException("Create/Duplicate journal must not have OldBody fields.");
+                }
+                if (journal.RecoveryBodyRelativePath is not null)
+                {
+                    throw new InvalidDataException("Create/Duplicate journal must not have RecoveryBodyRelativePath.");
+                }
+                break;
 
-        if (!string.IsNullOrWhiteSpace(journal.RecoveryBodyRelativePath))
-        {
-            string expectedRecoveryRel = Path.Combine("recovery", $"mutation-{journal.OperationId:N}-old-{journal.PromptId:N}.md");
-            string normRecoveryRel = journal.RecoveryBodyRelativePath.Replace('/', '\\').TrimStart('\\');
-            if (!string.Equals(normRecoveryRel, expectedRecoveryRel, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException($"Invalid recovery body relative path: '{journal.RecoveryBodyRelativePath}'. Expected '{expectedRecoveryRel}'.");
-            }
+            case LibraryMutationKind.EditPrompt:
+                if (journal.OldBodyLength is null or < 0)
+                {
+                    throw new InvalidDataException("Edit journal requires non-negative OldBodyLength.");
+                }
+                RequireSha256(journal.OldBodySha256Hex, nameof(journal.OldBodySha256Hex));
+                if (journal.NewBodyLength is null or < 0)
+                {
+                    throw new InvalidDataException("Edit journal requires non-negative NewBodyLength.");
+                }
+                RequireSha256(journal.NewBodySha256Hex, nameof(journal.NewBodySha256Hex));
+                if (string.IsNullOrWhiteSpace(journal.RecoveryBodyRelativePath))
+                {
+                    throw new InvalidDataException("Edit journal requires RecoveryBodyRelativePath.");
+                }
+                string expectedRecoveryRel = Path.Combine("recovery", $"mutation-{journal.OperationId:N}-old-{journal.PromptId:N}.md");
+                string normRecoveryRel = journal.RecoveryBodyRelativePath.Replace('/', '\\').TrimStart('\\');
+                if (!string.Equals(normRecoveryRel, expectedRecoveryRel, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"Invalid recovery body relative path: '{journal.RecoveryBodyRelativePath}'. Expected '{expectedRecoveryRel}'.");
+                }
+                break;
+
+            case LibraryMutationKind.DeletePrompt:
+                if (journal.OldBodyLength is null or < 0)
+                {
+                    throw new InvalidDataException("Delete journal requires non-negative OldBodyLength.");
+                }
+                RequireSha256(journal.OldBodySha256Hex, nameof(journal.OldBodySha256Hex));
+                if (journal.NewBodyLength is not null || journal.NewBodySha256Hex is not null)
+                {
+                    throw new InvalidDataException("Delete journal must not have NewBody fields.");
+                }
+                if (journal.RecoveryBodyRelativePath is not null)
+                {
+                    throw new InvalidDataException("Delete journal must not have RecoveryBodyRelativePath.");
+                }
+                break;
         }
     }
 }

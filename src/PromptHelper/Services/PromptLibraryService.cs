@@ -54,9 +54,9 @@ public sealed class PromptLibraryService
         var paths = libraryRepo.Paths;
         var writer = libraryRepo.DurableWriter ?? new WindowsDurableAtomicFileWriter();
         var journalRepo = new LibraryMutationJournalRepository(paths, writer);
-        var deleter = promptRepo.Deleter is FileDeleter
-            ? (IVerifiedArtifactDeleter)new WindowsVerifiedArtifactDeleter()
-            : new FileDeleterVerifiedAdapter(promptRepo.Deleter);
+        var deleter = promptRepo.Deleter is IVerifiedArtifactDeleter verified
+            ? verified
+            : new WindowsVerifiedArtifactDeleter();
         var recovery = new LibraryMutationRecoveryService(paths, journalRepo, writer, deleter);
         var inspector = new LibraryPackageInspector(paths);
 

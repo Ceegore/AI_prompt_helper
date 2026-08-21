@@ -37,10 +37,8 @@ public sealed class LibraryStartupService
     public LibraryStartupService(
         AppPaths paths,
         LibraryRepository libraryRepo,
-        PromptRepository promptRepo,
-        IFileDeleter deleter,
-        IAtomicTextWriter writer)
-        : this(paths, libraryRepo, promptRepo, deleter, new WindowsDurableAtomicFileWriter())
+        PromptRepository promptRepo)
+        : this(paths, libraryRepo, promptRepo, new FileDeleter(), new WindowsDurableAtomicFileWriter())
     {
     }
 
@@ -197,7 +195,7 @@ public sealed class LibraryStartupService
 
             // Clean first run
             byte[] initMarkerBytes = StrictUtf8Text.Encode("initializing");
-            _writer.ReplaceDurable(_paths.InitializationMarkerPath, initMarkerBytes, DurableFileClass.MutationControl);
+            _writer.ReplaceDurable(_paths.InitializationMarkerPath, initMarkerBytes, DurableFileClass.InitializationControl);
 
             foreach (var kvp in defaultPkg.PromptContents)
             {

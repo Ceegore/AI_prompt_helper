@@ -65,6 +65,9 @@ public partial class App : Application
             var tree = new ManagedTreeTopologyValidator(physicalResolver);
             tree.ValidateManagedTree(runtime.ActivePhysicalRoot, ManagedTreeValidationMode.PreCreation);
 
+            var conflictDetector = new RecoveryJournalConflictDetector();
+            conflictDetector.EnsureNoConflicts(paths);
+
             var recoveryService = new MigrationRecoveryService(treeValidator: tree);
             var recoveryContext = new MigrationRecoveryContext(
                 runtime.ActivePhysicalRoot,
@@ -89,6 +92,10 @@ public partial class App : Application
             tree.ValidateManagedTree(runtime.ActivePhysicalRoot, ManagedTreeValidationMode.RuntimeRequired);
 
             _managedTreeLease = ManagedDataRootSessionLease.Acquire(paths.RootDirectory);
+
+            DataRootTempReconciler.Reconcile(
+                paths,
+                isBootstrapRoot: PathIdentity.Equals(runtime.ActivePhysicalRoot, runtime.BootstrapPhysicalRoot));
 
             var journalRepo = new LibraryMutationJournalRepository(paths, durableWriter);
             var mutationRecovery = new LibraryMutationRecoveryService(paths, journalRepo, durableWriter, verifiedDeleter);

@@ -553,7 +553,7 @@ public sealed class DataFolderTransitionCoordinatorTests
                 ShouldFail = (path, _) => path.Equals(settingsPath, StringComparison.OrdinalIgnoreCase)
             };
 
-            var settingsRepo = new AppSettingsRepository(writer: faultWriter, settingsPathOverride: settingsPath);
+            var settingsRepo = new AppSettingsRepository(durableWriter: faultWriter, settingsPathOverride: settingsPath);
             var migrationService = new DataFolderMigrationService(fileOps: ops);
             var coordinator = new DataFolderTransitionCoordinator(
                 source.Root,

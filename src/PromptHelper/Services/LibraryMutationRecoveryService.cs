@@ -7,6 +7,8 @@ namespace PromptHelper.Services;
 
 public sealed record MutationRecoveryResult(
     bool Success,
+    bool Committed = false,
+    CommitResult? CommitResult = null,
     string? Warning = null,
     string? ErrorMessage = null);
 
@@ -49,22 +51,28 @@ internal sealed class LibraryMutationRecoveryService
             }
 
             string librarySha = Convert.ToHexStringLower(SHA256.HashData(libraryBytes));
-            MutationContentState libraryState;
+            bool oldMatch = string.Equals(librarySha, journal.OldLibrarySha256Hex, StringComparison.OrdinalIgnoreCase);
+            bool newMatch = string.Equals(librarySha, journal.NewLibrarySha256Hex, StringComparison.OrdinalIgnoreCase);
 
-            if (string.Equals(librarySha, journal.OldLibrarySha256Hex, StringComparison.OrdinalIgnoreCase))
+            LibraryMutationMetadataState libraryState;
+            if (oldMatch && newMatch)
             {
-                libraryState = MutationContentState.Old;
+                libraryState = LibraryMutationMetadataState.OldAndNewSameBytes;
             }
-            else if (string.Equals(librarySha, journal.NewLibrarySha256Hex, StringComparison.OrdinalIgnoreCase))
+            else if (oldMatch)
             {
-                libraryState = MutationContentState.New;
+                libraryState = LibraryMutationMetadataState.OldOnly;
+            }
+            else if (newMatch)
+            {
+                libraryState = LibraryMutationMetadataState.NewOnly;
             }
             else
             {
-                libraryState = MutationContentState.Other;
+                libraryState = LibraryMutationMetadataState.Other;
             }
 
-            if (libraryState == MutationContentState.Other)
+            if (libraryState == LibraryMutationMetadataState.Other)
             {
                 throw new InvalidDataException("library.json does not match old or new journal hash. Recovery stopped.");
             }
@@ -99,73 +107,92 @@ internal sealed class LibraryMutationRecoveryService
                 throw new InvalidDataException("Recovery prompt copy does not match expected old hash. Recovery stopped.");
             }
 
-            switch (journal.Kind)
+            return journal.Kind switch
             {
-                case LibraryMutationKind.CreatePrompt:
-                case LibraryMutationKind.DuplicatePrompt:
-                    RecoverCreateOrDuplicate(journal, libraryState, bodyState, promptPath);
-                    break;
+                LibraryMutationKind.CreatePrompt or LibraryMutationKind.DuplicatePrompt
+                    => RecoverCreateOrDuplicate(journal, libraryState, bodyState, promptPath),
 
-                case LibraryMutationKind.EditPrompt:
-                    RecoverEdit(journal, libraryState, bodyState, recoveryState, promptPath, recoveryPath, recoveryBytes);
-                    break;
+                LibraryMutationKind.EditPrompt
+                    => RecoverEdit(journal, libraryState, bodyState, recoveryState, promptPath, recoveryPath, recoveryBytes),
 
-                case LibraryMutationKind.DeletePrompt:
-                    return RecoverDelete(journal, libraryState, bodyState, promptPath);
+                LibraryMutationKind.DeletePrompt
+                    => RecoverDelete(journal, libraryState, bodyState, promptPath),
 
-                default:
-                    throw new InvalidOperationException($"Unsupported mutation kind: {journal.Kind}");
-            }
-
-            _journalRepo.DeleteStrict();
-            return new MutationRecoveryResult(true);
+                _ => throw new InvalidOperationException($"Unsupported mutation kind: {journal.Kind}")
+            };
         }
         catch (Exception ex)
         {
-            return new MutationRecoveryResult(false, null, ex.Message);
+            return new MutationRecoveryResult(false, ErrorMessage: ex.Message);
         }
     }
 
-    private void RecoverCreateOrDuplicate(
+    private MutationRecoveryResult RecoverCreateOrDuplicate(
         LibraryMutationJournal journal,
-        MutationContentState libraryState,
+        LibraryMutationMetadataState libraryState,
         MutationContentState bodyState,
         string promptPath)
     {
-        if (libraryState == MutationContentState.Old)
+        if (libraryState == LibraryMutationMetadataState.OldOnly ||
+            (libraryState == LibraryMutationMetadataState.OldAndNewSameBytes && journal.Phase < LibraryMutationPhase.MetadataDurable))
         {
             if (bodyState == MutationContentState.New)
             {
-                _verifiedDeleter.VerifyAndDelete(
-                    _paths.RootDirectory,
-                    promptPath,
-                    journal.NewBodyLength!.Value,
-                    journal.NewBodySha256Hex!);
+                if (journal.Phase >= LibraryMutationPhase.BodyDurable)
+                {
+                    _verifiedDeleter.VerifyAndDelete(
+                        _paths.RootDirectory,
+                        promptPath,
+                        journal.NewBodyLength!.Value,
+                        journal.NewBodySha256Hex!);
+                }
+                else
+                {
+                    throw new InvalidDataException("Ambiguous body ownership during create/duplicate recovery: body exists but BodyDurable phase was not reached.");
+                }
             }
             else if (bodyState != MutationContentState.Missing)
             {
                 throw new InvalidDataException("Inconsistent active body state for create/duplicate recovery.");
             }
+
+            _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+            return new MutationRecoveryResult(true, Committed: false);
         }
-        else if (libraryState == MutationContentState.New)
+
+        if (libraryState == LibraryMutationMetadataState.NewOnly ||
+            (libraryState == LibraryMutationMetadataState.OldAndNewSameBytes && journal.Phase >= LibraryMutationPhase.MetadataDurable))
         {
             if (bodyState != MutationContentState.New)
             {
                 throw new InvalidDataException("Committed create/duplicate mutation lacks valid new prompt body.");
             }
+
+            _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+            return new MutationRecoveryResult(true, Committed: true, CommitResult: new CommitResult(true, null));
         }
+
+        throw new InvalidDataException("Inconsistent create/duplicate mutation state.");
     }
 
-    private void RecoverEdit(
+    private MutationRecoveryResult RecoverEdit(
         LibraryMutationJournal journal,
-        MutationContentState libraryState,
+        LibraryMutationMetadataState libraryState,
         MutationContentState bodyState,
         MutationContentState recoveryState,
         string promptPath,
         string? recoveryPath,
         byte[]? recoveryBytes)
     {
-        if (libraryState == MutationContentState.Old)
+        bool committed = libraryState switch
+        {
+            LibraryMutationMetadataState.NewOnly => true,
+            LibraryMutationMetadataState.OldOnly => false,
+            LibraryMutationMetadataState.OldAndNewSameBytes => journal.Phase >= LibraryMutationPhase.MetadataDurable,
+            _ => throw new InvalidDataException("Library metadata does not match the mutation journal.")
+        };
+
+        if (!committed)
         {
             if (recoveryState == MutationContentState.Old && recoveryBytes != null)
             {
@@ -187,15 +214,22 @@ internal sealed class LibraryMutationRecoveryService
             {
                 if (recoveryPath != null && File.Exists(recoveryPath))
                 {
-                    File.Delete(recoveryPath);
+                    _verifiedDeleter.VerifyAndDelete(
+                        _paths.RootDirectory,
+                        recoveryPath,
+                        journal.OldBodyLength!.Value,
+                        journal.OldBodySha256Hex!);
                 }
             }
             else
             {
                 throw new InvalidDataException("Inconsistent edit recovery state: old library metadata with missing old body.");
             }
+
+            _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+            return new MutationRecoveryResult(true, Committed: false);
         }
-        else if (libraryState == MutationContentState.New)
+        else
         {
             if (bodyState != MutationContentState.New)
             {
@@ -214,30 +248,31 @@ internal sealed class LibraryMutationRecoveryService
                 }
                 else
                 {
-                    File.Delete(recoveryPath);
+                    throw new InvalidDataException("Recovery prompt copy contains unexpected bytes.");
                 }
             }
+
+            _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+            return new MutationRecoveryResult(true, Committed: true, CommitResult: new CommitResult(true, null));
         }
     }
 
     private MutationRecoveryResult RecoverDelete(
         LibraryMutationJournal journal,
-        MutationContentState libraryState,
+        LibraryMutationMetadataState libraryState,
         MutationContentState bodyState,
         string promptPath)
     {
-        if (libraryState == MutationContentState.Old)
+        if (libraryState == LibraryMutationMetadataState.OldOnly)
         {
-            // Deletion did not commit
-            _journalRepo.DeleteStrict();
-            return new MutationRecoveryResult(true);
+            _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+            return new MutationRecoveryResult(true, Committed: false);
         }
 
-        if (libraryState == MutationContentState.New)
+        if (libraryState == LibraryMutationMetadataState.NewOnly)
         {
             if (bodyState == MutationContentState.Old)
             {
-                // Check backup metadata state
                 byte[]? backupBytes = TryReadBytes(_paths.LibraryBackupPath);
                 bool backupSynchronized = false;
 
@@ -257,21 +292,23 @@ internal sealed class LibraryMutationRecoveryService
                         promptPath,
                         journal.OldBodyLength!.Value,
                         journal.OldBodySha256Hex!);
-                    _journalRepo.DeleteStrict();
-                    return new MutationRecoveryResult(true);
+                    _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+                    return new MutationRecoveryResult(true, Committed: true, CommitResult: new CommitResult(true, null));
                 }
 
-                // Backup is not synchronized; preserve as orphan and retire journal with warning
-                _journalRepo.DeleteStrict();
+                _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+                string warning = "Prompt was deleted from metadata, but prompt file was preserved because safety backup was not synchronized.";
                 return new MutationRecoveryResult(
                     true,
-                    Warning: "Prompt was deleted from metadata, but prompt file was preserved because safety backup was not synchronized.");
+                    Committed: true,
+                    CommitResult: new CommitResult(false, warning),
+                    Warning: warning);
             }
 
             if (bodyState == MutationContentState.Missing)
             {
-                _journalRepo.DeleteStrict();
-                return new MutationRecoveryResult(true);
+                _journalRepo.DeleteStrict(journal.OperationId, journal.Revision);
+                return new MutationRecoveryResult(true, Committed: true, CommitResult: new CommitResult(true, null));
             }
         }
 

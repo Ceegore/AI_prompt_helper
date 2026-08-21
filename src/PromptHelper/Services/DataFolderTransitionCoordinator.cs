@@ -10,6 +10,7 @@ namespace PromptHelper.Services;
 public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionService
 {
     private readonly string _activeCurrentRoot;
+    private readonly string _bootstrapPhysicalRoot;
     private readonly AppSettingsRepository _settingsRepo;
     private readonly DataFolderMigrationService _migrationService;
     private readonly IUserConfirmationService _confirmationService;
@@ -28,7 +29,8 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         DataFolderMigrationService migrationService,
         IUserConfirmationService confirmationService,
         DataRootCapabilityValidator? capabilityValidator = null,
-        IPhysicalPathResolver? pathResolver = null)
+        IPhysicalPathResolver? pathResolver = null,
+        string? bootstrapPhysicalRoot = null)
         : this(
             activeCurrentRoot,
             settingsRepo,
@@ -38,7 +40,8 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             pathResolver,
             manifestRepo: null,
             fileOps: null,
-            caseInspector: null)
+            caseInspector: null,
+            bootstrapPhysicalRoot: bootstrapPhysicalRoot)
     {
     }
 
@@ -51,7 +54,8 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         IPhysicalPathResolver? pathResolver,
         MigrationManifestRepository? manifestRepo,
         IMigrationFileOps? fileOps,
-        IDirectoryCaseSensitivityInspector? caseInspector)
+        IDirectoryCaseSensitivityInspector? caseInspector,
+        string? bootstrapPhysicalRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(activeCurrentRoot);
 
@@ -59,6 +63,9 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         _rootPolicy = new ManagedDataRootPolicy(_physicalPathResolver, caseInspector);
         _activeCurrentRoot = PathIdentity.NormalizeForComparison(activeCurrentRoot);
         _settingsRepo = settingsRepo ?? throw new ArgumentNullException(nameof(settingsRepo));
+        _bootstrapPhysicalRoot = bootstrapPhysicalRoot ?? Path.GetDirectoryName(settingsRepo.SettingsPath) ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PromptHelper");
         _migrationService = migrationService ?? throw new ArgumentNullException(nameof(migrationService));
         _confirmationService = confirmationService ?? throw new ArgumentNullException(nameof(confirmationService));
         _capabilityValidator = capabilityValidator ?? new DataRootCapabilityValidator();
@@ -82,9 +89,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         // 1. Capture snapshot of settings & dual-file precondition under lease
         SettingsTransitionSnapshot settingsSnapshot = _settingsRepo.LoadForTransitionAndCapturePrecondition();
 
-        string bootstrapRoot = Path.GetDirectoryName(_settingsRepo.SettingsPath) ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PromptHelper");
+        string bootstrapRoot = _bootstrapPhysicalRoot;
 
         // 2. Physical active root vs settings identity check
         string settingsLexicalRoot = _settingsRepo.GetEffectiveDataRoot(settingsSnapshot.Settings);
@@ -257,25 +262,34 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw;
         }
 
-        // 4. Re-inspect target under reservation lock on BOUND PHYSICAL TARGET
+        // 4. Target inspection under lock ON BOUND PHYSICAL TARGET
         var lockedInspection = _migrationService.InspectTarget(bound.PhysicalRoot, isReservationActive: true);
-        if (lockedInspection.Kind != initialInspection.Kind ||
-            !FingerprintsEqual(lockedInspection.Fingerprint, initialInspection.Fingerprint))
-        {
-            TargetReservationCleanupResult precommitCleanup = reservation.Release();
-            if (!precommitCleanup.Success)
-            {
-                throw new MigrationRollbackException(
-                    new InvalidOperationException("The selected target library changed while confirmation was open. No settings were changed. Review the target and retry."),
-                    bound.PhysicalRoot,
-                    precommitCleanup.Failures);
-            }
 
-            throw new InvalidOperationException(
-                "The selected target library changed while confirmation was open. No settings were changed. Review the target and retry.");
+        if (lockedInspection.Kind != initialInspection.Kind)
+        {
+            TargetReservationCleanupResult cleanup = reservation.Release();
+            var ex = new InvalidOperationException(
+                $"Target library changed state after acquiring lock (was {initialInspection.Kind}, now {lockedInspection.Kind}). Transition cancelled.");
+            if (!cleanup.Success)
+            {
+                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
+            }
+            throw ex;
         }
 
-        // 5. Capability probe & existing managed-file validation inside target ON BOUND PHYSICAL TARGET
+        if (!FingerprintsEqual(lockedInspection.Fingerprint, initialInspection.Fingerprint))
+        {
+            TargetReservationCleanupResult cleanup = reservation.Release();
+            var ex = new InvalidOperationException(
+                "Target library content modified concurrently while acquiring lock. Transition cancelled.");
+            if (!cleanup.Success)
+            {
+                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
+            }
+            throw ex;
+        }
+
+        // 5. Ephemeral Writable Capability Probing ON BOUND PHYSICAL TARGET
         var existingContext = initialInspection.EffectiveDocument != null
             ? new ExistingLibraryCapabilityContext(
                 initialInspection.Kind,
@@ -291,10 +305,10 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         }
         catch (Exception ex)
         {
-            TargetReservationCleanupResult capCleanup = reservation.Release();
-            if (!capCleanup.Success)
+            TargetReservationCleanupResult cleanup = reservation.Release();
+            if (!cleanup.Success)
             {
-                throw new MigrationRollbackException(ex, bound.PhysicalRoot, capCleanup.Failures);
+                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
             }
             throw;
         }
@@ -315,22 +329,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw;
         }
 
-        // 7. Final fingerprint check immediately before settings commit ON BOUND PHYSICAL TARGET
-        var preCommitInspection = _migrationService.InspectTarget(bound.PhysicalRoot, isReservationActive: true);
-        if (preCommitInspection.Kind != initialInspection.Kind ||
-            !FingerprintsEqual(preCommitInspection.Fingerprint, initialInspection.Fingerprint))
-        {
-            TargetReservationCleanupResult precommitCleanup = reservation.Release();
-            var ex = new InvalidOperationException(
-                "The selected target library changed before settings could be saved. No settings were changed. Review the target and retry.");
-            if (!precommitCleanup.Success)
-            {
-                throw new MigrationRollbackException(ex, bound.PhysicalRoot, precommitCleanup.Failures);
-            }
-            throw ex;
-        }
-
-        // 8. Commit Settings with precondition token
+        // 7. Atomic Settings Update with Precondition
         var newSettings = new AppSettings
         {
             SchemaVersion = AppSettings.CurrentSchemaVersion,
@@ -344,10 +343,10 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         }
         catch (Exception ex)
         {
-            TargetReservationCleanupResult saveCleanup = reservation.Release();
-            if (!saveCleanup.Success)
+            TargetReservationCleanupResult cleanup = reservation.Release();
+            if (!cleanup.Success)
             {
-                throw new MigrationRollbackException(ex, bound.PhysicalRoot, saveCleanup.Failures);
+                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
             }
             throw;
         }
@@ -443,15 +442,21 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw ex;
         }
 
-        // 5. Capture FRESH target baseline NOW and allocate new AttemptId
+        // 5. Capture target baseline from reservation authority and allocate AttemptId
         Guid attemptId = Guid.NewGuid();
         var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
+        var targetBaseline = new MigrationTargetBaseline(
+            targetRootExistedBefore: reservation.Baseline.RootExistedBefore,
+            promptsDirectoryExistedBefore: reservation.Baseline.RootExistedBefore && Directory.Exists(Path.Combine(bound.PhysicalRoot, "prompts")),
+            recoveryDirectoryExistedBefore: reservation.Baseline.RootExistedBefore && Directory.Exists(Path.Combine(bound.PhysicalRoot, "recovery")));
+
         var manifest = MigrationManifestBuilder.BuildCopying(
             runtime.ActivePhysicalRoot,
             bound.PhysicalRoot,
             snapshot,
             attemptId,
-            probePlan);
+            probePlan,
+            targetBaseline);
 
         // 6. Create durable Copying manifest directly at final path
         string markerPath = Path.Combine(bound.PhysicalRoot, ".prompthelper-migration.json");
@@ -470,8 +475,13 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw;
         }
 
-        // 7. Perform migration under target transaction
-        using var tx = new DataFolderMigrationService.MigrationTargetTransaction();
+        // 7. Perform migration under target operation lease and target transaction
+        using var targetOpLease = ManagedTargetOperationLease.Acquire(
+            bound.PhysicalRoot,
+            promptsMayBeMissing: true,
+            recoveryMayBeMissing: true);
+
+        using var tx = new DataFolderMigrationService.MigrationTargetTransaction(bound.PhysicalRoot);
         bool settingsCommitted = false;
         CapabilityValidationResult? capResult = null;
         SettingsSaveResult? saveResult = null;
@@ -506,7 +516,13 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
             _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
 
-            // 9. Commit settings with precondition token
+            // 9. Acquire commit lease on payload files from ReadyGate through settings save
+            using var commitLease = MigrationPayloadCommitLease.Acquire(
+                runtime.ActivePhysicalRoot,
+                bound.PhysicalRoot,
+                manifest);
+
+            // 10. Commit settings with precondition token
             var newSettings = new AppSettings
             {
                 SchemaVersion = AppSettings.CurrentSchemaVersion,
@@ -525,20 +541,13 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                 MigrationRollbackResult rollback = tx.Rollback();
                 var allFailures = new List<MigrationRollbackFailure>(rollback.Failures);
 
-                bool residueRemains = allFailures.Count > 0;
-                foreach (var artifact in manifest.Artifacts)
-                {
-                    string finalPath = MigrationManifestRepository.ResolveManifestArtifactPath(bound.PhysicalRoot, artifact.RelativePath);
-                    string tempPath = MigrationManifestRepository.ResolveManifestArtifactPath(bound.PhysicalRoot, artifact.TempRelativePath);
+                MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(bound.PhysicalRoot, manifest);
+                bool cleanRollback = !inventory.HasUnknownEntries &&
+                                     inventory.PayloadTemps.Count == 0 &&
+                                     inventory.FinalArtifacts.Count == 0 &&
+                                     allFailures.Count == 0;
 
-                    if (_fileOps.FileExists(finalPath) || _fileOps.FileExists(tempPath))
-                    {
-                        residueRemains = true;
-                        break;
-                    }
-                }
-
-                if (!residueRemains)
+                if (cleanRollback)
                 {
                     try
                     {
@@ -547,14 +556,16 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                     catch (Exception markerEx)
                     {
                         allFailures.Add(new MigrationRollbackFailure(markerPath, "DeleteManifestMarker", markerEx.Message));
-                        residueRemains = true;
+                        cleanRollback = false;
                     }
                 }
+
+                targetOpLease.Dispose();
 
                 TargetReservationCleanupResult resCleanup = reservation.Release();
                 allFailures.AddRange(resCleanup.Failures);
 
-                if (allFailures.Count > 0 || residueRemains)
+                if (allFailures.Count > 0 || !cleanRollback)
                 {
                     throw new MigrationRollbackException(original, bound.PhysicalRoot, allFailures);
                 }

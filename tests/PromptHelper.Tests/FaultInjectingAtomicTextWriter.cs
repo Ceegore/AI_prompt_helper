@@ -3,7 +3,7 @@ using PromptHelper.Services;
 
 namespace PromptHelper.Tests;
 
-public sealed class FaultInjectingAtomicTextWriter : IAtomicTextWriter
+public sealed class FaultInjectingAtomicTextWriter : IAtomicTextWriter, IDurableSettingsFileWriter, IDurableAtomicFileWriter
 {
     private readonly IAtomicTextWriter _inner;
     private int _callNumber;
@@ -36,5 +36,33 @@ public sealed class FaultInjectingAtomicTextWriter : IAtomicTextWriter
         }
 
         _inner.Write(targetPath, content);
+    }
+
+    void IDurableSettingsFileWriter.WriteDurable(string targetPath, string content)
+    {
+        Write(targetPath, content);
+    }
+
+    void IDurableAtomicFileWriter.ReplaceDurable(
+        string targetPath,
+        ReadOnlySpan<byte> bytes,
+        DurableFileClass fileClass)
+    {
+        string text = StrictUtf8Text.Decode(bytes, targetPath);
+        Write(targetPath, text);
+    }
+
+    void IDurableAtomicFileWriter.CreateNewDurable(
+        string targetPath,
+        ReadOnlySpan<byte> bytes,
+        DurableFileClass fileClass)
+    {
+        if (File.Exists(targetPath))
+        {
+            throw new IOException($"Target file already exists: '{targetPath}'.");
+        }
+
+        string text = StrictUtf8Text.Decode(bytes, targetPath);
+        Write(targetPath, text);
     }
 }

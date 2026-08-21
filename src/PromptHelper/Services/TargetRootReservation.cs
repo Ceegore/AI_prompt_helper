@@ -24,6 +24,10 @@ public sealed record TargetReservationCleanupResult(
     }
 }
 
+public sealed record TargetReservationBaseline(
+    bool RootExistedBefore,
+    IReadOnlySet<string> CreatedDirectories);
+
 public sealed class TargetRootReservation : IDisposable
 {
     private readonly AppInstanceLock _lock;
@@ -50,6 +54,10 @@ public sealed class TargetRootReservation : IDisposable
         _createdDirectories = createdDirectories;
         _fileOps = fileOps;
     }
+
+    public TargetReservationBaseline Baseline => new(
+        RootExistedBefore: _createdDirectories.Count == 0 || !_createdDirectories.Contains(_rootPath),
+        CreatedDirectories: new HashSet<string>(_createdDirectories, StringComparer.OrdinalIgnoreCase));
 
     public void CommitRootOwnership()
     {

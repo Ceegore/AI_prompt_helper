@@ -13,7 +13,8 @@ internal static class MigrationManifestBuilder
         string targetPhysicalRoot,
         MigrationPayloadSnapshot snapshot,
         Guid attemptId,
-        MigrationCapabilityProbePlan? probePlan = null)
+        MigrationCapabilityProbePlan? probePlan = null,
+        MigrationTargetBaseline? baseline = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePhysicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPhysicalRoot);
@@ -54,15 +55,22 @@ internal static class MigrationManifestBuilder
 
         if (probePlan != null)
         {
+            byte[] createBytes = StrictUtf8Text.Encode("create");
+            byte[] replaceBytes = StrictUtf8Text.Encode("replace");
+
             controlArtifacts.Add(new MigrationControlArtifact
             {
                 RelativePath = probePlan.RootProbe.CurrentRelativePath,
-                Kind = MigrationControlArtifactKind.CapabilityProbeFile
+                Kind = MigrationControlArtifactKind.CapabilityProbeFile,
+                ExpectedLength = createBytes.LongLength,
+                ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes))
             });
             controlArtifacts.Add(new MigrationControlArtifact
             {
                 RelativePath = probePlan.RootProbe.ReplacementRelativePath,
-                Kind = MigrationControlArtifactKind.CapabilityProbeFile
+                Kind = MigrationControlArtifactKind.CapabilityProbeFile,
+                ExpectedLength = replaceBytes.LongLength,
+                ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(replaceBytes))
             });
 
             if (probePlan.PromptsProbe != null)
@@ -70,17 +78,28 @@ internal static class MigrationManifestBuilder
                 controlArtifacts.Add(new MigrationControlArtifact
                 {
                     RelativePath = probePlan.PromptsProbe.CurrentRelativePath,
-                    Kind = MigrationControlArtifactKind.CapabilityProbeFile
+                    Kind = MigrationControlArtifactKind.CapabilityProbeFile,
+                    ExpectedLength = createBytes.LongLength,
+                    ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes))
                 });
                 controlArtifacts.Add(new MigrationControlArtifact
                 {
                     RelativePath = probePlan.PromptsProbe.ReplacementRelativePath,
-                    Kind = MigrationControlArtifactKind.CapabilityProbeFile
+                    Kind = MigrationControlArtifactKind.CapabilityProbeFile,
+                    ExpectedLength = replaceBytes.LongLength,
+                    ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(replaceBytes))
                 });
             }
         }
 
         MigrationManifestArtifact primaryArtifact = artifacts.Single(x => x.Role == MigrationPayloadRole.PrimaryMetadata);
+
+        MigrationTargetBaseline effectiveBaseline = baseline ?? new MigrationTargetBaseline
+        {
+            TargetRootExistedBefore = new StrictPathAuthority().Probe(targetPhysicalRoot).Kind == StrictPathKind.Directory,
+            PromptsDirectoryExistedBefore = new StrictPathAuthority().Probe(Path.Combine(targetPhysicalRoot, "prompts")).Kind == StrictPathKind.Directory,
+            RecoveryDirectoryExistedBefore = new StrictPathAuthority().Probe(Path.Combine(targetPhysicalRoot, "recovery")).Kind == StrictPathKind.Directory
+        };
 
         return new MigrationAttemptManifest
         {
@@ -93,12 +112,7 @@ internal static class MigrationManifestBuilder
             Phase = MigrationManifestPhase.Copying,
             Artifacts = artifacts,
             ControlArtifacts = controlArtifacts,
-            TargetBaseline = new MigrationTargetBaseline
-            {
-                TargetRootExistedBefore = new StrictPathAuthority().Probe(targetPhysicalRoot).Kind == StrictPathKind.Directory,
-                PromptsDirectoryExistedBefore = new StrictPathAuthority().Probe(Path.Combine(targetPhysicalRoot, "prompts")).Kind == StrictPathKind.Directory,
-                RecoveryDirectoryExistedBefore = new StrictPathAuthority().Probe(Path.Combine(targetPhysicalRoot, "recovery")).Kind == StrictPathKind.Directory
-            }
+            TargetBaseline = effectiveBaseline
         };
     }
 }

@@ -7,11 +7,17 @@ using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
 
-internal static class WindowsFinalPathHelper
+public interface IFinalPathNativeApi
 {
-    private const uint FILE_NAME_NORMALIZED = 0x0;
-    private const uint VOLUME_NAME_DOS = 0x0;
+    uint GetFinalPathNameByHandle(
+        SafeFileHandle handle,
+        StringBuilder buffer,
+        uint bufferLength,
+        uint flags);
+}
 
+internal sealed class WindowsFinalPathNativeApi : IFinalPathNativeApi
+{
     [DllImport(
         "kernel32.dll",
         CharSet = CharSet.Unicode,
@@ -22,8 +28,26 @@ internal static class WindowsFinalPathHelper
         uint cchFilePath,
         uint dwFlags);
 
+    public uint GetFinalPathNameByHandle(
+        SafeFileHandle handle,
+        StringBuilder buffer,
+        uint bufferLength,
+        uint flags)
+    {
+        return GetFinalPathNameByHandleW(handle, buffer, bufferLength, flags);
+    }
+}
+
+internal static class WindowsFinalPathHelper
+{
+    private const uint FILE_NAME_NORMALIZED = 0x0;
+    private const uint VOLUME_NAME_DOS = 0x0;
+
+    private static readonly IFinalPathNativeApi DefaultNativeApi = new WindowsFinalPathNativeApi();
+
     public static string GetNormalizedDosPath(
-        SafeFileHandle handle)
+        SafeFileHandle handle,
+        IFinalPathNativeApi? nativeApi = null)
     {
         ArgumentNullException.ThrowIfNull(handle);
 
@@ -34,6 +58,7 @@ internal static class WindowsFinalPathHelper
                 nameof(handle));
         }
 
+        var api = nativeApi ?? DefaultNativeApi;
         int capacity = 512;
 
         while (true)
@@ -42,7 +67,7 @@ internal static class WindowsFinalPathHelper
                 new StringBuilder(capacity);
 
             uint result =
-                GetFinalPathNameByHandleW(
+                api.GetFinalPathNameByHandle(
                     handle,
                     buffer,
                     (uint)capacity,

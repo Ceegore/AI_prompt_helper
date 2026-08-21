@@ -22,10 +22,8 @@ public sealed class PromptRepository
         _deleter = deleter;
     }
 
-    public PromptRepository(
-        AppPaths paths,
-        IAtomicTextWriter writer,
-        IFileDeleter deleter) : this(paths, new AtomicTextWriterDurableAdapter(writer), deleter)
+    public PromptRepository(AppPaths paths)
+        : this(paths, new WindowsDurableAtomicFileWriter(), new FileDeleter())
     {
     }
 

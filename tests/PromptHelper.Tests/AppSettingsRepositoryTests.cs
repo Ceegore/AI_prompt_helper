@@ -247,7 +247,7 @@ public sealed class AppSettingsRepositoryTests
         };
 
         var repo = new AppSettingsRepository(
-            writer: faultWriter,
+            durableWriter: faultWriter,
             settingsPathOverride: settingsPath,
             backupPathOverride: backupPath);
 
@@ -277,7 +277,7 @@ public sealed class AppSettingsRepositoryTests
         };
 
         var repo = new AppSettingsRepository(
-            writer: faultWriter,
+            durableWriter: faultWriter,
             settingsPathOverride: settingsPath,
             backupPathOverride: backupPath);
 

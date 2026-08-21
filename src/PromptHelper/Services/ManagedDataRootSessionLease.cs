@@ -52,7 +52,24 @@ internal sealed class ManagedDataRootSessionLease : IDisposable
                         $"Managed session path is not a directory: '{path}'.");
                 }
 
-                lease._handles.Add(effectiveOpener.OpenManagedNodeLease(path));
+                SafeFileHandle handle = effectiveOpener.OpenManagedNodeLease(path);
+                try
+                {
+                    string final = WindowsFinalPathHelper.GetNormalizedDosPath(handle);
+                    string expected = PathIdentity.NormalizeForComparison(path);
+                    if (!PathIdentity.Equals(final, expected))
+                    {
+                        throw new InvalidDataException(
+                            $"Managed lease opened unexpected physical node. Expected='{expected}', Actual='{final}'.");
+                    }
+
+                    lease._handles.Add(handle);
+                }
+                catch
+                {
+                    handle.Dispose();
+                    throw;
+                }
             }
 
             return lease;

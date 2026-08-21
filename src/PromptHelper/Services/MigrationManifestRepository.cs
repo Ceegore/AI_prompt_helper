@@ -359,7 +359,7 @@ public sealed class MigrationManifestRepository
                 {
                     StrictJsonObjectAuthority.ValidateExactObject(
                         control,
-                        allowedMembers: ["relativePath", "kind"],
+                        allowedMembers: ["relativePath", "kind", "expectedLength", "expectedSha256Hex"],
                         requiredMembers: ["relativePath", "kind"],
                         description: $"manifest.controlArtifacts[{index}] in '{path}'");
                     index++;
@@ -552,7 +552,7 @@ public sealed class MigrationManifestRepository
                 throw new InvalidDataException($"Migration control path collision '{control.RelativePath}'.");
             }
 
-            ValidateControlGrammar(manifest.AttemptId, control);
+            ValidateControlGrammar(manifest.SchemaVersion, manifest.AttemptId, control);
         }
     }
 
@@ -584,48 +584,83 @@ public sealed class MigrationManifestRepository
         }
     }
 
-    private static void ValidateControlGrammar(Guid attemptId, MigrationControlArtifact control)
+    private static void ValidateControlGrammar(int schemaVersion, Guid attemptId, MigrationControlArtifact control)
     {
         string rel = control.RelativePath.Replace('/', '\\').TrimStart('\\');
 
-        switch (control.Kind)
+        if (schemaVersion >= 4)
         {
-            case MigrationControlArtifactKind.ManifestPhaseStaging:
+            if (control.Kind == MigrationControlArtifactKind.ManifestPhaseStaging)
+            {
                 if (!string.Equals(rel, $".prompthelper-migration.stage-{attemptId:N}.tmp", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException($"Invalid manifest phase stage name: '{control.RelativePath}'.");
                 }
-                break;
+                return;
+            }
 
-            case MigrationControlArtifactKind.CapabilityProbeDirectory:
-                string rootProbeDir = $".prompthelper-write-probe-{attemptId:N}-root";
-                string promptsProbeDir = Path.Combine("prompts", $".prompthelper-write-probe-{attemptId:N}-prompts");
-                if (!string.Equals(rel, rootProbeDir, StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(rel, promptsProbeDir, StringComparison.OrdinalIgnoreCase))
+            if (control.Kind == MigrationControlArtifactKind.CapabilityProbeFile)
+            {
+                string[] allowed =
+                [
+                    $".prompthelper-probe-{attemptId:N}-root-current.tmp",
+                    $".prompthelper-probe-{attemptId:N}-root-replacement.tmp",
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-current.tmp"),
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-replacement.tmp")
+                ];
+
+                if (allowed.Any(x => string.Equals(x, rel, StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new InvalidDataException($"Invalid capability probe directory name: '{control.RelativePath}'.");
+                    return;
                 }
-                break;
+            }
 
-            case MigrationControlArtifactKind.CapabilityProbeFile:
-                string probePrefix = $".prompthelper-probe-{attemptId:N}-";
-                string fileName = Path.GetFileName(rel);
-
-                // Schema 4 file probe grammar
-                if (fileName.StartsWith(probePrefix, StringComparison.OrdinalIgnoreCase) &&
-                    fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
-                {
+            throw new InvalidDataException($"Invalid schema-v4 control: '{control.RelativePath}'.");
+        }
+        else
+        {
+            switch (control.Kind)
+            {
+                case MigrationControlArtifactKind.ManifestPhaseStaging:
+                    if (!string.Equals(rel, $".prompthelper-migration.stage-{attemptId:N}.tmp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException($"Invalid manifest phase stage name: '{control.RelativePath}'.");
+                    }
                     break;
-                }
 
-                // Schema 3 legacy file probe grammar
-                if (string.Equals(fileName, "probe-current.txt", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(fileName, "probe-replacement.tmp", StringComparison.OrdinalIgnoreCase))
-                {
+                case MigrationControlArtifactKind.CapabilityProbeDirectory:
+                    string rootProbeDir = $".prompthelper-write-probe-{attemptId:N}-root";
+                    string promptsProbeDir = Path.Combine("prompts", $".prompthelper-write-probe-{attemptId:N}-prompts");
+                    if (!string.Equals(rel, rootProbeDir, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(rel, promptsProbeDir, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException($"Invalid capability probe directory name: '{control.RelativePath}'.");
+                    }
                     break;
-                }
 
-                throw new InvalidDataException($"Invalid capability probe file name: '{control.RelativePath}'.");
+                case MigrationControlArtifactKind.CapabilityProbeFile:
+                    string probePrefix = $".prompthelper-probe-{attemptId:N}-";
+                    string fileName = Path.GetFileName(rel);
+
+                    if (fileName.StartsWith(probePrefix, StringComparison.OrdinalIgnoreCase) &&
+                        fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+
+                    string dir = Path.GetDirectoryName(rel) ?? string.Empty;
+                    bool inKnownDir = string.Equals(dir, $".prompthelper-write-probe-{attemptId:N}-root", StringComparison.OrdinalIgnoreCase) ||
+                                      string.Equals(dir, Path.Combine("prompts", $".prompthelper-write-probe-{attemptId:N}-prompts"), StringComparison.OrdinalIgnoreCase);
+
+                    if (inKnownDir &&
+                        (string.Equals(fileName, "probe-current.txt", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(fileName, "probe-replacement.tmp", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        break;
+                    }
+
+                    throw new InvalidDataException($"Invalid capability probe file name: '{control.RelativePath}'.");
+            }
         }
     }
 

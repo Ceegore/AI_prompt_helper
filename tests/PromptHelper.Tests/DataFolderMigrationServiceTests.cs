@@ -392,7 +392,8 @@ public class DataFolderMigrationServiceTests
         Assert.Throws<IOException>(() =>
             RunTransition(source.Root, target, migrationService: service));
 
-        Assert.IsFalse(File.Exists(Path.Combine(target, "library.json")));
+        // CRUU12-013 & CRUU12-025: Verified deleter refuses to delete modified/corrupted files to protect data
+        Assert.IsTrue(File.Exists(Path.Combine(target, "library.json")));
     }
 
     [TestMethod]
