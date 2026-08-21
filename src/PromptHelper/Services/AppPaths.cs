@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 
 namespace PromptHelper.Services;
@@ -16,6 +17,8 @@ public sealed class AppPaths
     public string LockPath => Path.Combine(RootDirectory, ".app.lock");
 
     public string InitializationMarkerPath => Path.Combine(RootDirectory, "initializing.marker");
+
+    public string MigrationMarkerPath => Path.Combine(RootDirectory, ".prompthelper-migration.json");
 
     public string LibraryPath => Path.Combine(RootDirectory, "library.json");
 

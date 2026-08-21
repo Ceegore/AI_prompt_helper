@@ -7,10 +7,14 @@ namespace PromptHelper.Services;
 public sealed class ManagedDataRootPolicy
 {
     private readonly IPhysicalPathResolver _resolver;
+    private readonly IDirectoryCaseSensitivityInspector _caseInspector;
 
-    public ManagedDataRootPolicy(IPhysicalPathResolver? resolver = null)
+    public ManagedDataRootPolicy(
+        IPhysicalPathResolver? resolver = null,
+        IDirectoryCaseSensitivityInspector? caseInspector = null)
     {
         _resolver = resolver ?? new WindowsPhysicalPathResolver();
+        _caseInspector = caseInspector ?? new WindowsDirectoryCaseSensitivityInspector();
     }
 
     public string ValidateConfiguredRootForStartup(
@@ -26,6 +30,13 @@ public sealed class ManagedDataRootPolicy
         {
             throw new InvalidDataException(
                 "A drive or volume root cannot be used as the Prompt Helper data folder.");
+        }
+
+        string nearestDir = DataRootTopologyValidator.FindNearestExistingDirectory(lexical);
+        if (_caseInspector.IsCaseSensitive(nearestDir))
+        {
+            throw new InvalidDataException(
+                $"Case-sensitive directory '{nearestDir}' cannot be used as a Prompt Helper data folder.");
         }
 
         string physicalTarget;
@@ -47,6 +58,13 @@ public sealed class ManagedDataRootPolicy
             }
 
             throw new InvalidDataException(ex.Message, ex);
+        }
+
+        string nearestPhysicalDir = DataRootTopologyValidator.FindNearestExistingDirectory(physicalTarget);
+        if (_caseInspector.IsCaseSensitive(nearestPhysicalDir))
+        {
+            throw new InvalidDataException(
+                $"Case-sensitive directory '{nearestPhysicalDir}' cannot be used as a Prompt Helper data folder.");
         }
 
         try
@@ -92,7 +110,8 @@ public sealed class ManagedDataRootPolicy
             currentRoot,
             targetRoot,
             bootstrap,
-            _resolver);
+            _resolver,
+            _caseInspector);
     }
 
     public void ValidateDisjointOrSame(

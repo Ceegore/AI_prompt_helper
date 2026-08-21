@@ -24,11 +24,26 @@ public sealed class DataFolderMigrationService
         LibraryDocument Document,
         IReadOnlyDictionary<Guid, byte[]> PromptHashes);
 
+    internal sealed record TargetContentPass(
+        byte[] MetadataBytes,
+        LibraryDocument Document,
+        IReadOnlyDictionary<Guid, byte[]> PromptHashes);
+
     internal sealed record TargetContentSnapshot(
         byte[] MetadataBytes,
         LibraryDocument Document,
         IReadOnlyDictionary<Guid, byte[]> PromptHashes,
         byte[] CombinedFingerprint);
+
+    internal abstract record TargetMetadataState
+    {
+        public sealed record Missing : TargetMetadataState;
+        public sealed record StableCurrent(TargetContentSnapshot Snapshot) : TargetMetadataState;
+        public sealed record Future(int Version) : TargetMetadataState;
+        public sealed record Corrupt(Exception Error) : TargetMetadataState;
+        public sealed record Unreadable(Exception Error) : TargetMetadataState;
+        public sealed record Unstable(Exception Error) : TargetMetadataState;
+    }
 
     internal enum TargetLibraryKind
     {
@@ -37,6 +52,9 @@ public sealed class DataFolderMigrationService
         RecoverableBackupOnly,
         CorruptPrimaryWithValidBackup,
         FutureSchema,
+        Unreadable,
+        Unstable,
+        InterruptedMigration,
         Invalid
     }
 
@@ -139,8 +157,23 @@ public sealed class DataFolderMigrationService
         _pathResolver = pathResolver ?? new WindowsPhysicalPathResolver();
     }
 
-    // TEST/INTERNAL ONLY.
-    // Production data-root changes must go through DataFolderTransitionCoordinator.
+    internal MigrationSnapshot CaptureSourceSnapshot(string currentRoot)
+    {
+        var payload = CaptureSourcePayloadSnapshot(currentRoot);
+        var prim = payload.Files.First(f => f.Role == MigrationPayloadRole.PrimaryMetadata);
+        byte[] libBytes = _fileOps.ReadAllBytes(Path.Combine(currentRoot, "library.json"));
+        var dict = new Dictionary<Guid, byte[]>();
+        foreach (var p in payload.ActiveDocument.Prompts)
+        {
+            string pPath = Path.Combine(currentRoot, "prompts", $"{p.Id:N}.md");
+            if (_fileOps.FileExists(pPath))
+            {
+                dict[p.Id] = _fileOps.ReadAllBytes(pPath);
+            }
+        }
+        return new MigrationSnapshot(libBytes, prim.Sha256, payload.ActiveDocument, dict);
+    }
+
     internal DataFolderChangeResult PrepareTargetForMigrationUnitTest(string currentRoot, string selectedRoot)
     {
         if (string.IsNullOrWhiteSpace(selectedRoot))
@@ -208,10 +241,10 @@ public sealed class DataFolderMigrationService
         }
 
         // Empty target copy workflow
-        MigrationSnapshot snapshot = CaptureSourceSnapshot(cleanCurrent);
+        MigrationPayloadSnapshot snapshot = CaptureSourcePayloadSnapshot(cleanCurrent);
 
         using var tx = new MigrationTargetTransaction();
-        CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, tx);
+        CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, Guid.NewGuid(), tx);
         _capabilityValidator.ValidateWritable(cleanTarget, tx, null);
         tx.Commit();
 
@@ -222,47 +255,40 @@ public sealed class DataFolderMigrationService
     {
         string normalizedTarget = PathIdentity.NormalizeForComparison(targetRoot);
 
-        if (!Directory.Exists(normalizedTarget))
+        if (!_fileOps.DirectoryExists(normalizedTarget))
         {
             return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null, null);
+        }
+
+        string markerPath = Path.Combine(normalizedTarget, ".prompthelper-migration.json");
+        if (_fileOps.FileExists(markerPath))
+        {
+            return new TargetInspection(
+                normalizedTarget,
+                TargetLibraryKind.InterruptedMigration,
+                null,
+                markerPath,
+                "The target folder contains an unfinished migration attempt.",
+                null,
+                null);
         }
 
         string primaryPath = Path.Combine(normalizedTarget, "library.json");
         string backupPath = Path.Combine(normalizedTarget, "library.backup.json");
 
-        bool primaryExists = File.Exists(primaryPath);
-        bool backupExists = File.Exists(backupPath);
+        bool primaryExists = _fileOps.FileExists(primaryPath);
+        bool backupExists = _fileOps.FileExists(backupPath);
 
         if (!primaryExists && !backupExists)
         {
             return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null, null);
         }
 
-        TargetContentSnapshot? primarySnapshot = null;
-        bool primaryFuture = false;
-        int primaryFutureVersion = 0;
-        Exception? primaryEx = null;
+        TargetMetadataState primaryState = primaryExists
+            ? ReadMetadataState(normalizedTarget, primaryPath, "Target library.json")
+            : new TargetMetadataState.Missing();
 
-        if (primaryExists)
-        {
-            try
-            {
-                primarySnapshot = CaptureTargetContentSnapshot(normalizedTarget, primaryPath, "Target library.json");
-            }
-            catch (UnsupportedLibrarySchemaException ex)
-            {
-                primaryFuture = true;
-                primaryFutureVersion = ex.SchemaVersion;
-                primaryEx = ex;
-            }
-            catch (Exception ex)
-            {
-                primaryEx = ex;
-                primarySnapshot = null;
-            }
-        }
-
-        if (primaryFuture)
+        if (primaryState is TargetMetadataState.Future primaryFuture)
         {
             return new TargetInspection(
                 normalizedTarget,
@@ -270,47 +296,51 @@ public sealed class DataFolderMigrationService
                 null,
                 primaryPath,
                 null,
-                new UnsupportedLibrarySchemaException(primaryFutureVersion),
+                new UnsupportedLibrarySchemaException(primaryFuture.Version),
                 null);
         }
 
-        if (primarySnapshot is not null)
+        if (primaryState is TargetMetadataState.Unreadable primaryUnreadable)
+        {
+            return new TargetInspection(
+                normalizedTarget,
+                TargetLibraryKind.Unreadable,
+                null,
+                primaryPath,
+                null,
+                primaryUnreadable.Error,
+                null);
+        }
+
+        if (primaryState is TargetMetadataState.Unstable primaryUnstable)
+        {
+            return new TargetInspection(
+                normalizedTarget,
+                TargetLibraryKind.Unstable,
+                null,
+                primaryPath,
+                null,
+                primaryUnstable.Error,
+                null);
+        }
+
+        if (primaryState is TargetMetadataState.StableCurrent primaryStable)
         {
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.ValidPrimary,
-                primarySnapshot.Document,
+                primaryStable.Snapshot.Document,
                 primaryPath,
                 null,
                 null,
-                primarySnapshot.CombinedFingerprint);
+                primaryStable.Snapshot.CombinedFingerprint);
         }
 
-        TargetContentSnapshot? backupSnapshot = null;
-        bool backupFuture = false;
-        int backupFutureVersion = 0;
-        Exception? backupEx = null;
+        TargetMetadataState backupState = backupExists
+            ? ReadMetadataState(normalizedTarget, backupPath, "Target library.backup.json")
+            : new TargetMetadataState.Missing();
 
-        if (backupExists)
-        {
-            try
-            {
-                backupSnapshot = CaptureTargetContentSnapshot(normalizedTarget, backupPath, "Target library.backup.json");
-            }
-            catch (UnsupportedLibrarySchemaException ex)
-            {
-                backupFuture = true;
-                backupFutureVersion = ex.SchemaVersion;
-                backupEx = ex;
-            }
-            catch (Exception ex)
-            {
-                backupEx = ex;
-                backupSnapshot = null;
-            }
-        }
-
-        if (backupFuture)
+        if (backupState is TargetMetadataState.Future backupFuture)
         {
             return new TargetInspection(
                 normalizedTarget,
@@ -318,39 +348,53 @@ public sealed class DataFolderMigrationService
                 null,
                 backupPath,
                 null,
-                new UnsupportedLibrarySchemaException(backupFutureVersion),
+                new UnsupportedLibrarySchemaException(backupFuture.Version),
                 null);
         }
 
-        if (primaryExists && primarySnapshot is null && backupSnapshot is not null)
+        if (primaryState is TargetMetadataState.Corrupt corruptPrimary &&
+            backupState is TargetMetadataState.StableCurrent backupStable)
         {
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.CorruptPrimaryWithValidBackup,
-                backupSnapshot.Document,
+                backupStable.Snapshot.Document,
                 backupPath,
                 null,
-                primaryEx,
+                corruptPrimary.Error,
                 null);
         }
 
-        if (!primaryExists && backupSnapshot is not null)
+        if (primaryState is TargetMetadataState.Missing &&
+            backupState is TargetMetadataState.StableCurrent validBackupOnly)
         {
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.RecoverableBackupOnly,
-                backupSnapshot.Document,
+                validBackupOnly.Snapshot.Document,
                 backupPath,
                 "The selected folder contains a recoverable Prompt Helper safety backup but no primary library.json. Prompt Helper will recover it on startup; the current library will not be copied there.",
                 null,
-                backupSnapshot.CombinedFingerprint);
+                validBackupOnly.Snapshot.CombinedFingerprint);
         }
 
-        Exception error = primaryEx is InvalidDataException pIde
-            ? pIde
-            : backupEx is InvalidDataException bIde
-                ? bIde
-                : new InvalidDataException($"Target library metadata is invalid: {primaryEx?.Message ?? backupEx?.Message}", primaryEx ?? backupEx);
+        Exception error;
+        if (primaryState is TargetMetadataState.Corrupt cp)
+        {
+            error = cp.Error;
+        }
+        else if (backupState is TargetMetadataState.Corrupt cb)
+        {
+            error = cb.Error;
+        }
+        else if (backupState is TargetMetadataState.Unreadable ub)
+        {
+            error = ub.Error;
+        }
+        else
+        {
+            error = new InvalidDataException("Target library metadata is invalid or cannot be recognized.");
+        }
 
         return new TargetInspection(
             normalizedTarget,
@@ -362,7 +406,64 @@ public sealed class DataFolderMigrationService
             null);
     }
 
+    private TargetMetadataState ReadMetadataState(
+        string root,
+        string metadataPath,
+        string metadataDescription)
+    {
+        try
+        {
+            TargetContentSnapshot snapshot = CaptureTargetContentSnapshot(root, metadataPath, metadataDescription);
+            return new TargetMetadataState.StableCurrent(snapshot);
+        }
+        catch (UnsupportedLibrarySchemaException ex)
+        {
+            return new TargetMetadataState.Future(ex.SchemaVersion);
+        }
+        catch (TargetInspectionUnstableException ex)
+        {
+            return new TargetMetadataState.Unstable(ex);
+        }
+        catch (Exception ex) when (
+            ex is JsonException or
+            InvalidDataException or
+            ArgumentException)
+        {
+            return new TargetMetadataState.Corrupt(ex);
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            SecurityException)
+        {
+            return new TargetMetadataState.Unreadable(ex);
+        }
+    }
+
     private TargetContentSnapshot CaptureTargetContentSnapshot(
+        string root,
+        string metadataPath,
+        string metadataDescription)
+    {
+        TargetContentPass pass1 = CaptureTargetContentPass(root, metadataPath, metadataDescription);
+        TargetContentPass pass2 = CaptureTargetContentPass(root, metadataPath, metadataDescription);
+
+        if (!ContentPassesEqual(pass1, pass2))
+        {
+            throw new TargetInspectionUnstableException(
+                "Target library changed while being inspected. Retry with a stable target.");
+        }
+
+        byte[] combinedFingerprint = ComputeCombinedFingerprint(pass2.MetadataBytes, pass2.PromptHashes);
+
+        return new TargetContentSnapshot(
+            MetadataBytes: pass2.MetadataBytes,
+            Document: pass2.Document,
+            PromptHashes: pass2.PromptHashes,
+            CombinedFingerprint: combinedFingerprint);
+    }
+
+    private TargetContentPass CaptureTargetContentPass(
         string root,
         string metadataPath,
         string metadataDescription)
@@ -379,7 +480,7 @@ public sealed class DataFolderMigrationService
         foreach (PromptRecord prompt in document.Prompts)
         {
             string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
-            if (!File.Exists(promptPath))
+            if (!_fileOps.FileExists(promptPath))
             {
                 throw new InvalidDataException(
                     $"{metadataDescription} references prompt file '{prompt.Id:N}.md', but it is missing from '{promptsDir}'.");
@@ -389,21 +490,34 @@ public sealed class DataFolderMigrationService
             promptHashes[prompt.Id] = SHA256.HashData(bodyBytes);
         }
 
-        // Verify metadata stability with single re-read check
-        byte[] verificationBytes = _fileOps.ReadAllBytes(metadataPath);
-        if (!metadataBytes.AsSpan().SequenceEqual(verificationBytes))
-        {
-            throw new InvalidOperationException(
-                "Target library metadata changed while being inspected. Retry with a stable target.");
-        }
-
-        byte[] combinedFingerprint = ComputeCombinedFingerprint(metadataBytes, promptHashes);
-
-        return new TargetContentSnapshot(
+        return new TargetContentPass(
             MetadataBytes: metadataBytes,
             Document: document,
-            PromptHashes: promptHashes,
-            CombinedFingerprint: combinedFingerprint);
+            PromptHashes: promptHashes);
+    }
+
+    private static bool ContentPassesEqual(TargetContentPass left, TargetContentPass right)
+    {
+        if (!left.MetadataBytes.AsSpan().SequenceEqual(right.MetadataBytes))
+        {
+            return false;
+        }
+
+        if (left.PromptHashes.Count != right.PromptHashes.Count)
+        {
+            return false;
+        }
+
+        foreach (var pair in left.PromptHashes)
+        {
+            if (!right.PromptHashes.TryGetValue(pair.Key, out byte[]? other) ||
+                !pair.Value.AsSpan().SequenceEqual(other))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     internal static byte[] ComputeCombinedFingerprint(
@@ -422,35 +536,16 @@ public sealed class DataFolderMigrationService
         return hash.GetHashAndReset();
     }
 
-    internal static byte[] ComputeEffectiveLibraryFingerprint(
-        string root,
-        string metadataPath,
-        LibraryDocument document)
+    internal MigrationPayloadSnapshot CaptureSourcePayloadSnapshot(string currentRoot)
     {
-        byte[] metadata = File.ReadAllBytes(metadataPath);
-        string promptsDir = Path.Combine(root, "prompts");
-        var promptHashes = new Dictionary<Guid, byte[]>();
-
-        foreach (PromptRecord prompt in document.Prompts)
-        {
-            string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
-            byte[] body = File.ReadAllBytes(promptPath);
-            promptHashes[prompt.Id] = SHA256.HashData(body);
-        }
-
-        return ComputeCombinedFingerprint(metadata, promptHashes);
-    }
-
-    internal MigrationSnapshot CaptureSourceSnapshot(string currentRoot)
-    {
-        if (!Directory.Exists(currentRoot))
+        if (!_fileOps.DirectoryExists(currentRoot))
         {
             throw new DirectoryNotFoundException(
                 $"Library directory does not exist: '{currentRoot}'");
         }
 
         string libraryPath = Path.Combine(currentRoot, "library.json");
-        if (!File.Exists(libraryPath))
+        if (!_fileOps.FileExists(libraryPath))
         {
             throw new InvalidDataException(
                 $"Library directory does not contain library.json: '{currentRoot}'");
@@ -458,7 +553,6 @@ public sealed class DataFolderMigrationService
 
         byte[] libraryBytes = _fileOps.ReadAllBytes(libraryPath);
         byte[] libraryHash = SHA256.HashData(libraryBytes);
-
         string libraryJson = DecodeUtf8Text(libraryBytes);
 
         LibraryDocument document;
@@ -477,128 +571,222 @@ public sealed class DataFolderMigrationService
                 ex);
         }
 
-        string promptsDir = Path.Combine(currentRoot, "prompts");
-        var promptHashes = new Dictionary<Guid, byte[]>();
+        var files = new List<MigrationPayloadFile>();
+        var relativePathSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (PromptRecord prompt in document.Prompts)
+        // 1. Primary metadata
+        files.Add(new MigrationPayloadFile(
+            "library.json",
+            MigrationPayloadRole.PrimaryMetadata,
+            libraryBytes.Length,
+            libraryHash));
+        relativePathSet.Add("library.json");
+
+        // 2. Safety backup if present
+        string backupPath = Path.Combine(currentRoot, "library.backup.json");
+        if (_fileOps.FileExists(backupPath))
         {
-            string promptPath = Path.Combine(
-                promptsDir,
-                $"{prompt.Id:N}.md");
-
-            if (!File.Exists(promptPath))
-            {
-                throw new InvalidDataException(
-                    $"Library references prompt file '{prompt.Id:N}.md' " +
-                    $"which does not exist in '{promptsDir}'.");
-            }
-
-            byte[] promptBytes;
-            try
-            {
-                promptBytes = _fileOps.ReadAllBytes(promptPath);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidDataException(
-                    $"Prompt file '{promptPath}' cannot be read: {ex.Message}",
-                    ex);
-            }
-
-            promptHashes.Add(
-                prompt.Id,
-                SHA256.HashData(promptBytes));
+            byte[] backupBytes = _fileOps.ReadAllBytes(backupPath);
+            files.Add(new MigrationPayloadFile(
+                "library.backup.json",
+                MigrationPayloadRole.SafetyBackup,
+                backupBytes.Length,
+                SHA256.HashData(backupBytes)));
+            relativePathSet.Add("library.backup.json");
         }
 
-        return new MigrationSnapshot(
-            LibraryBytes: libraryBytes,
-            LibraryHash: libraryHash,
-            Document: document,
-            PromptHashes: promptHashes);
+        // 3. Active Prompts & Orphan Prompts
+        string promptsDir = Path.Combine(currentRoot, "prompts");
+        var activePromptFileNames = new HashSet<string>(
+            document.Prompts.Select(p => $"{p.Id:N}.md"),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (_fileOps.DirectoryExists(promptsDir))
+        {
+            foreach (string promptFile in _fileOps.EnumeratePromptFiles(promptsDir))
+            {
+                string fileName = Path.GetFileName(promptFile);
+                string relPath = Path.Combine("prompts", fileName);
+                byte[] bytes = _fileOps.ReadAllBytes(promptFile);
+                MigrationPayloadRole role = activePromptFileNames.Contains(fileName)
+                    ? MigrationPayloadRole.PromptBody
+                    : MigrationPayloadRole.OrphanPromptBody;
+
+                files.Add(new MigrationPayloadFile(
+                    relPath,
+                    role,
+                    bytes.Length,
+                    SHA256.HashData(bytes)));
+                relativePathSet.Add(relPath);
+            }
+        }
+
+        // Ensure all active prompts exist
+        foreach (PromptRecord prompt in document.Prompts)
+        {
+            string relPath = Path.Combine("prompts", $"{prompt.Id:N}.md");
+            if (!relativePathSet.Contains(relPath))
+            {
+                throw new InvalidDataException(
+                    $"Library references prompt file '{prompt.Id:N}.md' which does not exist in '{promptsDir}'.");
+            }
+        }
+
+        // 4. Top-level Recovery Artifacts
+        string recoveryDir = Path.Combine(currentRoot, "recovery");
+        if (_fileOps.DirectoryExists(recoveryDir))
+        {
+            foreach (string recFile in _fileOps.EnumerateFiles(recoveryDir))
+            {
+                string fileName = Path.GetFileName(recFile);
+                string relPath = Path.Combine("recovery", fileName);
+                byte[] bytes = _fileOps.ReadAllBytes(recFile);
+
+                files.Add(new MigrationPayloadFile(
+                    relPath,
+                    MigrationPayloadRole.RecoveryArtifact,
+                    bytes.Length,
+                    SHA256.HashData(bytes)));
+                relativePathSet.Add(relPath);
+            }
+        }
+
+        return new MigrationPayloadSnapshot(
+            ActiveDocument: document,
+            Files: files,
+            RelativePathSet: relativePathSet);
     }
 
     internal void CopySnapshotToTarget(
         string currentRoot,
         string targetRoot,
-        MigrationSnapshot snapshot,
+        MigrationPayloadSnapshot snapshot,
+        Guid attemptId,
         MigrationTargetTransaction tx)
     {
         EnsureDirectoryTracked(targetRoot, tx);
 
-        string targetPromptsDir = Path.Combine(targetRoot, "prompts");
-        string targetRecoveryDir = Path.Combine(targetRoot, "recovery");
-
-        EnsureDirectoryTracked(targetPromptsDir, tx);
-        EnsureDirectoryTracked(targetRecoveryDir, tx);
-
-        string targetLibraryPath = Path.Combine(targetRoot, "library.json");
-        string sourceLibraryPath = Path.Combine(currentRoot, "library.json");
-
-        CopyFileNoOverwrite(sourceLibraryPath, targetLibraryPath, tx);
-
-        string currentBackupPath = Path.Combine(currentRoot, "library.backup.json");
-        if (File.Exists(currentBackupPath))
+        // Copy all files listed in snapshot
+        foreach (MigrationPayloadFile item in snapshot.Files)
         {
-            string targetBackupPath = Path.Combine(targetRoot, "library.backup.json");
-            CopyFileNoOverwrite(currentBackupPath, targetBackupPath, tx);
+            string sourcePath = Path.Combine(currentRoot, item.RelativePath);
+            string destPath = Path.Combine(targetRoot, item.RelativePath);
+
+            CopyPayloadFileDurably(sourcePath, destPath, attemptId, tx);
         }
 
-        string sourcePromptsDir = Path.Combine(currentRoot, "prompts");
-        if (Directory.Exists(sourcePromptsDir))
+        // Verify eligible source file set has not changed
+        HashSet<string> currentEligibleSourceFiles = EnumerateEligiblePayloadFiles(currentRoot);
+        if (!currentEligibleSourceFiles.SetEquals(snapshot.RelativePathSet))
         {
-            foreach (string promptFile in _fileOps.EnumeratePromptFiles(sourcePromptsDir))
+            throw new IOException("Source library file set changed during migration. Transition aborted.");
+        }
+
+        // Verify SHA256 and length of every source file
+        foreach (MigrationPayloadFile item in snapshot.Files)
+        {
+            string sourcePath = Path.Combine(currentRoot, item.RelativePath);
+            if (!_fileOps.FileExists(sourcePath))
             {
-                string fileName = Path.GetFileName(promptFile);
-                string destPromptPath = Path.Combine(targetPromptsDir, fileName);
-                CopyFileNoOverwrite(promptFile, destPromptPath, tx);
+                throw new IOException($"Source file '{item.RelativePath}' disappeared during migration.");
+            }
+
+            byte[] currentBytes = _fileOps.ReadAllBytes(sourcePath);
+            if (currentBytes.Length != item.Length ||
+                !SHA256.HashData(currentBytes).AsSpan().SequenceEqual(item.Sha256))
+            {
+                throw new IOException($"Source file '{item.RelativePath}' changed during migration. Transition aborted.");
             }
         }
 
-        string currentRecoveryDir = Path.Combine(currentRoot, "recovery");
-        if (Directory.Exists(currentRecoveryDir))
+        // Verify SHA256 and length of every target file
+        foreach (MigrationPayloadFile item in snapshot.Files)
         {
-            foreach (string recoveryFile in Directory.EnumerateFiles(currentRecoveryDir, "*", SearchOption.TopDirectoryOnly))
+            string targetPath = Path.Combine(targetRoot, item.RelativePath);
+            if (!_fileOps.FileExists(targetPath))
             {
-                string fileName = Path.GetFileName(recoveryFile);
-                string destRecoveryPath = Path.Combine(targetRecoveryDir, fileName);
-                CopyFileNoOverwrite(recoveryFile, destRecoveryPath, tx);
-            }
-        }
-
-        // Verify source library.json did not mutate
-        byte[] finalSourceLibHash = SHA256.HashData(_fileOps.ReadAllBytes(sourceLibraryPath));
-        if (!snapshot.LibraryHash.AsSpan().SequenceEqual(finalSourceLibHash))
-        {
-            throw new IOException("Source library metadata changed during migration. Retry after it is stable.");
-        }
-
-        // Verify target library.json bytes match snapshot
-        byte[] targetLibraryHash = SHA256.HashData(_fileOps.ReadAllBytes(targetLibraryPath));
-        if (!snapshot.LibraryHash.AsSpan().SequenceEqual(targetLibraryHash))
-        {
-            throw new IOException("Target library.json does not match the captured source snapshot.");
-        }
-
-        // Verify source and target prompt body hashes
-        foreach (PromptRecord prompt in snapshot.Document.Prompts)
-        {
-            string pPath = Path.Combine(sourcePromptsDir, $"{prompt.Id:N}.md");
-            byte[] finalSourcePromptHash = SHA256.HashData(_fileOps.ReadAllBytes(pPath));
-            if (!snapshot.PromptHashes[prompt.Id].AsSpan().SequenceEqual(finalSourcePromptHash))
-            {
-                throw new IOException($"Source prompt '{prompt.Id:N}.md' changed during migration. Retry after it is stable.");
+                throw new IOException($"Target file '{item.RelativePath}' was not created.");
             }
 
-            string targetPPath = Path.Combine(targetPromptsDir, $"{prompt.Id:N}.md");
-            byte[] targetPromptHash = SHA256.HashData(_fileOps.ReadAllBytes(targetPPath));
-            if (!snapshot.PromptHashes[prompt.Id].AsSpan().SequenceEqual(targetPromptHash))
+            byte[] targetBytes = _fileOps.ReadAllBytes(targetPath);
+            if (targetBytes.Length != item.Length ||
+                !SHA256.HashData(targetBytes).AsSpan().SequenceEqual(item.Sha256))
             {
-                throw new IOException($"Target prompt '{prompt.Id:N}.md' does not match source snapshot.");
+                throw new IOException($"Target file '{item.RelativePath}' does not match source snapshot.");
             }
         }
 
         // Structural verification of target metadata and prompts
-        ValidateDocumentPromptBodies(targetRoot, snapshot.Document, "Migrated target library");
+        ValidateDocumentPromptBodies(targetRoot, snapshot.ActiveDocument, "Migrated target library");
+    }
+
+    private HashSet<string> EnumerateEligiblePayloadFiles(string root)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        string libPath = Path.Combine(root, "library.json");
+        if (_fileOps.FileExists(libPath))
+        {
+            set.Add("library.json");
+        }
+
+        string backupPath = Path.Combine(root, "library.backup.json");
+        if (_fileOps.FileExists(backupPath))
+        {
+            set.Add("library.backup.json");
+        }
+
+        string promptsDir = Path.Combine(root, "prompts");
+        if (_fileOps.DirectoryExists(promptsDir))
+        {
+            foreach (string file in _fileOps.EnumeratePromptFiles(promptsDir))
+            {
+                set.Add(Path.Combine("prompts", Path.GetFileName(file)));
+            }
+        }
+
+        string recoveryDir = Path.Combine(root, "recovery");
+        if (_fileOps.DirectoryExists(recoveryDir))
+        {
+            foreach (string file in _fileOps.EnumerateFiles(recoveryDir))
+            {
+                set.Add(Path.Combine("recovery", Path.GetFileName(file)));
+            }
+        }
+
+        return set;
+    }
+
+    private void CopyPayloadFileDurably(
+        string sourcePath,
+        string finalPath,
+        Guid attemptId,
+        MigrationTargetTransaction tx)
+    {
+        if (_fileOps.FileExists(finalPath))
+        {
+            throw new IOException($"Target file collision: '{finalPath}' already exists.");
+        }
+
+        string directory = Path.GetDirectoryName(finalPath)
+            ?? throw new InvalidOperationException("Target payload path has no directory.");
+
+        EnsureDirectoryTracked(directory, tx);
+
+        string tempPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(finalPath)}.migration-{attemptId:N}-{Guid.NewGuid():N}.tmp");
+
+        using (Stream source = _fileOps.OpenRead(sourcePath))
+        using (Stream destination = _fileOps.CreateNewFile(tempPath))
+        {
+            tx.TrackCreatedFile(tempPath);
+            source.CopyTo(destination);
+            _fileOps.FlushToDisk(destination);
+        }
+
+        _fileOps.MoveNoOverwriteWriteThrough(tempPath, finalPath);
+        tx.PromoteCreatedFile(tempPath, finalPath);
     }
 
     private static void ValidateDocumentPromptBodies(
@@ -656,40 +844,6 @@ public sealed class DataFolderMigrationService
             Directory.CreateDirectory(path);
             tx.TrackCreatedDirectory(path);
         }
-    }
-
-    private void CopyFileNoOverwrite(
-        string sourcePath,
-        string destPath,
-        MigrationTargetTransaction tx)
-    {
-        if (File.Exists(destPath))
-        {
-            throw new IOException(
-                $"Target file collision: '{destPath}' already exists.");
-        }
-
-        string destDir = Path.GetDirectoryName(destPath) ?? string.Empty;
-        if (!string.IsNullOrEmpty(destDir))
-        {
-            EnsureDirectoryTracked(destDir, tx);
-        }
-
-        string destFileName = Path.GetFileName(destPath);
-        string tempPath = Path.Combine(destDir, $".{destFileName}.migration-{Guid.NewGuid():N}.tmp");
-
-        using (Stream destStream = _fileOps.CreateNewFile(tempPath))
-        {
-            tx.TrackCreatedFile(tempPath);
-            using (Stream srcStream = _fileOps.OpenRead(sourcePath))
-            {
-                srcStream.CopyTo(destStream);
-            }
-            destStream.Flush();
-        }
-
-        _fileOps.MoveNoOverwrite(tempPath, destPath);
-        tx.PromoteCreatedFile(tempPath, destPath);
     }
 
     private static string DecodeUtf8Text(byte[] bytes)

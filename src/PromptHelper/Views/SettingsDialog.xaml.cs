@@ -15,7 +15,7 @@ public partial class SettingsDialog : Window
     private readonly AppSettingsRepository _settingsRepo;
     private readonly DataFolderMigrationService _migrationService;
     private readonly IUserConfirmationService _confirmationService;
-    private readonly DataFolderTransitionCoordinator _coordinator;
+    private readonly IDataFolderTransitionService _transitionService;
     private string _selectedDataFolder;
 
     public SettingsDialog(
@@ -23,14 +23,14 @@ public partial class SettingsDialog : Window
         AppSettingsRepository settingsRepo,
         DataFolderMigrationService migrationService,
         IUserConfirmationService? confirmationService = null,
-        DataFolderTransitionCoordinator? coordinator = null)
+        IDataFolderTransitionService? transitionService = null)
     {
         InitializeComponent();
         _currentDataFolder = currentDataFolder ?? throw new ArgumentNullException(nameof(currentDataFolder));
         _settingsRepo = settingsRepo ?? throw new ArgumentNullException(nameof(settingsRepo));
         _migrationService = migrationService ?? throw new ArgumentNullException(nameof(migrationService));
         _confirmationService = confirmationService ?? new WpfUserConfirmationService(this);
-        _coordinator = coordinator ?? new DataFolderTransitionCoordinator(
+        _transitionService = transitionService ?? new DataFolderTransitionCoordinator(
             _currentDataFolder,
             _settingsRepo,
             _migrationService,
@@ -41,6 +41,16 @@ public partial class SettingsDialog : Window
 
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.1.0";
         VersionTextBlock.Text = $"v{version}";
+    }
+
+    public SettingsDialog(
+        string currentDataFolder,
+        AppSettingsRepository settingsRepo,
+        DataFolderMigrationService migrationService,
+        IUserConfirmationService? confirmationService,
+        DataFolderTransitionCoordinator? coordinator)
+        : this(currentDataFolder, settingsRepo, migrationService, confirmationService, (IDataFolderTransitionService?)coordinator)
+    {
     }
 
     public bool RestartRequired { get; private set; }
@@ -71,7 +81,7 @@ public partial class SettingsDialog : Window
                 ? DataFolderTextBox.Text
                 : _selectedDataFolder;
 
-            DataFolderTransitionResult result = _coordinator.RequestTransition(targetInput ?? string.Empty);
+            DataFolderTransitionResult result = _transitionService.RequestTransition(targetInput ?? string.Empty);
 
             if (!result.Changed)
             {
@@ -122,6 +132,14 @@ public partial class SettingsDialog : Window
             {
             }
             Close();
+        }
+        catch (ConfiguredDataFolderUnavailableException ex)
+        {
+            _confirmationService.ShowWarning(
+                "The currently configured Prompt Helper data folder can no longer be resolved:\r\n\r\n" +
+                ex.DataFolderPath +
+                "\r\n\r\nNo data-folder change was committed. Restore or reconnect the folder and retry.",
+                "Configured Data Folder Unavailable");
         }
         catch (UnsupportedLibrarySchemaException ex)
         {

@@ -43,13 +43,16 @@ public sealed class AppSettingsRepository
     private readonly string _lockPath;
     private readonly string _bootstrapRoot;
     private readonly IAtomicTextWriter _writer;
+    private readonly SettingsLeasePolicy _leasePolicy;
 
     public AppSettingsRepository(
         IAtomicTextWriter? writer = null,
         string? settingsPathOverride = null,
-        string? backupPathOverride = null)
+        string? backupPathOverride = null,
+        SettingsLeasePolicy? leasePolicy = null)
     {
         _writer = writer ?? new AtomicTextWriter();
+        _leasePolicy = leasePolicy ?? SettingsLeasePolicy.Default;
 
         if (settingsPathOverride != null)
         {
@@ -75,12 +78,17 @@ public sealed class AppSettingsRepository
     public string BackupPath => _backupPath;
     public string LockPath => _lockPath;
 
-    public SettingsMutationLease AcquireMutationLease(int timeoutMs = 5000)
+    public SettingsMutationLease AcquireMutationLease(SettingsLeasePolicy? policy = null)
     {
-        return SettingsMutationLease.Acquire(_lockPath, timeoutMs);
+        return SettingsMutationLease.Acquire(_lockPath, policy ?? _leasePolicy);
     }
 
-    public SettingsFileToken CaptureFileToken(string path)
+    public SettingsMutationLease AcquireMutationLease(int timeoutMs)
+    {
+        return SettingsMutationLease.Acquire(_lockPath, new SettingsLeasePolicy(TimeSpan.FromMilliseconds(timeoutMs), TimeSpan.FromMilliseconds(25)));
+    }
+
+    internal SettingsFileToken CaptureFileToken(string path)
     {
         try
         {
@@ -104,7 +112,7 @@ public sealed class AppSettingsRepository
         }
     }
 
-    public SettingsWritePrecondition CaptureWritePreconditionCore()
+    internal SettingsWritePrecondition CaptureWritePreconditionCore()
     {
         SettingsFileToken primary = CaptureFileToken(_settingsPath);
         SettingsFileToken backup = CaptureFileToken(_backupPath);
@@ -182,7 +190,7 @@ public sealed class AppSettingsRepository
         return LoadOrRecoverCore();
     }
 
-    public SettingsLoadResult LoadOrRecoverCore()
+    internal SettingsLoadResult LoadOrRecoverCore()
     {
         SettingsReadState primaryState = ReadState(_settingsPath);
 
@@ -321,7 +329,7 @@ public sealed class AppSettingsRepository
         return SaveCore(settings);
     }
 
-    public SettingsSaveResult SaveCore(AppSettings settings)
+    internal SettingsSaveResult SaveCore(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 

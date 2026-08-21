@@ -753,8 +753,8 @@ public sealed class DataFolderTransitionCoordinatorTests
             new DataFolderMigrationService(fileOps: ops),
             new FakeUserConfirmationService { ConfirmationResult = true });
 
-        var ex = Assert.Throws<InvalidDataException>(() => coordinator.RequestTransition(target.Root));
-        Assert.IsTrue(ex.InnerException?.Message.Contains("metadata changed while being inspected") ?? false);
+        var ex = Assert.Throws<TargetInspectionUnstableException>(() => coordinator.RequestTransition(target.Root));
+        Assert.IsTrue(ex.Message.Contains("changed while being inspected", StringComparison.OrdinalIgnoreCase));
     }
 
     [TestMethod]
@@ -836,11 +836,9 @@ public sealed class DataFolderTransitionCoordinatorTests
         string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
         File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
 
-        var baseWriter = new AtomicTextWriter();
-        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        var ops = new FakeCapabilityFileOps
         {
-            // Fail capability probe replace step
-            ShouldFail = (_, callNum) => callNum == 2
+            OnReplace = (src, dst, bak) => throw new IOException("Simulated capability probe failure")
         };
 
         var coordinator = new DataFolderTransitionCoordinator(
@@ -848,7 +846,7 @@ public sealed class DataFolderTransitionCoordinatorTests
             new AppSettingsRepository(settingsPathOverride: settingsPath),
             new DataFolderMigrationService(),
             new FakeUserConfirmationService(),
-            capabilityValidator: new DataRootCapabilityValidator(faultWriter));
+            capabilityValidator: new DataRootCapabilityValidator(ops));
 
         // When probe fails during empty target transition, tx rollback cleans probe files tracked in journal
         Assert.Throws<IOException>(() => coordinator.RequestTransition(target));

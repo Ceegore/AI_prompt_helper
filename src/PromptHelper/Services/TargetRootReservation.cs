@@ -9,6 +9,19 @@ public sealed record TargetReservationCleanupResult(
     IReadOnlyList<MigrationRollbackFailure> Failures)
 {
     public bool Success => Failures.Count == 0;
+
+    public string? ToWarning()
+    {
+        if (Success)
+        {
+            return null;
+        }
+
+        var lines = Failures.Select(f =>
+            $"Reservation cleanup could not complete operation '{f.Operation}' on '{f.Path}': {f.Message}");
+
+        return string.Join("\r\n", lines);
+    }
 }
 
 public sealed class TargetRootReservation : IDisposable
@@ -18,27 +31,36 @@ public sealed class TargetRootReservation : IDisposable
     private readonly string _rootPath;
     private readonly bool _deleteLockFileOnDispose;
     private readonly bool _deleteRootIfStillEmptyOnDispose;
-    private bool _disposed;
+    private readonly IReservationFileOps _fileOps;
+    private TargetReservationCleanupResult? _releaseResult;
 
     private TargetRootReservation(
         AppInstanceLock @lock,
         string rootPath,
         string lockPath,
         bool deleteLockFileOnDispose,
-        bool deleteRootIfStillEmptyOnDispose)
+        bool deleteRootIfStillEmptyOnDispose,
+        IReservationFileOps fileOps)
     {
         _lock = @lock;
         _rootPath = rootPath;
         _lockPath = lockPath;
         _deleteLockFileOnDispose = deleteLockFileOnDispose;
         _deleteRootIfStillEmptyOnDispose = deleteRootIfStillEmptyOnDispose;
+        _fileOps = fileOps;
     }
 
     public static TargetRootReservation? TryAcquire(string root)
     {
+        return TryAcquire(root, null);
+    }
+
+    internal static TargetRootReservation? TryAcquire(string root, IReservationFileOps? fileOps)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
-        bool rootExistedBefore = Directory.Exists(root);
+        IReservationFileOps ops = fileOps ?? new DefaultReservationFileOps();
+        bool rootExistedBefore = ops.DirectoryExists(root);
 
         if (!rootExistedBefore)
         {
@@ -46,7 +68,7 @@ public sealed class TargetRootReservation : IDisposable
         }
 
         string lockPath = Path.Combine(root, ".app.lock");
-        bool lockExistedBefore = File.Exists(lockPath);
+        bool lockExistedBefore = ops.FileExists(lockPath);
 
         AppInstanceLock? @lock;
         try
@@ -59,9 +81,9 @@ public sealed class TargetRootReservation : IDisposable
             {
                 try
                 {
-                    if (Directory.Exists(root) && !Directory.EnumerateFileSystemEntries(root).Any())
+                    if (ops.DirectoryExists(root) && ops.EnumerateEntries(root).Count == 0)
                     {
-                        Directory.Delete(root);
+                        ops.DeleteDirectory(root);
                     }
                 }
                 catch
@@ -77,9 +99,9 @@ public sealed class TargetRootReservation : IDisposable
             {
                 try
                 {
-                    if (Directory.Exists(root) && !Directory.EnumerateFileSystemEntries(root).Any())
+                    if (ops.DirectoryExists(root) && ops.EnumerateEntries(root).Count == 0)
                     {
-                        Directory.Delete(root);
+                        ops.DeleteDirectory(root);
                     }
                 }
                 catch
@@ -94,33 +116,46 @@ public sealed class TargetRootReservation : IDisposable
             rootPath: root,
             lockPath: lockPath,
             deleteLockFileOnDispose: !lockExistedBefore,
-            deleteRootIfStillEmptyOnDispose: !rootExistedBefore);
+            deleteRootIfStillEmptyOnDispose: !rootExistedBefore,
+            fileOps: ops);
     }
 
     public TargetReservationCleanupResult Release()
     {
-        if (_disposed)
+        if (_releaseResult is not null)
         {
-            return new TargetReservationCleanupResult([]);
+            return _releaseResult;
         }
 
-        _disposed = true;
-        _lock.Dispose();
-
         var failures = new List<MigrationRollbackFailure>();
+
+        try
+        {
+            _lock.Dispose();
+        }
+        catch (Exception ex)
+        {
+            failures.Add(new MigrationRollbackFailure(
+                _lockPath,
+                "ReleaseLockHandle",
+                ex.Message));
+        }
 
         if (_deleteLockFileOnDispose)
         {
             try
             {
-                if (File.Exists(_lockPath))
+                if (_fileOps.FileExists(_lockPath))
                 {
-                    File.Delete(_lockPath);
+                    _fileOps.DeleteFile(_lockPath);
                 }
             }
             catch (Exception ex)
             {
-                failures.Add(new MigrationRollbackFailure(_lockPath, "DeleteLockFile", ex.Message));
+                failures.Add(new MigrationRollbackFailure(
+                    _lockPath,
+                    "DeleteReservationLockFile",
+                    ex.Message));
             }
         }
 
@@ -128,19 +163,23 @@ public sealed class TargetRootReservation : IDisposable
         {
             try
             {
-                if (Directory.Exists(_rootPath) &&
-                    !Directory.EnumerateFileSystemEntries(_rootPath).Any())
+                if (_fileOps.DirectoryExists(_rootPath) &&
+                    _fileOps.EnumerateEntries(_rootPath).Count == 0)
                 {
-                    Directory.Delete(_rootPath);
+                    _fileOps.DeleteDirectory(_rootPath);
                 }
             }
             catch (Exception ex)
             {
-                failures.Add(new MigrationRollbackFailure(_rootPath, "DeleteEmptyRoot", ex.Message));
+                failures.Add(new MigrationRollbackFailure(
+                    _rootPath,
+                    "DeleteEmptyRoot",
+                    ex.Message));
             }
         }
 
-        return new TargetReservationCleanupResult(failures);
+        _releaseResult = new TargetReservationCleanupResult(failures);
+        return _releaseResult;
     }
 
     public void Dispose()

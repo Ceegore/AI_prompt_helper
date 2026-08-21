@@ -284,12 +284,11 @@ public sealed class DataFolderMigrationServiceTests
         using var targetDir = new TestDirectory();
         SeedValidLibrary(sourceDir.Root, out _);
 
-        var baseWriter = new AtomicTextWriter();
-        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        var ops = new FakeCapabilityFileOps
         {
-            ShouldFail = (_, callNum) => callNum == 2
+            OnReplace = (src, dst, bak) => throw new IOException("Simulated capability probe failure")
         };
-        var capability = new DataRootCapabilityValidator(faultWriter);
+        var capability = new DataRootCapabilityValidator(ops);
 
         var migration = new DataFolderMigrationService(capabilityValidator: capability);
         Assert.Throws<IOException>(() => migration.PrepareTargetForMigrationUnitTest(sourceDir.Root, targetDir.Root));

@@ -3,17 +3,33 @@
     Generates PromptHelper.ico from PromptHelperLogo.svg using ImageMagick with aspect-safe square padding.
 #>
 [CmdletBinding()]
-param()
+param(
+    [string]$SourceSvg,
+    [string]$OutputIco
+)
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$sourceSvg = Join-Path $repoRoot "src\PromptHelper\Assets\PromptHelperLogo.svg"
-$outputIco = Join-Path $repoRoot "src\PromptHelper\Assets\PromptHelper.ico"
+$defaultSourceSvg = Join-Path $repoRoot "src\PromptHelper\Assets\PromptHelperLogo.svg"
+$defaultOutputIco = Join-Path $repoRoot "src\PromptHelper\Assets\PromptHelper.ico"
 
-Write-Host "Checking repository assets..."
-if (-not (Test-Path $sourceSvg)) {
-    Write-Error "Source artwork '$sourceSvg' was not found. Please provide PromptHelperLogo.svg before generating the icon."
+$effectiveSourceSvg = if (-not [string]::IsNullOrWhiteSpace($SourceSvg)) { $SourceSvg } else { $defaultSourceSvg }
+$effectiveOutputIco = if (-not [string]::IsNullOrWhiteSpace($OutputIco)) { $OutputIco } else { $defaultOutputIco }
+
+if (-not $effectiveSourceSvg.EndsWith(".svg", [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error "Source SVG must have a .svg extension: '$effectiveSourceSvg'"
+    exit 1
+}
+
+if (-not $effectiveOutputIco.EndsWith(".ico", [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error "Output ICO must have a .ico extension: '$effectiveOutputIco'"
+    exit 1
+}
+
+Write-Host "Checking source artwork..."
+if (-not (Test-Path $effectiveSourceSvg)) {
+    Write-Error "Source artwork '$effectiveSourceSvg' was not found. Please provide PromptHelperLogo.svg before generating the icon."
     exit 1
 }
 
@@ -23,33 +39,33 @@ if (-not $magickCmd) {
     exit 1
 }
 
-$assetsDir = Split-Path $outputIco -Parent
-if (-not (Test-Path $assetsDir)) {
+$assetsDir = Split-Path $effectiveOutputIco -Parent
+if (-not [string]::IsNullOrWhiteSpace($assetsDir) -and -not (Test-Path $assetsDir)) {
     New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
 }
 
 Write-Host "Converting SVG to multi-resolution square-padded ICO..."
 & magick `
     -background none `
-    $sourceSvg `
+    $effectiveSourceSvg `
     -resize "256x256" `
     -gravity center `
     -extent "256x256" `
     -define icon:auto-resize=256,128,64,48,32,24,16 `
-    $outputIco
+    $effectiveOutputIco
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "ImageMagick conversion exited with non-zero code: $LASTEXITCODE"
     exit 1
 }
 
-if (-not (Test-Path $outputIco) -or ((Get-Item $outputIco).Length -lt 6)) {
+if (-not (Test-Path $effectiveOutputIco) -or ((Get-Item $effectiveOutputIco).Length -lt 6)) {
     Write-Error "ICO generation failed: output file is missing or truncated."
     exit 1
 }
 
 # Binary validation of generated ICO
-$bytes = [System.IO.File]::ReadAllBytes($outputIco)
+$bytes = [System.IO.File]::ReadAllBytes($effectiveOutputIco)
 if ($bytes.Length -lt 6) {
     Write-Error "ICO file is too small."
     exit 1
@@ -85,4 +101,4 @@ foreach ($req in $requiredSizes) {
     }
 }
 
-Write-Host "Successfully generated and validated '$outputIco' with $count frames."
+Write-Host "Successfully generated and validated '$effectiveOutputIco' with $count frames."

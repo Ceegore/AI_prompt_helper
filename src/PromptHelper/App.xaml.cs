@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Threading;
 using PromptHelper.Models;
@@ -56,6 +57,66 @@ public partial class App : Application
                     MessageBoxImage.Information);
                 Shutdown();
                 return;
+            }
+
+            // CRUU7-004: Check for active migration marker residue
+            if (File.Exists(paths.MigrationMarkerPath))
+            {
+                bool residueResolved = false;
+                try
+                {
+                    var manifestRepo = new MigrationManifestRepository();
+                    var manifest = manifestRepo.TryRead(paths.MigrationMarkerPath);
+
+                    if (manifest != null && manifest.Phase == MigrationManifestPhase.ReadyToCommit)
+                    {
+                        bool allArtifactsMatch = true;
+                        foreach (var artifact in manifest.Artifacts)
+                        {
+                            string artPath = Path.Combine(paths.RootDirectory, artifact.RelativePath);
+                            if (!File.Exists(artPath) ||
+                                new FileInfo(artPath).Length != artifact.Length ||
+                                !string.Equals(
+                                    Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(artPath))),
+                                    artifact.Sha256Hex,
+                                    StringComparison.OrdinalIgnoreCase))
+                            {
+                                allArtifactsMatch = false;
+                                break;
+                            }
+                        }
+
+                        if (allArtifactsMatch)
+                        {
+                            try
+                            {
+                                File.Delete(paths.MigrationMarkerPath);
+                                residueResolved = true;
+                            }
+                            catch
+                            {
+                                residueResolved = true;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    residueResolved = false;
+                }
+
+                if (!residueResolved)
+                {
+                    MessageBox.Show(
+                        "Prompt Helper detected an incomplete or modified migration attempt in the configured data folder:\n\n" +
+                        paths.RootDirectory +
+                        "\n\nTo protect your data, Prompt Helper will close without modifying this folder.\nReview the folder contents or remove unfinished migration artifacts before restarting.",
+                        "Migration Residue Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    Shutdown();
+                    return;
+                }
             }
 
             paths.EnsureDataDirectories();

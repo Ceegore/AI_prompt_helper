@@ -11,11 +11,23 @@ public static class DataRootTopologyValidator
         return PathIdentity.IsStrictDescendant(candidate, parent);
     }
 
+    public static string FindNearestExistingDirectory(string path)
+    {
+        string full = Path.GetFullPath(path);
+        string? current = full;
+        while (!string.IsNullOrEmpty(current) && !Directory.Exists(current))
+        {
+            current = Path.GetDirectoryName(current);
+        }
+        return string.IsNullOrEmpty(current) ? full : current;
+    }
+
     public static DataRootRelationship ValidateTransition(
         string currentRoot,
         string targetRoot,
         string bootstrapRoot,
-        IPhysicalPathResolver? resolver = null)
+        IPhysicalPathResolver? resolver = null,
+        IDirectoryCaseSensitivityInspector? caseInspector = null)
     {
         string lexicalCurrent = PathIdentity.NormalizeForComparison(currentRoot);
         string lexicalTarget = PathIdentity.NormalizeForComparison(targetRoot);
@@ -27,10 +39,25 @@ public static class DataRootTopologyValidator
                 "A root volume or drive cannot be selected as a Prompt Helper data folder.");
         }
 
+        var caseSensitivityInspector = caseInspector ?? new WindowsDirectoryCaseSensitivityInspector();
+        string nearestTargetDir = FindNearestExistingDirectory(lexicalTarget);
+        if (caseSensitivityInspector.IsCaseSensitive(nearestTargetDir))
+        {
+            throw new InvalidOperationException(
+                $"Case-sensitive directory '{nearestTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
+        }
+
         var physicalResolver = resolver ?? new WindowsPhysicalPathResolver();
         string physicalCurrent = ResolvePhysicalOrThrow(physicalResolver, lexicalCurrent, "current data folder");
         string physicalTarget = ResolvePhysicalOrThrow(physicalResolver, lexicalTarget, "target data folder");
         string physicalBootstrap = ResolvePhysicalOrThrow(physicalResolver, lexicalBootstrap, "bootstrap settings folder");
+
+        string nearestPhysicalTargetDir = FindNearestExistingDirectory(physicalTarget);
+        if (caseSensitivityInspector.IsCaseSensitive(nearestPhysicalTargetDir))
+        {
+            throw new InvalidOperationException(
+                $"Case-sensitive directory '{nearestPhysicalTargetDir}' cannot be used as a Prompt Helper data folder. Case-sensitive directories are not supported.");
+        }
 
         if (IsVolumeRootSafe(physicalTarget))
         {
@@ -78,13 +105,14 @@ public static class DataRootTopologyValidator
         string currentRoot,
         string targetRoot,
         string? defaultBootstrapRoot = null,
-        IPhysicalPathResolver? resolver = null)
+        IPhysicalPathResolver? resolver = null,
+        IDirectoryCaseSensitivityInspector? caseInspector = null)
     {
         string bootstrap = defaultBootstrapRoot ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PromptHelper");
 
-        ValidateTransition(currentRoot, targetRoot, bootstrap, resolver);
+        ValidateTransition(currentRoot, targetRoot, bootstrap, resolver, caseInspector);
     }
 
     public static string ResolvePhysicalOrThrow(

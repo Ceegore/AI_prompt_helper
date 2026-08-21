@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using PromptHelper.Infrastructure;
 using PromptHelper.Services;
 
 namespace PromptHelper.Tests;
@@ -27,13 +26,12 @@ public sealed class DataRootCapabilityValidatorTests
     public void Capability_probe_replace_failure_throws_and_cleans_temporary_files()
     {
         using var temp = new TestDirectory();
-        var baseWriter = new AtomicTextWriter();
-        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        var ops = new FakeCapabilityFileOps
         {
-            ShouldFail = (_, callNum) => callNum == 2
+            OnReplace = (src, dst, bak) => throw new IOException("Simulated replace failure")
         };
 
-        var validator = new DataRootCapabilityValidator(faultWriter);
+        var validator = new DataRootCapabilityValidator(ops);
 
         Assert.Throws<IOException>(() => validator.ValidateWritable(temp.Root));
 
@@ -46,16 +44,16 @@ public sealed class DataRootCapabilityValidatorTests
     public void CRUU6_006_Probe_cleanup_failure_is_reported()
     {
         using var temp = new TestDirectory();
-        var baseWriter = new AtomicTextWriter();
-        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        var ops = new FakeCapabilityFileOps
         {
-            ShouldFail = (_, callNum) => callNum == 2 // Fails on replace
+            OnReplace = (src, dst, bak) => throw new IOException("Simulated replace failure"),
+            OnDeleteFile = path => throw new IOException("Simulated delete failure")
         };
 
-        // When probe file is created, if we lock it, cleanup will fail and throw DataRootCapabilityProbeException
-        var validator = new DataRootCapabilityValidator(faultWriter);
+        var validator = new DataRootCapabilityValidator(ops);
 
-        // Standard validation without journal throws probe error
-        Assert.Throws<IOException>(() => validator.ValidateWritable(temp.Root));
+        var ex = Assert.Throws<DataRootCapabilityProbeException>(() => validator.ValidateWritable(temp.Root));
+        Assert.IsTrue(ex.CleanupFailures.Count > 0);
+        Assert.AreEqual("DeleteProbeCurrentFile", ex.CleanupFailures[0].Operation);
     }
 }

@@ -7,6 +7,9 @@ namespace PromptHelper.Services;
 
 public sealed class SettingsMutationLease : IDisposable
 {
+    private const int ERROR_SHARING_VIOLATION = 32;
+    private const int ERROR_LOCK_VIOLATION = 33;
+
     private FileStream? _stream;
     private bool _disposed;
 
@@ -15,9 +18,10 @@ public sealed class SettingsMutationLease : IDisposable
         _stream = stream;
     }
 
-    public static SettingsMutationLease Acquire(string lockPath, int timeoutMs = 5000)
+    public static SettingsMutationLease Acquire(string lockPath, SettingsLeasePolicy? policy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(lockPath);
+        SettingsLeasePolicy leasePolicy = policy ?? SettingsLeasePolicy.Default;
 
         string? dir = Path.GetDirectoryName(lockPath);
         if (!string.IsNullOrEmpty(dir))
@@ -26,7 +30,6 @@ public sealed class SettingsMutationLease : IDisposable
         }
 
         var sw = Stopwatch.StartNew();
-        int attempt = 0;
 
         while (true)
         {
@@ -40,11 +43,9 @@ public sealed class SettingsMutationLease : IDisposable
 
                 return new SettingsMutationLease(stream);
             }
-            catch (IOException) when (sw.ElapsedMilliseconds < timeoutMs)
+            catch (IOException ex) when (IsContention(ex) && sw.Elapsed < leasePolicy.Timeout)
             {
-                attempt++;
-                int delay = Math.Min(10 * attempt, 100);
-                Thread.Sleep(delay);
+                Thread.Sleep(leasePolicy.RetryDelay);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -54,6 +55,29 @@ public sealed class SettingsMutationLease : IDisposable
                     ex);
             }
         }
+    }
+
+    public static SettingsMutationLease Acquire(string lockPath, int timeoutMs)
+    {
+        return Acquire(lockPath, new SettingsLeasePolicy(TimeSpan.FromMilliseconds(timeoutMs), TimeSpan.FromMilliseconds(25)));
+    }
+
+    public static SettingsMutationLease? TryAcquire(string lockPath, SettingsLeasePolicy? policy = null)
+    {
+        try
+        {
+            return Acquire(lockPath, policy);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsContention(IOException ex)
+    {
+        int code = ex.HResult & 0xFFFF;
+        return code is ERROR_SHARING_VIOLATION or ERROR_LOCK_VIOLATION;
     }
 
     public void Dispose()
