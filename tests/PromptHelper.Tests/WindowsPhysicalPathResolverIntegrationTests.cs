@@ -184,4 +184,51 @@ public sealed class WindowsPhysicalPathResolverIntegrationTests
             DeleteJunction(junctionToDrive);
         }
     }
+
+    [TestMethod]
+    public void CRUU6_001_Real_persisted_junction_alias_allows_third_root_transition()
+    {
+        using var temp = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        string activeRoot = Path.Combine(temp.Root, "ActiveLibrary");
+        Directory.CreateDirectory(activeRoot);
+        SeedValidLibrary(activeRoot);
+
+        string thirdRoot = Path.Combine(temp.Root, "ThirdLibrary");
+        Directory.CreateDirectory(thirdRoot);
+        SeedValidLibrary(thirdRoot);
+
+        string junctionAlias = Path.Combine(temp.Root, "JunctionAliasOfActive");
+        CreateJunction(junctionAlias, activeRoot);
+
+        try
+        {
+            string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+            File.WriteAllText(settingsPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{junctionAlias.Replace("\\", "\\\\")}\"}}");
+
+            var settingsRepo = new AppSettingsRepository(settingsPathOverride: settingsPath);
+            var migrationService = new DataFolderMigrationService();
+            var confirmation = new FakeUserConfirmationService { ConfirmationResult = true };
+
+            var coordinator = new DataFolderTransitionCoordinator(
+                activeRoot,
+                settingsRepo,
+                migrationService,
+                confirmation,
+                pathResolver: new WindowsPhysicalPathResolver());
+
+            var result = coordinator.RequestTransition(thirdRoot);
+
+            Assert.IsTrue(result.Changed);
+            Assert.IsTrue(result.RestartRequired);
+            Assert.IsTrue(result.ExistingLibrarySelected);
+            Assert.AreEqual(Path.GetFullPath(thirdRoot), settingsRepo.GetEffectiveDataRoot());
+            Assert.IsTrue(Directory.Exists(junctionAlias));
+        }
+        finally
+        {
+            DeleteJunction(junctionAlias);
+        }
+    }
 }

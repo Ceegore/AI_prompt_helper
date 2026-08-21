@@ -1,8 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
 namespace PromptHelper.Services;
+
+public sealed record TargetReservationCleanupResult(
+    IReadOnlyList<MigrationRollbackFailure> Failures)
+{
+    public bool Success => Failures.Count == 0;
+}
 
 public sealed class TargetRootReservation : IDisposable
 {
@@ -90,25 +97,30 @@ public sealed class TargetRootReservation : IDisposable
             deleteRootIfStillEmptyOnDispose: !rootExistedBefore);
     }
 
-    public void Dispose()
+    public TargetReservationCleanupResult Release()
     {
         if (_disposed)
         {
-            return;
+            return new TargetReservationCleanupResult([]);
         }
 
         _disposed = true;
         _lock.Dispose();
 
+        var failures = new List<MigrationRollbackFailure>();
+
         if (_deleteLockFileOnDispose)
         {
             try
             {
-                File.Delete(_lockPath);
+                if (File.Exists(_lockPath))
+                {
+                    File.Delete(_lockPath);
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // Stale unlocked lock files are safe.
+                failures.Add(new MigrationRollbackFailure(_lockPath, "DeleteLockFile", ex.Message));
             }
         }
 
@@ -122,9 +134,17 @@ public sealed class TargetRootReservation : IDisposable
                     Directory.Delete(_rootPath);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                failures.Add(new MigrationRollbackFailure(_rootPath, "DeleteEmptyRoot", ex.Message));
             }
         }
+
+        return new TargetReservationCleanupResult(failures);
+    }
+
+    public void Dispose()
+    {
+        Release();
     }
 }

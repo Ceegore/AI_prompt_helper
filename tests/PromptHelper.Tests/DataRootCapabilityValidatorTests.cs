@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Infrastructure;
 using PromptHelper.Services;
@@ -39,5 +40,22 @@ public sealed class DataRootCapabilityValidatorTests
         // Verify probe temporary files were best-effort cleaned
         string[] entries = Directory.GetFileSystemEntries(temp.Root);
         Assert.AreEqual(0, entries.Length);
+    }
+
+    [TestMethod]
+    public void CRUU6_006_Probe_cleanup_failure_is_reported()
+    {
+        using var temp = new TestDirectory();
+        var baseWriter = new AtomicTextWriter();
+        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        {
+            ShouldFail = (_, callNum) => callNum == 2 // Fails on replace
+        };
+
+        // When probe file is created, if we lock it, cleanup will fail and throw DataRootCapabilityProbeException
+        var validator = new DataRootCapabilityValidator(faultWriter);
+
+        // Standard validation without journal throws probe error
+        Assert.Throws<IOException>(() => validator.ValidateWritable(temp.Root));
     }
 }

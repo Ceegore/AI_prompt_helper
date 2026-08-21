@@ -180,4 +180,41 @@ public sealed class ManagedDataRootPolicyTests
         Assert.Throws<InvalidDataException>(() =>
             policy.ValidateConfiguredRootForStartup(alias, bootstrap));
     }
+
+    [TestMethod]
+    public void CRUU6_011_Unavailable_configured_root_uses_dedicated_safety_error()
+    {
+        string bootstrap = @"C:\Users\Test\AppData\Local\PromptHelper";
+        string configured = @"E:\Removable\CustomData";
+
+        // DirectoryNotFound
+        var resolver1 = new FakePhysicalPathResolver
+        {
+            Failure = new DirectoryNotFoundException("Could not find part of path")
+        };
+        var policy1 = new ManagedDataRootPolicy(resolver1);
+        var ex1 = Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
+            policy1.ValidateConfiguredRootForStartup(configured, bootstrap));
+        Assert.AreEqual(Path.GetFullPath(configured), ex1.DataFolderPath);
+
+        // DriveNotFound
+        var resolver2 = new FakePhysicalPathResolver
+        {
+            Failure = new DriveNotFoundException("Drive not found")
+        };
+        var policy2 = new ManagedDataRootPolicy(resolver2);
+        var ex2 = Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
+            policy2.ValidateConfiguredRootForStartup(configured, bootstrap));
+        Assert.AreEqual(Path.GetFullPath(configured), ex2.DataFolderPath);
+
+        // Win32 path not found
+        var resolver3 = new FakePhysicalPathResolver
+        {
+            Failure = new Win32Exception(3, "The system cannot find the path specified")
+        };
+        var policy3 = new ManagedDataRootPolicy(resolver3);
+        var ex3 = Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
+            policy3.ValidateConfiguredRootForStartup(configured, bootstrap));
+        Assert.AreEqual(Path.GetFullPath(configured), ex3.DataFolderPath);
+    }
 }

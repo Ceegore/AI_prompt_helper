@@ -8,9 +8,18 @@ using PromptHelper.Models;
 
 namespace PromptHelper.Services;
 
-public sealed record SettingsPrimaryWriteToken(
+public sealed record SettingsFileToken(
     bool Exists,
     byte[]? Sha256);
+
+public sealed record SettingsWritePrecondition(
+    SettingsFileToken Primary,
+    SettingsFileToken Backup);
+
+public sealed record SettingsTransitionSnapshot(
+    AppSettings Settings,
+    SettingsWritePrecondition Precondition,
+    string? Warning);
 
 public sealed class AppSettingsRepository
 {
@@ -31,6 +40,8 @@ public sealed class AppSettingsRepository
 
     private readonly string _settingsPath;
     private readonly string _backupPath;
+    private readonly string _lockPath;
+    private readonly string _bootstrapRoot;
     private readonly IAtomicTextWriter _writer;
 
     public AppSettingsRepository(
@@ -43,9 +54,10 @@ public sealed class AppSettingsRepository
         if (settingsPathOverride != null)
         {
             _settingsPath = settingsPathOverride;
-            _backupPath = backupPathOverride ?? Path.Combine(
-                Path.GetDirectoryName(settingsPathOverride) ?? string.Empty,
-                "settings.backup.json");
+            string dir = Path.GetDirectoryName(settingsPathOverride) ?? string.Empty;
+            _backupPath = backupPathOverride ?? Path.Combine(dir, "settings.backup.json");
+            _lockPath = Path.Combine(dir, ".settings.lock");
+            _bootstrapRoot = string.IsNullOrEmpty(dir) ? Directory.GetCurrentDirectory() : dir;
         }
         else
         {
@@ -54,57 +66,100 @@ public sealed class AppSettingsRepository
                 "PromptHelper");
             _settingsPath = Path.Combine(root, "settings.json");
             _backupPath = backupPathOverride ?? Path.Combine(root, "settings.backup.json");
+            _lockPath = Path.Combine(root, ".settings.lock");
+            _bootstrapRoot = root;
         }
     }
 
     public string SettingsPath => _settingsPath;
     public string BackupPath => _backupPath;
+    public string LockPath => _lockPath;
 
-    public SettingsPrimaryWriteToken CapturePrimaryWriteToken()
+    public SettingsMutationLease AcquireMutationLease(int timeoutMs = 5000)
+    {
+        return SettingsMutationLease.Acquire(_lockPath, timeoutMs);
+    }
+
+    public SettingsFileToken CaptureFileToken(string path)
     {
         try
         {
-            byte[] bytes = File.ReadAllBytes(_settingsPath);
-            return new SettingsPrimaryWriteToken(
+            byte[] bytes = File.ReadAllBytes(path);
+            return new SettingsFileToken(
                 Exists: true,
                 Sha256: SHA256.HashData(bytes));
         }
         catch (FileNotFoundException)
         {
-            return new SettingsPrimaryWriteToken(false, null);
+            return new SettingsFileToken(false, null);
         }
         catch (DirectoryNotFoundException)
         {
-            return new SettingsPrimaryWriteToken(false, null);
+            return new SettingsFileToken(false, null);
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or SecurityException)
         {
-            throw new SettingsReadException(_settingsPath, ex);
+            throw new SettingsReadException(path, ex);
         }
     }
 
-    public SettingsSaveResult SaveIfPrimaryUnchanged(
+    public SettingsWritePrecondition CaptureWritePreconditionCore()
+    {
+        SettingsFileToken primary = CaptureFileToken(_settingsPath);
+        SettingsFileToken backup = CaptureFileToken(_backupPath);
+        return new SettingsWritePrecondition(primary, backup);
+    }
+
+    public SettingsTransitionSnapshot LoadForTransitionAndCapturePrecondition()
+    {
+        using var lease = AcquireMutationLease();
+
+        SettingsLoadResult load = LoadOrRecoverCore();
+        SettingsWritePrecondition token = CaptureWritePreconditionCore();
+
+        return new SettingsTransitionSnapshot(
+            CloneSettings(load.Settings),
+            token,
+            load.Warning);
+    }
+
+    public SettingsSaveResult SaveIfUnchanged(
         AppSettings settings,
-        SettingsPrimaryWriteToken expected)
+        SettingsWritePrecondition expected)
     {
         ArgumentNullException.ThrowIfNull(expected);
 
-        SettingsPrimaryWriteToken actual = CapturePrimaryWriteToken();
+        using var lease = AcquireMutationLease();
 
-        if (!WriteTokensEqual(expected, actual))
+        SettingsWritePrecondition actual = CaptureWritePreconditionCore();
+
+        if (!WritePreconditionsEqual(expected, actual))
         {
             throw new InvalidOperationException(
                 "Prompt Helper settings changed while the data-folder transition " +
                 "was in progress. Nothing was committed. Reopen Tools & Settings and retry.");
         }
 
-        return Save(settings);
+        return SaveCore(settings);
+    }
+
+    public static bool WritePreconditionsEqual(
+        SettingsWritePrecondition expected,
+        SettingsWritePrecondition actual)
+    {
+        if (expected == null || actual == null)
+        {
+            return expected == actual;
+        }
+
+        return WriteTokensEqual(expected.Primary, actual.Primary) &&
+               WriteTokensEqual(expected.Backup, actual.Backup);
     }
 
     private static bool WriteTokensEqual(
-        SettingsPrimaryWriteToken expected,
-        SettingsPrimaryWriteToken actual)
+        SettingsFileToken expected,
+        SettingsFileToken actual)
     {
         if (expected.Exists != actual.Exists)
         {
@@ -122,6 +177,12 @@ public sealed class AppSettingsRepository
     }
 
     public SettingsLoadResult LoadOrRecover()
+    {
+        using var lease = AcquireMutationLease();
+        return LoadOrRecoverCore();
+    }
+
+    public SettingsLoadResult LoadOrRecoverCore()
     {
         SettingsReadState primaryState = ReadState(_settingsPath);
 
@@ -256,6 +317,12 @@ public sealed class AppSettingsRepository
 
     public SettingsSaveResult Save(AppSettings settings)
     {
+        using var lease = AcquireMutationLease();
+        return SaveCore(settings);
+    }
+
+    public SettingsSaveResult SaveCore(AppSettings settings)
+    {
         ArgumentNullException.ThrowIfNull(settings);
 
         if (settings.SchemaVersion != AppSettings.CurrentSchemaVersion)
@@ -331,9 +398,16 @@ public sealed class AppSettingsRepository
             return Path.GetFullPath(activeSettings.DataRootPath.Trim());
         }
 
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PromptHelper");
+        return _bootstrapRoot;
+    }
+
+    private static AppSettings CloneSettings(AppSettings settings)
+    {
+        return new AppSettings
+        {
+            SchemaVersion = settings.SchemaVersion,
+            DataRootPath = settings.DataRootPath
+        };
     }
 
     private static SettingsReadState ReadState(string path)

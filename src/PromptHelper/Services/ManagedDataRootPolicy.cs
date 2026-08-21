@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.IO;
 
 namespace PromptHelper.Services;
@@ -33,6 +34,23 @@ public sealed class ManagedDataRootPolicy
         try
         {
             physicalTarget = DataRootTopologyValidator.ResolvePhysicalOrThrow(_resolver, lexical, "configured data folder");
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.InnerException is DirectoryNotFoundException or DriveNotFoundException ||
+                (ex.InnerException is Win32Exception w32 &&
+                 (w32.NativeErrorCode == 2 || w32.NativeErrorCode == 3 || w32.NativeErrorCode == 53 || w32.NativeErrorCode == 67)))
+            {
+                throw new ConfiguredDataFolderUnavailableException(
+                    lexical,
+                    $"The configured data folder could not be found or resolved: {ex.Message}");
+            }
+
+            throw new InvalidDataException(ex.Message, ex);
+        }
+
+        try
+        {
             physicalBootstrap = DataRootTopologyValidator.ResolvePhysicalOrThrow(_resolver, Path.GetFullPath(bootstrapRoot), "bootstrap settings folder");
         }
         catch (InvalidOperationException ex)

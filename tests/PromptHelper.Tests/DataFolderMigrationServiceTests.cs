@@ -362,18 +362,17 @@ public sealed class DataFolderMigrationServiceTests
 
         var ops = new FaultInjectingMigrationFileOps
         {
-            OnCopyFile = (src, dst, overwrite) =>
+            OnMoveNoOverwrite = (src, dst) =>
             {
-                if (Path.GetFileName(src).Equals("library.json", StringComparison.OrdinalIgnoreCase))
+                if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                 {
                     string json = File.ReadAllText(src);
                     // Add whitespace to change bytes while remaining valid JSON
                     json = json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 1   ");
-                    File.WriteAllText(dst, json);
-                    return;
+                    File.WriteAllText(src, json);
                 }
 
-                File.Copy(src, dst, overwrite);
+                File.Move(src, dst, overwrite: false);
             }
         };
 
@@ -529,5 +528,62 @@ public sealed class DataFolderMigrationServiceTests
 
         Assert.IsTrue(result.ExistingLibraryFound);
         Assert.IsFalse(result.Copied);
+    }
+
+    [TestMethod]
+    public void CRUU6_005_Mid_copy_failure_leaves_no_untracked_partial_file()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out Guid promptId);
+
+        var ops = new FaultInjectingMigrationFileOps
+        {
+            OnMoveNoOverwrite = (src, dst) =>
+            {
+                if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException("Simulated disk error during atomic promotion move");
+                }
+                File.Move(src, dst, overwrite: false);
+            }
+        };
+
+        var migration = new DataFolderMigrationService(fileOps: ops);
+
+        Assert.Throws<IOException>(() =>
+            migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root));
+
+        // Verify target has no final library.json and no temporary files
+        Assert.IsFalse(File.Exists(Path.Combine(target.Root, "library.json")));
+        var leftoverTemps = Directory.EnumerateFiles(target.Root, "*.tmp", SearchOption.AllDirectories).ToList();
+        Assert.AreEqual(0, leftoverTemps.Count);
+    }
+
+    [TestMethod]
+    public void CRUU6_005_Foreign_collision_file_is_never_deleted_by_rollback()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out Guid promptId);
+
+        string targetPrompts = Path.Combine(target.Root, "prompts");
+        Directory.CreateDirectory(targetPrompts);
+        string foreignPath = Path.Combine(targetPrompts, $"{promptId:N}.md");
+        File.WriteAllText(foreignPath, "Foreign preexisting content");
+
+        var migration = new DataFolderMigrationService();
+
+        // Migration encounters target file collision
+        var ex = Assert.Throws<IOException>(() =>
+            migration.PrepareTargetForMigrationUnitTest(source.Root, target.Root));
+
+        Assert.IsTrue(ex.Message.Contains("collision", StringComparison.OrdinalIgnoreCase));
+
+        // Foreign file must be preserved
+        Assert.IsTrue(File.Exists(foreignPath));
+        Assert.AreEqual("Foreign preexisting content", File.ReadAllText(foreignPath));
     }
 }

@@ -40,20 +40,7 @@ public partial class App : Application
 
             if (!string.IsNullOrWhiteSpace(settings.DataRootPath))
             {
-                try
-                {
-                    DataRootBootstrapValidator.ValidateConfiguredRoot(effectiveDataRoot);
-                }
-                catch (ConfiguredDataFolderUnavailableException ex)
-                {
-                    MessageBox.Show(
-                        $"The configured Prompt Helper data folder is unavailable:\n{ex.DataFolderPath}\n\nPrompt Helper did not create a new library there, so your existing data was not overwritten.\nReconnect/restore the folder or repair the configured data-folder setting before continuing.",
-                        "Configured Data Folder Unavailable",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                    Shutdown();
-                    return;
-                }
+                DataRootBootstrapValidator.ValidateConfiguredRoot(effectiveDataRoot);
             }
 
             var paths = new AppPaths(effectiveDataRoot);
@@ -122,6 +109,15 @@ public partial class App : Application
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
+        }
+        catch (ConfiguredDataFolderUnavailableException ex)
+        {
+            MessageBox.Show(
+                $"The configured Prompt Helper data folder is unavailable:\n{ex.DataFolderPath}\n\nPrompt Helper did not create a new library there, so your existing data was not overwritten.\nReconnect/restore the folder or repair the configured data-folder setting before continuing.",
+                "Configured Data Folder Unavailable",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown();
         }
         catch (UnsupportedSettingsSchemaException ex)
         {

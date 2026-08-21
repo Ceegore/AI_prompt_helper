@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using PromptHelper.Models;
@@ -13,6 +14,7 @@ public sealed class DataFolderTransitionCoordinator
     private readonly IUserConfirmationService _confirmationService;
     private readonly DataRootCapabilityValidator _capabilityValidator;
     private readonly ManagedDataRootPolicy _rootPolicy;
+    private readonly IPhysicalPathResolver _physicalPathResolver;
 
     public DataFolderTransitionCoordinator(
         string activeCurrentRoot,
@@ -24,12 +26,13 @@ public sealed class DataFolderTransitionCoordinator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(activeCurrentRoot);
 
+        _physicalPathResolver = pathResolver ?? new WindowsPhysicalPathResolver();
+        _rootPolicy = new ManagedDataRootPolicy(_physicalPathResolver);
         _activeCurrentRoot = PathIdentity.NormalizeForComparison(activeCurrentRoot);
         _settingsRepo = settingsRepo ?? throw new ArgumentNullException(nameof(settingsRepo));
         _migrationService = migrationService ?? throw new ArgumentNullException(nameof(migrationService));
         _confirmationService = confirmationService ?? throw new ArgumentNullException(nameof(confirmationService));
         _capabilityValidator = capabilityValidator ?? new DataRootCapabilityValidator();
-        _rootPolicy = new ManagedDataRootPolicy(pathResolver ?? new WindowsPhysicalPathResolver());
     }
 
     public DataFolderTransitionResult RequestTransition(string candidateRoot)
@@ -42,25 +45,29 @@ public sealed class DataFolderTransitionCoordinator
         string cleanTarget = PathIdentity.NormalizeForComparison(candidateRoot.Trim());
         string cleanCurrent = _activeCurrentRoot;
 
-        // Capture settings write token at the start of transition
-        SettingsPrimaryWriteToken settingsToken = _settingsRepo.CapturePrimaryWriteToken();
-
-        // Verify current settings on disk resolve to the active running root if settings exist
-        if (settingsToken.Exists)
-        {
-            string currentSettingsRoot = _settingsRepo.GetEffectiveDataRoot();
-            if (!PathIdentity.Equals(cleanCurrent, currentSettingsRoot))
-            {
-                throw new InvalidOperationException(
-                    "Prompt Helper settings on disk do not match the active running library root. " +
-                    "The data-folder transition was cancelled. Reopen Tools & Settings and retry.");
-            }
-        }
+        // 1. Capture snapshot of settings & dual-file precondition under lease
+        SettingsTransitionSnapshot settingsSnapshot = _settingsRepo.LoadForTransitionAndCapturePrecondition();
 
         string bootstrapRoot = Path.GetDirectoryName(_settingsRepo.SettingsPath) ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PromptHelper");
 
+        // 2. Physical active root vs settings identity check
+        string settingsLexicalRoot = _settingsRepo.GetEffectiveDataRoot(settingsSnapshot.Settings);
+        string settingsPhysicalRoot = _rootPolicy.ValidateConfiguredRootForStartup(settingsLexicalRoot, bootstrapRoot);
+        string activePhysicalRoot = DataRootTopologyValidator.ResolvePhysicalOrThrow(
+            _physicalPathResolver,
+            _activeCurrentRoot,
+            "active data folder");
+
+        if (!PathIdentity.Equals(activePhysicalRoot, settingsPhysicalRoot))
+        {
+            throw new InvalidOperationException(
+                "Prompt Helper settings no longer identify the active running library. " +
+                "The data-folder transition was cancelled. Reopen Tools & Settings and retry.");
+        }
+
+        // 3. Initial topology check
         DataRootRelationship relationship = _rootPolicy.ValidateTransition(
             cleanCurrent,
             cleanTarget,
@@ -102,18 +109,58 @@ public sealed class DataFolderTransitionCoordinator
 
             case DataFolderMigrationService.TargetLibraryKind.ValidPrimary:
             case DataFolderMigrationService.TargetLibraryKind.RecoverableBackupOnly:
-                return HandleExistingTargetTransition(cleanTarget, initialInspection, settingsToken);
+                return HandleExistingTargetTransition(
+                    cleanCurrent,
+                    cleanTarget,
+                    bootstrapRoot,
+                    relationship,
+                    initialInspection,
+                    settingsSnapshot);
 
             case DataFolderMigrationService.TargetLibraryKind.Empty:
             default:
-                return HandleEmptyTargetTransition(cleanCurrent, cleanTarget, settingsToken);
+                return HandleEmptyTargetTransition(
+                    cleanCurrent,
+                    cleanTarget,
+                    bootstrapRoot,
+                    relationship,
+                    settingsSnapshot);
         }
     }
 
-    private DataFolderTransitionResult HandleExistingTargetTransition(
+    private DataRootRelationship RevalidateTargetIdentity(
+        string cleanCurrent,
         string cleanTarget,
+        string bootstrapRoot,
+        DataRootRelationship expected)
+    {
+        DataRootRelationship actual = _rootPolicy.ValidateTransition(
+            cleanCurrent,
+            cleanTarget,
+            bootstrapRoot);
+
+        if (actual.SamePhysicalRoot)
+        {
+            throw new InvalidOperationException("The selected target now resolves to the active library.");
+        }
+
+        if (!PathIdentity.Equals(actual.PhysicalTarget, expected.PhysicalTarget))
+        {
+            throw new InvalidOperationException(
+                "The physical target folder changed while the data-folder transition was in progress. " +
+                "Nothing was committed. Retry with a stable target.");
+        }
+
+        return actual;
+    }
+
+    private DataFolderTransitionResult HandleExistingTargetTransition(
+        string cleanCurrent,
+        string cleanTarget,
+        string bootstrapRoot,
+        DataRootRelationship initialRelationship,
         DataFolderMigrationService.TargetInspection initialInspection,
-        SettingsPrimaryWriteToken settingsToken)
+        SettingsTransitionSnapshot settingsSnapshot)
     {
         // 1. User Confirmation BEFORE mutating or probing target
         bool confirmed = _confirmationService.ConfirmExistingLibrarySwitch(
@@ -138,7 +185,10 @@ public sealed class DataFolderTransitionCoordinator
                 $"The selected target library is currently in use by another instance: '{cleanTarget}'. Close other instances and retry.");
         }
 
-        // 3. Re-inspect target under reservation lock to prevent TOCTOU tampering
+        // 3. PHYSICAL REVALIDATION #1 under reservation lock
+        RevalidateTargetIdentity(cleanCurrent, cleanTarget, bootstrapRoot, initialRelationship);
+
+        // 4. Re-inspect target under reservation lock to prevent TOCTOU tampering
         var lockedInspection = _migrationService.InspectTarget(cleanTarget);
         if (lockedInspection.Kind != initialInspection.Kind ||
             !FingerprintsEqual(lockedInspection.Fingerprint, initialInspection.Fingerprint))
@@ -147,10 +197,17 @@ public sealed class DataFolderTransitionCoordinator
                 "The selected target library changed while confirmation was open. No settings were changed. Review the target and retry.");
         }
 
-        // 4. Capability probe inside target under reservation lock
-        _capabilityValidator.ValidateWritable(cleanTarget);
+        // 5. Capability probe & existing managed-file validation inside target under reservation lock
+        var existingContext = initialInspection.EffectiveDocument != null && initialInspection.EffectiveMetadataPath != null
+            ? new ExistingLibraryCapabilityContext(initialInspection.EffectiveMetadataPath, initialInspection.EffectiveDocument)
+            : null;
 
-        // 5. Final fingerprint check immediately before settings commit
+        _capabilityValidator.ValidateWritable(cleanTarget, null, existingContext);
+
+        // 6. PHYSICAL REVALIDATION #2 immediately before settings commit
+        RevalidateTargetIdentity(cleanCurrent, cleanTarget, bootstrapRoot, initialRelationship);
+
+        // 7. Final fingerprint check immediately before settings commit
         var preCommitInspection = _migrationService.InspectTarget(cleanTarget);
         if (preCommitInspection.Kind != initialInspection.Kind ||
             !FingerprintsEqual(preCommitInspection.Fingerprint, initialInspection.Fingerprint))
@@ -159,14 +216,16 @@ public sealed class DataFolderTransitionCoordinator
                 "The selected target library changed before settings could be saved. No settings were changed. Review the target and retry.");
         }
 
-        // 6. Commit Settings with precondition token
+        // 8. Commit Settings with precondition token
         var newSettings = new AppSettings
         {
             SchemaVersion = AppSettings.CurrentSchemaVersion,
             DataRootPath = cleanTarget
         };
 
-        var saveResult = _settingsRepo.SaveIfPrimaryUnchanged(newSettings, settingsToken);
+        var saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
+
+        reservation.Release();
 
         return new DataFolderTransitionResult(
             Changed: true,
@@ -179,12 +238,14 @@ public sealed class DataFolderTransitionCoordinator
     private DataFolderTransitionResult HandleEmptyTargetTransition(
         string cleanCurrent,
         string cleanTarget,
-        SettingsPrimaryWriteToken settingsToken)
+        string bootstrapRoot,
+        DataRootRelationship initialRelationship,
+        SettingsTransitionSnapshot settingsSnapshot)
     {
         // 1. Capture snapshot of source FIRST before any target mutation
         var snapshot = _migrationService.CaptureSourceSnapshot(cleanCurrent);
 
-        // 2. Acquire target lock reservation
+        // 2. Acquire target lock reservation (creates directory if missing)
         using var reservation = TargetRootReservation.TryAcquire(cleanTarget);
         if (reservation is null)
         {
@@ -192,23 +253,38 @@ public sealed class DataFolderTransitionCoordinator
                 $"The selected target folder is currently in use by another instance: '{cleanTarget}'. Close other instances and retry.");
         }
 
-        // 3. Perform migration under target transaction
+        // 3. PHYSICAL REVALIDATION #1 after directory creation under lock
+        RevalidateTargetIdentity(cleanCurrent, cleanTarget, bootstrapRoot, initialRelationship);
+
+        // 4. Target must still be empty
+        var targetInspection = _migrationService.InspectTarget(cleanTarget);
+        if (targetInspection.Kind != DataFolderMigrationService.TargetLibraryKind.Empty)
+        {
+            throw new InvalidOperationException(
+                $"The target folder '{cleanTarget}' is no longer empty. Transition aborted.");
+        }
+
+        // 5. Perform migration under target transaction
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction();
         try
         {
             _migrationService.CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, tx);
-            _capabilityValidator.ValidateWritable(cleanTarget);
+            _capabilityValidator.ValidateWritable(cleanTarget, tx, null);
 
-            // 4. Commit settings with precondition token
+            // 6. PHYSICAL REVALIDATION #2 immediately before settings commit
+            RevalidateTargetIdentity(cleanCurrent, cleanTarget, bootstrapRoot, initialRelationship);
+
+            // 7. Commit settings with precondition token
             var newSettings = new AppSettings
             {
                 SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = cleanTarget
             };
 
-            var saveResult = _settingsRepo.SaveIfPrimaryUnchanged(newSettings, settingsToken);
+            var saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
 
             tx.Commit();
+            reservation.Release();
 
             return new DataFolderTransitionResult(
                 Changed: true,
@@ -220,9 +296,14 @@ public sealed class DataFolderTransitionCoordinator
         catch (Exception original)
         {
             MigrationRollbackResult rollback = tx.Rollback();
-            if (!rollback.Success)
+            TargetReservationCleanupResult resCleanup = reservation.Release();
+
+            var allFailures = new List<MigrationRollbackFailure>(rollback.Failures);
+            allFailures.AddRange(resCleanup.Failures);
+
+            if (allFailures.Count > 0)
             {
-                throw new MigrationRollbackException(original, cleanTarget, rollback.Failures);
+                throw new MigrationRollbackException(original, cleanTarget, allFailures);
             }
 
             throw;

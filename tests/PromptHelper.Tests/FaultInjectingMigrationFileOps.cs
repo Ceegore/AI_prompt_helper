@@ -15,7 +15,10 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
     }
 
     public Func<string, byte[]>? OnReadAllBytes { get; set; }
-    public Action<string, string, bool>? OnCopyFile { get; set; }
+    public Func<string, Stream>? OnCreateNewFile { get; set; }
+    public Func<string, Stream>? OnOpenRead { get; set; }
+    public Action<string, string>? OnMoveNoOverwrite { get; set; }
+    public Func<string, IEnumerable<string>>? OnEnumeratePromptFiles { get; set; }
 
     public byte[] ReadAllBytes(string path)
     {
@@ -27,19 +30,44 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         return _inner.ReadAllBytes(path);
     }
 
-    public void CopyFile(string source, string destination, bool overwrite)
+    public Stream CreateNewFile(string path)
     {
-        if (OnCopyFile != null)
+        if (OnCreateNewFile != null)
         {
-            OnCopyFile(source, destination, overwrite);
+            return OnCreateNewFile(path);
+        }
+
+        return _inner.CreateNewFile(path);
+    }
+
+    public Stream OpenRead(string path)
+    {
+        if (OnOpenRead != null)
+        {
+            return OnOpenRead(path);
+        }
+
+        return _inner.OpenRead(path);
+    }
+
+    public void MoveNoOverwrite(string source, string destination)
+    {
+        if (OnMoveNoOverwrite != null)
+        {
+            OnMoveNoOverwrite(source, destination);
             return;
         }
 
-        _inner.CopyFile(source, destination, overwrite);
+        _inner.MoveNoOverwrite(source, destination);
     }
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {
+        if (OnEnumeratePromptFiles != null)
+        {
+            return OnEnumeratePromptFiles(directory);
+        }
+
         return _inner.EnumeratePromptFiles(directory);
     }
 }

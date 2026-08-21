@@ -123,6 +123,22 @@ public partial class SettingsDialog : Window
             }
             Close();
         }
+        catch (UnsupportedLibrarySchemaException ex)
+        {
+            _confirmationService.ShowWarning(
+                "The selected folder contains a Prompt Helper library created by a newer schema " +
+                $"({ex.SchemaVersion}).\r\n\r\n" +
+                "The folder was not selected and the current data-folder setting was not changed.",
+                "Newer Library Version");
+        }
+        catch (UnsupportedSettingsSchemaException ex)
+        {
+            _confirmationService.ShowWarning(
+                "Prompt Helper settings changed to a newer schema " +
+                $"({ex.SchemaVersion}) while this dialog was open.\r\n\r\n" +
+                "No data-folder change was committed. Close Prompt Helper and use the newer version.",
+                "Newer Settings Version");
+        }
         catch (Exception ex) when (
             ex is IOException or
             UnauthorizedAccessException or

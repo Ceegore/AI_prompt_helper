@@ -6,7 +6,9 @@ namespace PromptHelper.Services;
 internal interface IMigrationFileOps
 {
     byte[] ReadAllBytes(string path);
-    void CopyFile(string source, string destination, bool overwrite);
+    Stream CreateNewFile(string path);
+    Stream OpenRead(string path);
+    void MoveNoOverwrite(string source, string destination);
     IEnumerable<string> EnumeratePromptFiles(string directory);
 }
 
@@ -14,9 +16,27 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 {
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
 
-    public void CopyFile(string source, string destination, bool overwrite)
+    public Stream CreateNewFile(string path)
     {
-        File.Copy(source, destination, overwrite);
+        return new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None);
+    }
+
+    public Stream OpenRead(string path)
+    {
+        return new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+    }
+
+    public void MoveNoOverwrite(string source, string destination)
+    {
+        File.Move(source, destination, overwrite: false);
     }
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)

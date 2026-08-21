@@ -25,20 +25,29 @@ public sealed class AppSettingsRepositoryTests
     }
 
     [TestMethod]
-    public void GetEffectiveDataRoot_falls_back_to_localappdata_when_setting_is_null_or_whitespace()
+    public void GetEffectiveDataRoot_falls_back_to_bootstrap_root_when_setting_is_null_or_whitespace()
     {
         using var testDir = new TestDirectory();
         string settingsPath = Path.Combine(testDir.Root, "settings.json");
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
 
+        string expectedDefault = testDir.Root;
+
+        Assert.AreEqual(Path.GetFullPath(expectedDefault), repo.GetEffectiveDataRoot());
+
+        repo.Save(new AppSettings { SchemaVersion = 1, DataRootPath = "   " });
+        Assert.AreEqual(Path.GetFullPath(expectedDefault), repo.GetEffectiveDataRoot());
+    }
+
+    [TestMethod]
+    public void GetEffectiveDataRoot_without_override_falls_back_to_localappdata()
+    {
+        var repo = new AppSettingsRepository();
         string expectedDefault = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PromptHelper");
 
-        Assert.AreEqual(expectedDefault, repo.GetEffectiveDataRoot());
-
-        repo.Save(new AppSettings { SchemaVersion = 1, DataRootPath = "   " });
-        Assert.AreEqual(expectedDefault, repo.GetEffectiveDataRoot());
+        Assert.AreEqual(expectedDefault, repo.GetEffectiveDataRoot(new AppSettings()));
     }
 
     [TestMethod]
@@ -581,88 +590,240 @@ public sealed class AppSettingsRepositoryTests
     }
 
     [TestMethod]
-    public void CRUU5_005_SaveIfPrimaryUnchanged_accepts_unchanged_primary()
+    public void CRUU5_005_SaveIfUnchanged_accepts_unchanged_primary()
     {
         using var temp = new TestDirectory();
         string settingsPath = Path.Combine(temp.Root, "settings.json");
         File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
-        var token = repo.CapturePrimaryWriteToken();
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
 
-        var result = repo.SaveIfPrimaryUnchanged(new AppSettings
+        var result = repo.SaveIfUnchanged(new AppSettings
         {
             SchemaVersion = 1,
             DataRootPath = @"C:\New"
-        }, token);
+        }, snapshot.Precondition);
 
         Assert.IsNull(result.Warning);
         Assert.AreEqual(Path.GetFullPath(@"C:\New"), repo.GetEffectiveDataRoot());
     }
 
     [TestMethod]
-    public void CRUU5_005_SaveIfPrimaryUnchanged_rejects_changed_primary()
+    public void CRUU5_005_SaveIfUnchanged_rejects_changed_primary()
     {
         using var temp = new TestDirectory();
         string settingsPath = Path.Combine(temp.Root, "settings.json");
         File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
-        var token = repo.CapturePrimaryWriteToken();
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
 
         // Simulate concurrent mutation
         File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Concurrent\"}");
 
         Assert.Throws<InvalidOperationException>(() =>
-            repo.SaveIfPrimaryUnchanged(new AppSettings
+            repo.SaveIfUnchanged(new AppSettings
             {
                 SchemaVersion = 1,
                 DataRootPath = @"C:\New"
-            }, token));
+            }, snapshot.Precondition));
 
         Assert.AreEqual(Path.GetFullPath(@"C:\Concurrent"), repo.GetEffectiveDataRoot());
     }
 
     [TestMethod]
-    public void CRUU5_005_SaveIfPrimaryUnchanged_rejects_appearing_primary()
+    public void CRUU5_005_SaveIfUnchanged_rejects_appearing_primary()
     {
         using var temp = new TestDirectory();
         string settingsPath = Path.Combine(temp.Root, "settings.json");
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
-        var token = repo.CapturePrimaryWriteToken();
-        Assert.IsFalse(token.Exists);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+        Assert.IsFalse(snapshot.Precondition.Primary.Exists);
 
         // File appears unexpectedly
         File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Appeared\"}");
 
         Assert.Throws<InvalidOperationException>(() =>
-            repo.SaveIfPrimaryUnchanged(new AppSettings
+            repo.SaveIfUnchanged(new AppSettings
             {
                 SchemaVersion = 1,
                 DataRootPath = @"C:\New"
-            }, token));
+            }, snapshot.Precondition));
     }
 
     [TestMethod]
-    public void CRUU5_005_SaveIfPrimaryUnchanged_rejects_disappearing_primary()
+    public void CRUU5_005_SaveIfUnchanged_rejects_disappearing_primary()
     {
         using var temp = new TestDirectory();
         string settingsPath = Path.Combine(temp.Root, "settings.json");
         File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
-        var token = repo.CapturePrimaryWriteToken();
-        Assert.IsTrue(token.Exists);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+        Assert.IsTrue(snapshot.Precondition.Primary.Exists);
 
         // File deleted unexpectedly
         File.Delete(settingsPath);
 
         Assert.Throws<InvalidOperationException>(() =>
-            repo.SaveIfPrimaryUnchanged(new AppSettings
+            repo.SaveIfUnchanged(new AppSettings
             {
                 SchemaVersion = 1,
                 DataRootPath = @"C:\New"
-            }, token));
+            }, snapshot.Precondition));
+    }
+
+    [TestMethod]
+    public void CRUU6_003_Backup_change_invalidates_transition_precondition()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        string backupPath = Path.Combine(temp.Root, "settings.backup.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+        File.WriteAllText(backupPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+
+        // Mutate backup externally
+        File.WriteAllText(backupPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\MutatedBackup\"}");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\Third"
+            }, snapshot.Precondition));
+    }
+
+    [TestMethod]
+    public void CRUU6_003_Backup_appearing_invalidates_transition_precondition()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        string backupPath = Path.Combine(temp.Root, "settings.backup.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+
+        // Ensure backup did not exist in captured precondition
+        if (File.Exists(backupPath)) File.Delete(backupPath);
+        var tokenWithoutBackup = repo.CaptureWritePreconditionCore();
+
+        // Backup appears externally
+        File.WriteAllText(backupPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\AppearedBackup\"}");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\Third"
+            }, tokenWithoutBackup));
+    }
+
+    [TestMethod]
+    public void CRUU6_003_Backup_disappearing_invalidates_transition_precondition()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        string backupPath = Path.Combine(temp.Root, "settings.backup.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+        File.WriteAllText(backupPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+
+        // Backup deleted externally
+        File.Delete(backupPath);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\Third"
+            }, snapshot.Precondition));
+    }
+
+    [TestMethod]
+    public void CRUU6_003_Future_backup_appearing_before_commit_is_not_overwritten()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        string backupPath = Path.Combine(temp.Root, "settings.backup.json");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+
+        // Future backup appears
+        File.WriteAllText(backupPath, "{\"schemaVersion\":99,\"dataRootPath\":\"C:\\\\Future\"}");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\Third"
+            }, snapshot.Precondition));
+
+        // Verify future backup is untouched
+        Assert.IsTrue(File.ReadAllText(backupPath).Contains("\"schemaVersion\":99"));
+    }
+
+    [TestMethod]
+    public void CRUU6_003_Final_compare_and_write_happen_under_settings_lease()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        string backupPath = Path.Combine(temp.Root, "settings.backup.json");
+        string lockPath = Path.Combine(temp.Root, ".settings.lock");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Data\"}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+
+        // Hold settings lock externally
+        using var externalLease = SettingsMutationLease.Acquire(lockPath);
+
+        // Attempting to Save with timeout 100ms should fail due to lock contention
+        Assert.Throws<InvalidOperationException>(() =>
+            repo.SaveIfUnchanged(new AppSettings
+            {
+                SchemaVersion = 1,
+                DataRootPath = @"C:\Third"
+            }, snapshot.Precondition));
+    }
+
+    [TestMethod]
+    public void CRUU6_004_Post_recovery_precondition_does_not_self_invalidate()
+    {
+        using var temp = new TestDirectory();
+        string settingsPath = Path.Combine(temp.Root, "settings.json");
+        string backupPath = Path.Combine(temp.Root, "settings.backup.json");
+        string customPath = Path.Combine(temp.Root, "Data");
+
+        // Primary corrupt, backup valid
+        File.WriteAllText(settingsPath, "corrupt json");
+        File.WriteAllText(backupPath, $"{{\"schemaVersion\": 1, \"dataRootPath\": \"{customPath.Replace("\\", "\\\\")}\"}}");
+
+        var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
+
+        // LoadForTransitionAndCapturePrecondition executes recovery and captures token AFTER repair
+        var snapshot = repo.LoadForTransitionAndCapturePrecondition();
+
+        Assert.IsNotNull(snapshot.Warning);
+        Assert.AreEqual(Path.GetFullPath(customPath), snapshot.Settings.DataRootPath);
+
+        // Commit new settings with the captured token - should succeed without false CAS mismatch
+        var saveResult = repo.SaveIfUnchanged(new AppSettings
+        {
+            SchemaVersion = 1,
+            DataRootPath = Path.Combine(temp.Root, "NewData")
+        }, snapshot.Precondition);
+
+        Assert.IsNull(saveResult.Warning);
+        Assert.AreEqual(Path.GetFullPath(Path.Combine(temp.Root, "NewData")), repo.GetEffectiveDataRoot());
     }
 }

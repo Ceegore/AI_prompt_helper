@@ -24,6 +24,12 @@ public sealed class DataFolderMigrationService
         LibraryDocument Document,
         IReadOnlyDictionary<Guid, byte[]> PromptHashes);
 
+    internal sealed record TargetContentSnapshot(
+        byte[] MetadataBytes,
+        LibraryDocument Document,
+        IReadOnlyDictionary<Guid, byte[]> PromptHashes,
+        byte[] CombinedFingerprint);
+
     internal enum TargetLibraryKind
     {
         Empty,
@@ -43,7 +49,7 @@ public sealed class DataFolderMigrationService
         Exception? Error,
         byte[]? Fingerprint);
 
-    internal sealed class MigrationTargetTransaction : IDisposable
+    internal sealed class MigrationTargetTransaction : IDisposable, ICreatedPathJournal
     {
         private readonly List<string> _createdFiles = [];
         private readonly List<string> _createdDirectories = [];
@@ -53,6 +59,16 @@ public sealed class DataFolderMigrationService
         public void TrackCreatedFile(string path) => _createdFiles.Add(path);
         public void TrackCreatedDirectory(string path) => _createdDirectories.Add(path);
         public void Commit() => _committed = true;
+
+        public void PromoteCreatedFile(string oldOwnedPath, string newOwnedPath)
+        {
+            int index = _createdFiles.FindIndex(x => PathIdentity.Equals(x, oldOwnedPath));
+            if (index < 0)
+            {
+                throw new InvalidOperationException("Cannot promote an untracked migration file.");
+            }
+            _createdFiles[index] = newOwnedPath;
+        }
 
         public MigrationRollbackResult Rollback()
         {
@@ -152,11 +168,21 @@ public sealed class DataFolderMigrationService
         switch (inspection.Kind)
         {
             case TargetLibraryKind.ValidPrimary:
-                _capabilityValidator.ValidateWritable(cleanTarget);
+                _capabilityValidator.ValidateWritable(
+                    cleanTarget,
+                    null,
+                    inspection.EffectiveDocument != null && inspection.EffectiveMetadataPath != null
+                        ? new ExistingLibraryCapabilityContext(inspection.EffectiveMetadataPath, inspection.EffectiveDocument)
+                        : null);
                 return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: true, Copied: false, Warning: inspection.Warning);
 
             case TargetLibraryKind.RecoverableBackupOnly:
-                _capabilityValidator.ValidateWritable(cleanTarget);
+                _capabilityValidator.ValidateWritable(
+                    cleanTarget,
+                    null,
+                    inspection.EffectiveDocument != null && inspection.EffectiveMetadataPath != null
+                        ? new ExistingLibraryCapabilityContext(inspection.EffectiveMetadataPath, inspection.EffectiveDocument)
+                        : null);
                 return new DataFolderChangeResult(
                     cleanTarget,
                     ExistingLibraryFound: true,
@@ -186,7 +212,7 @@ public sealed class DataFolderMigrationService
 
         using var tx = new MigrationTargetTransaction();
         CopySnapshotToTarget(cleanCurrent, cleanTarget, snapshot, tx);
-        _capabilityValidator.ValidateWritable(cleanTarget);
+        _capabilityValidator.ValidateWritable(cleanTarget, tx, null);
         tx.Commit();
 
         return new DataFolderChangeResult(cleanTarget, ExistingLibraryFound: false, Copied: true);
@@ -212,7 +238,7 @@ public sealed class DataFolderMigrationService
             return new TargetInspection(normalizedTarget, TargetLibraryKind.Empty, null, null, null, null, null);
         }
 
-        LibraryDocument? primaryDoc = null;
+        TargetContentSnapshot? primarySnapshot = null;
         bool primaryFuture = false;
         int primaryFutureVersion = 0;
         Exception? primaryEx = null;
@@ -221,10 +247,7 @@ public sealed class DataFolderMigrationService
         {
             try
             {
-                string json = File.ReadAllText(primaryPath);
-                primaryDoc = LibraryRepository.InspectAndDeserialize(json);
-                LibraryValidator.Validate(primaryDoc);
-                ValidateDocumentPromptBodies(normalizedTarget, primaryDoc, "Target library.json");
+                primarySnapshot = CaptureTargetContentSnapshot(normalizedTarget, primaryPath, "Target library.json");
             }
             catch (UnsupportedLibrarySchemaException ex)
             {
@@ -235,7 +258,7 @@ public sealed class DataFolderMigrationService
             catch (Exception ex)
             {
                 primaryEx = ex;
-                primaryDoc = null;
+                primarySnapshot = null;
             }
         }
 
@@ -251,20 +274,19 @@ public sealed class DataFolderMigrationService
                 null);
         }
 
-        if (primaryDoc is not null)
+        if (primarySnapshot is not null)
         {
-            byte[] fingerprint = ComputeEffectiveLibraryFingerprint(normalizedTarget, primaryPath, primaryDoc);
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.ValidPrimary,
-                primaryDoc,
+                primarySnapshot.Document,
                 primaryPath,
                 null,
                 null,
-                fingerprint);
+                primarySnapshot.CombinedFingerprint);
         }
 
-        LibraryDocument? backupDoc = null;
+        TargetContentSnapshot? backupSnapshot = null;
         bool backupFuture = false;
         int backupFutureVersion = 0;
         Exception? backupEx = null;
@@ -273,10 +295,7 @@ public sealed class DataFolderMigrationService
         {
             try
             {
-                string json = File.ReadAllText(backupPath);
-                backupDoc = LibraryRepository.InspectAndDeserialize(json);
-                LibraryValidator.Validate(backupDoc);
-                ValidateDocumentPromptBodies(normalizedTarget, backupDoc, "Target library.backup.json");
+                backupSnapshot = CaptureTargetContentSnapshot(normalizedTarget, backupPath, "Target library.backup.json");
             }
             catch (UnsupportedLibrarySchemaException ex)
             {
@@ -287,7 +306,7 @@ public sealed class DataFolderMigrationService
             catch (Exception ex)
             {
                 backupEx = ex;
-                backupDoc = null;
+                backupSnapshot = null;
             }
         }
 
@@ -303,29 +322,28 @@ public sealed class DataFolderMigrationService
                 null);
         }
 
-        if (primaryExists && primaryDoc is null && backupDoc is not null)
+        if (primaryExists && primarySnapshot is null && backupSnapshot is not null)
         {
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.CorruptPrimaryWithValidBackup,
-                backupDoc,
+                backupSnapshot.Document,
                 backupPath,
                 null,
                 primaryEx,
                 null);
         }
 
-        if (!primaryExists && backupDoc is not null)
+        if (!primaryExists && backupSnapshot is not null)
         {
-            byte[] fingerprint = ComputeEffectiveLibraryFingerprint(normalizedTarget, backupPath, backupDoc);
             return new TargetInspection(
                 normalizedTarget,
                 TargetLibraryKind.RecoverableBackupOnly,
-                backupDoc,
+                backupSnapshot.Document,
                 backupPath,
                 "The selected folder contains a recoverable Prompt Helper safety backup but no primary library.json. Prompt Helper will recover it on startup; the current library will not be copied there.",
                 null,
-                fingerprint);
+                backupSnapshot.CombinedFingerprint);
         }
 
         Exception error = primaryEx is InvalidDataException pIde
@@ -344,29 +362,83 @@ public sealed class DataFolderMigrationService
             null);
     }
 
+    private TargetContentSnapshot CaptureTargetContentSnapshot(
+        string root,
+        string metadataPath,
+        string metadataDescription)
+    {
+        byte[] metadataBytes = _fileOps.ReadAllBytes(metadataPath);
+        string metadataJson = DecodeUtf8Text(metadataBytes);
+
+        LibraryDocument document = LibraryRepository.InspectAndDeserialize(metadataJson);
+        LibraryValidator.Validate(document);
+
+        string promptsDir = Path.Combine(root, "prompts");
+        var promptHashes = new Dictionary<Guid, byte[]>();
+
+        foreach (PromptRecord prompt in document.Prompts)
+        {
+            string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
+            if (!File.Exists(promptPath))
+            {
+                throw new InvalidDataException(
+                    $"{metadataDescription} references prompt file '{prompt.Id:N}.md', but it is missing from '{promptsDir}'.");
+            }
+
+            byte[] bodyBytes = _fileOps.ReadAllBytes(promptPath);
+            promptHashes[prompt.Id] = SHA256.HashData(bodyBytes);
+        }
+
+        // Verify metadata stability with single re-read check
+        byte[] verificationBytes = _fileOps.ReadAllBytes(metadataPath);
+        if (!metadataBytes.AsSpan().SequenceEqual(verificationBytes))
+        {
+            throw new InvalidOperationException(
+                "Target library metadata changed while being inspected. Retry with a stable target.");
+        }
+
+        byte[] combinedFingerprint = ComputeCombinedFingerprint(metadataBytes, promptHashes);
+
+        return new TargetContentSnapshot(
+            MetadataBytes: metadataBytes,
+            Document: document,
+            PromptHashes: promptHashes,
+            CombinedFingerprint: combinedFingerprint);
+    }
+
+    internal static byte[] ComputeCombinedFingerprint(
+        byte[] metadataBytes,
+        IReadOnlyDictionary<Guid, byte[]> promptHashes)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(metadataBytes);
+
+        foreach (var kvp in promptHashes.OrderBy(x => x.Key))
+        {
+            hash.AppendData(kvp.Key.ToByteArray());
+            hash.AppendData(kvp.Value);
+        }
+
+        return hash.GetHashAndReset();
+    }
+
     internal static byte[] ComputeEffectiveLibraryFingerprint(
         string root,
         string metadataPath,
         LibraryDocument document)
     {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-
         byte[] metadata = File.ReadAllBytes(metadataPath);
-        hash.AppendData(metadata);
-
         string promptsDir = Path.Combine(root, "prompts");
+        var promptHashes = new Dictionary<Guid, byte[]>();
 
-        foreach (PromptRecord prompt in document.Prompts.OrderBy(p => p.Id))
+        foreach (PromptRecord prompt in document.Prompts)
         {
-            byte[] id = prompt.Id.ToByteArray();
-            hash.AppendData(id);
-
             string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
             byte[] body = File.ReadAllBytes(promptPath);
-            hash.AppendData(SHA256.HashData(body));
+            promptHashes[prompt.Id] = SHA256.HashData(body);
         }
 
-        return hash.GetHashAndReset();
+        return ComputeCombinedFingerprint(metadata, promptHashes);
     }
 
     internal MigrationSnapshot CaptureSourceSnapshot(string currentRoot)
@@ -597,8 +669,27 @@ public sealed class DataFolderMigrationService
                 $"Target file collision: '{destPath}' already exists.");
         }
 
-        _fileOps.CopyFile(sourcePath, destPath, overwrite: false);
-        tx.TrackCreatedFile(destPath);
+        string destDir = Path.GetDirectoryName(destPath) ?? string.Empty;
+        if (!string.IsNullOrEmpty(destDir))
+        {
+            EnsureDirectoryTracked(destDir, tx);
+        }
+
+        string destFileName = Path.GetFileName(destPath);
+        string tempPath = Path.Combine(destDir, $".{destFileName}.migration-{Guid.NewGuid():N}.tmp");
+
+        using (Stream destStream = _fileOps.CreateNewFile(tempPath))
+        {
+            tx.TrackCreatedFile(tempPath);
+            using (Stream srcStream = _fileOps.OpenRead(sourcePath))
+            {
+                srcStream.CopyTo(destStream);
+            }
+            destStream.Flush();
+        }
+
+        _fileOps.MoveNoOverwrite(tempPath, destPath);
+        tx.PromoteCreatedFile(tempPath, destPath);
     }
 
     private static string DecodeUtf8Text(byte[] bytes)

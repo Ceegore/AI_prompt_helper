@@ -8,8 +8,10 @@ namespace PromptHelper.Tests;
 public sealed class FakePhysicalPathResolver : IPhysicalPathResolver
 {
     private readonly Dictionary<string, string> _mappings = new(StringComparer.OrdinalIgnoreCase);
+    private int _callCount;
 
     public Exception? Failure { get; set; }
+    public Func<string, int, string?>? DynamicResolver { get; set; }
 
     public void AddMapping(string alias, string target)
     {
@@ -18,9 +20,20 @@ public sealed class FakePhysicalPathResolver : IPhysicalPathResolver
 
     public string ResolveWithNearestExistingAncestor(string path)
     {
+        _callCount++;
+
         if (Failure is not null)
         {
             throw Failure;
+        }
+
+        if (DynamicResolver is not null)
+        {
+            string? dynamicResult = DynamicResolver(path, _callCount);
+            if (dynamicResult != null)
+            {
+                return PathIdentity.NormalizeForComparison(dynamicResult);
+            }
         }
 
         string normalized = PathIdentity.NormalizeForComparison(path);

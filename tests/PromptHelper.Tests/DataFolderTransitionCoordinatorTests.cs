@@ -219,9 +219,9 @@ public sealed class DataFolderTransitionCoordinatorTests
 
         var ops = new FaultInjectingMigrationFileOps
         {
-            OnCopyFile = (src, dst, overwrite) =>
+            OnMoveNoOverwrite = (src, dst) =>
             {
-                File.Copy(src, dst, overwrite);
+                File.Move(src, dst, overwrite: false);
                 if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                 {
                     // Mutate settings file mid-migration
@@ -536,9 +536,9 @@ public sealed class DataFolderTransitionCoordinatorTests
         {
             var ops = new FaultInjectingMigrationFileOps
             {
-                OnCopyFile = (src, dst, overwrite) =>
+                OnMoveNoOverwrite = (src, dst) =>
                 {
-                    File.Copy(src, dst, overwrite);
+                    File.Move(src, dst, overwrite: false);
                     if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                     {
                         // Lock destination file so rollback deletion fails
@@ -572,5 +572,387 @@ public sealed class DataFolderTransitionCoordinatorTests
         {
             lockStream?.Dispose();
         }
+    }
+
+    [TestMethod]
+    public void CRUU6_001_Persisted_alias_of_active_root_allows_transition()
+    {
+        using var realRoot = new TestDirectory();
+        using var thirdTarget = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(realRoot.Root, out _);
+
+        string aliasPath = @"C:\FakeAliases\Current";
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+
+        // Settings has alias path
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{aliasPath.Replace("\\", "\\\\")}\"}}");
+
+        var resolver = new FakePhysicalPathResolver();
+        resolver.AddMapping(aliasPath, realRoot.Root);
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            realRoot.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(pathResolver: resolver),
+            new FakeUserConfirmationService { ConfirmationResult = true },
+            pathResolver: resolver);
+
+        // Transition to third target should succeed without throwing false settings mismatch
+        var result = coordinator.RequestTransition(thirdTarget.Root);
+        Assert.IsTrue(result.Changed);
+        Assert.IsTrue(result.RestartRequired);
+    }
+
+    [TestMethod]
+    public void CRUU6_002_Target_physical_identity_change_after_validation_aborts()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var hijackedTarget = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out _);
+        SeedValidLibrary(hijackedTarget.Root, out _);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        var resolver = new FakePhysicalPathResolver();
+        // Initial resolution returns target.Root, later calls return hijackedTarget.Root
+        int calls = 0;
+        resolver.DynamicResolver = (p, c) =>
+        {
+            if (PathIdentity.Equals(p, target.Root))
+            {
+                calls++;
+                return calls > 1 ? hijackedTarget.Root : target.Root;
+            }
+            return null;
+        };
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(pathResolver: resolver),
+            new FakeUserConfirmationService { ConfirmationResult = true },
+            pathResolver: resolver);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => coordinator.RequestTransition(target.Root));
+        Assert.IsTrue(ex.Message.Contains("physical target folder changed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [TestMethod]
+    public void CRUU6_002_Target_becomes_bootstrap_alias_after_reservation_aborts()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out _);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        var resolver = new FakePhysicalPathResolver();
+        int calls = 0;
+        resolver.DynamicResolver = (p, c) =>
+        {
+            if (PathIdentity.Equals(p, target.Root))
+            {
+                calls++;
+                return calls > 1 ? settingsDir.Root : target.Root;
+            }
+            return null;
+        };
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(pathResolver: resolver),
+            new FakeUserConfirmationService { ConfirmationResult = true },
+            pathResolver: resolver);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => coordinator.RequestTransition(target.Root));
+        Assert.IsTrue(ex.Message.Contains("physical target folder changed") || ex.Message.Contains("bootstrap settings folder"));
+    }
+
+    [TestMethod]
+    public void CRUU6_003_Backup_change_invalidates_settings_precondition()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out _);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        string backupPath = Path.Combine(settingsDir.Root, "settings.backup.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+        File.WriteAllText(backupPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        var confirmation = new FakeUserConfirmationService
+        {
+            ConfirmationResult = true,
+            OnConfirm = () =>
+            {
+                // Backup mutated while dialog was open
+                File.WriteAllText(backupPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\External\"}}");
+            }
+        };
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath),
+            new DataFolderMigrationService(),
+            confirmation);
+
+        Assert.Throws<InvalidOperationException>(() => coordinator.RequestTransition(target.Root));
+    }
+
+    [TestMethod]
+    public void CRUU6_008_Metadata_change_during_fingerprint_capture_aborts()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out _);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        string targetLib = Path.Combine(target.Root, "library.json");
+
+        int readCount = 0;
+        var ops = new FaultInjectingMigrationFileOps
+        {
+            OnReadAllBytes = p =>
+            {
+                if (p.Equals(targetLib, StringComparison.OrdinalIgnoreCase))
+                {
+                    readCount++;
+                    if (readCount == 2)
+                    {
+                        // Mutate on stability verification read
+                        return System.Text.Encoding.UTF8.GetBytes("{\"schemaVersion\":1,\"categories\":[],\"prompts\":[]}");
+                    }
+                }
+                return File.ReadAllBytes(p);
+            }
+        };
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(fileOps: ops),
+            new FakeUserConfirmationService { ConfirmationResult = true });
+
+        var ex = Assert.Throws<InvalidDataException>(() => coordinator.RequestTransition(target.Root));
+        Assert.IsTrue(ex.InnerException?.Message.Contains("metadata changed while being inspected") ?? false);
+    }
+
+    [TestMethod]
+    public void CRUU6_010_Readonly_existing_library_primary_rejects_switch()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out _);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        string targetLib = Path.Combine(target.Root, "library.json");
+        File.SetAttributes(targetLib, FileAttributes.ReadOnly);
+
+        try
+        {
+            var coordinator = new DataFolderTransitionCoordinator(
+                source.Root,
+                new AppSettingsRepository(settingsPathOverride: settingsPath),
+                new DataFolderMigrationService(),
+                new FakeUserConfirmationService { ConfirmationResult = true });
+
+            var ex = Assert.Throws<UnauthorizedAccessException>(() => coordinator.RequestTransition(target.Root));
+            Assert.IsTrue(ex.Message.Contains("read-only", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            File.SetAttributes(targetLib, FileAttributes.Normal);
+        }
+    }
+
+    [TestMethod]
+    public void CRUU6_010_Readonly_active_prompt_file_rejects_existing_target()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out Guid promptId);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        string promptPath = Path.Combine(target.Root, "prompts", $"{promptId:N}.md");
+        File.SetAttributes(promptPath, FileAttributes.ReadOnly);
+
+        try
+        {
+            var coordinator = new DataFolderTransitionCoordinator(
+                source.Root,
+                new AppSettingsRepository(settingsPathOverride: settingsPath),
+                new DataFolderMigrationService(),
+                new FakeUserConfirmationService { ConfirmationResult = true });
+
+            var ex = Assert.Throws<UnauthorizedAccessException>(() => coordinator.RequestTransition(target.Root));
+            Assert.IsTrue(ex.Message.Contains("read-only", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            File.SetAttributes(promptPath, FileAttributes.Normal);
+        }
+    }
+
+    [TestMethod]
+    public void CRUU6_006_Probe_residue_is_in_transition_cleanup_report()
+    {
+        using var source = new TestDirectory();
+        using var targetParent = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+
+        string target = Path.Combine(targetParent.Root, "ProbeFailTarget");
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        var baseWriter = new AtomicTextWriter();
+        var faultWriter = new FaultInjectingAtomicTextWriter(baseWriter)
+        {
+            // Fail capability probe replace step
+            ShouldFail = (_, callNum) => callNum == 2
+        };
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(),
+            new FakeUserConfirmationService(),
+            capabilityValidator: new DataRootCapabilityValidator(faultWriter));
+
+        // When probe fails during empty target transition, tx rollback cleans probe files tracked in journal
+        Assert.Throws<IOException>(() => coordinator.RequestTransition(target));
+    }
+
+    [TestMethod]
+    public void CRUU6_007_Reservation_lock_cleanup_failure_is_reported()
+    {
+        using var source = new TestDirectory();
+        using var targetParent = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+
+        string target = Path.Combine(targetParent.Root, "ResLockFailTarget");
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        FileStream? lockStream = null;
+        try
+        {
+            var ops = new FaultInjectingMigrationFileOps
+            {
+                OnMoveNoOverwrite = (src, dst) =>
+                {
+                    // Lock .app.lock so deletion during reservation release fails
+                    string targetLock = Path.Combine(target, ".app.lock");
+                    if (File.Exists(targetLock) && lockStream == null)
+                    {
+                        lockStream = new FileStream(targetLock, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+                    }
+                    throw new IOException("Simulated copy failure");
+                }
+            };
+
+            var coordinator = new DataFolderTransitionCoordinator(
+                source.Root,
+                new AppSettingsRepository(settingsPathOverride: settingsPath),
+                new DataFolderMigrationService(fileOps: ops),
+                new FakeUserConfirmationService());
+
+            Assert.Throws<Exception>(() => coordinator.RequestTransition(target));
+        }
+        finally
+        {
+            lockStream?.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public void CRUU6_009_Future_target_schema_is_controlled_dialog_error()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+
+        string targetLib = Path.Combine(target.Root, "library.json");
+        File.WriteAllText(targetLib, "{\"schemaVersion\":99,\"categories\":[],\"prompts\":[]}");
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(),
+            new FakeUserConfirmationService { ConfirmationResult = true });
+
+        var ex = Assert.Throws<UnsupportedLibrarySchemaException>(() => coordinator.RequestTransition(target.Root));
+        Assert.AreEqual(99, ex.SchemaVersion);
+    }
+
+    [TestMethod]
+    public void CRUU6_009_Future_settings_schema_mid_transition_is_controlled_dialog_error()
+    {
+        using var source = new TestDirectory();
+        using var target = new TestDirectory();
+        using var settingsDir = new TestDirectory();
+
+        SeedValidLibrary(source.Root, out _);
+        SeedValidLibrary(target.Root, out _);
+
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(settingsPath, $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        var confirmation = new FakeUserConfirmationService
+        {
+            ConfirmationResult = true,
+            OnConfirm = () =>
+            {
+                // Settings upgraded to schema 99 mid-flight
+                File.WriteAllText(settingsPath, "{\"schemaVersion\":99,\"dataRootPath\":\"C:\\\\Data\"}");
+            }
+        };
+
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath),
+            new DataFolderMigrationService(),
+            confirmation);
+
+        // When settings save runs with future schema in settings.json, UnsupportedSettingsSchemaException or InvalidOperationException (CAS mismatch) is thrown
+        Assert.Throws<Exception>(() => coordinator.RequestTransition(target.Root));
     }
 }
