@@ -2,12 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
 
 internal sealed class MigrationPayloadCommitLease : IDisposable
 {
-    private readonly List<FileStream> _streams = [];
+    private readonly List<SafeFileHandle> _handles = [];
     private bool _disposed;
 
     private MigrationPayloadCommitLease() { }
@@ -30,8 +31,8 @@ internal sealed class MigrationPayloadCommitLease : IDisposable
                 string sourcePath = Path.Combine(sourcePhysicalRoot, artifact.RelativePath);
                 string targetPath = Path.Combine(targetPhysicalRoot, artifact.RelativePath);
 
-                lease.OpenAndVerify(sourcePath, artifact.Length, artifact.Sha256Hex);
-                lease.OpenAndVerify(targetPath, artifact.Length, artifact.Sha256Hex);
+                lease.OpenAndVerify(sourcePath, sourcePhysicalRoot, artifact.Length, artifact.Sha256Hex);
+                lease.OpenAndVerify(targetPath, targetPhysicalRoot, artifact.Length, artifact.Sha256Hex);
             }
 
             return lease;
@@ -43,24 +44,25 @@ internal sealed class MigrationPayloadCommitLease : IDisposable
         }
     }
 
-    private void OpenAndVerify(string path, long expectedLength, string expectedSha256Hex)
+    private void OpenAndVerify(string path, string physicalRoot, long expectedLength, string expectedSha256Hex)
     {
-        FileStream stream = new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read);
+        // CRUU14-008: reject reparse-point files and assert the final physical path is a
+        // strict descendant of the expected root, instead of trusting an ordinary FileStream
+        // open (which follows reparse points) to have resolved to the intended managed file.
+        SafeFileHandle handle = WindowsStrictFileOpener.OpenNonReparseUnderRoot(path, physicalRoot);
 
         try
         {
-            if (stream.Length != expectedLength)
+            long length = RandomAccess.GetLength(handle);
+            if (length != expectedLength)
             {
                 throw new IOException(
-                    $"Payload file length mismatch during commit lease acquisition on '{path}'. Expected={expectedLength}, Actual={stream.Length}");
+                    $"Payload file length mismatch during commit lease acquisition on '{path}'. Expected={expectedLength}, Actual={length}");
             }
 
-            byte[] hash = SHA256.HashData(stream);
-            string actualSha256 = Convert.ToHexStringLower(hash);
+            byte[] bytes = new byte[length];
+            RandomAccess.Read(handle, bytes, 0);
+            string actualSha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
 
             if (!string.Equals(actualSha256, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
             {
@@ -68,11 +70,11 @@ internal sealed class MigrationPayloadCommitLease : IDisposable
                     $"Payload file content hash mismatch during commit lease acquisition on '{path}'. Expected={expectedSha256Hex}, Actual={actualSha256}");
             }
 
-            _streams.Add(stream);
+            _handles.Add(handle);
         }
         catch
         {
-            stream.Dispose();
+            handle.Dispose();
             throw;
         }
     }
@@ -85,11 +87,11 @@ internal sealed class MigrationPayloadCommitLease : IDisposable
         }
 
         _disposed = true;
-        foreach (FileStream stream in _streams)
+        foreach (SafeFileHandle handle in _handles)
         {
-            stream.Dispose();
+            handle.Dispose();
         }
 
-        _streams.Clear();
+        _handles.Clear();
     }
 }

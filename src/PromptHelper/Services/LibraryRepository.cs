@@ -37,11 +37,16 @@ public sealed class LibraryRepository
 
     private readonly AppPaths _paths;
     private readonly IDurableAtomicFileWriter _durableWriter;
+    private readonly IExpectedFileCasReplacer _casReplacer;
 
-    internal LibraryRepository(AppPaths paths, IDurableAtomicFileWriter durableWriter)
+    internal LibraryRepository(
+        AppPaths paths,
+        IDurableAtomicFileWriter durableWriter,
+        IExpectedFileCasReplacer? casReplacer = null)
     {
         _paths = paths;
         _durableWriter = durableWriter;
+        _casReplacer = casReplacer ?? new WindowsExpectedFileCasReplacer();
     }
 
     public LibraryRepository(AppPaths paths)
@@ -108,11 +113,50 @@ public sealed class LibraryRepository
         }
     }
 
+    /// <summary>
+    /// Commit precondition bound as tightly as the interface allows: the current primary is
+    /// re-verified with a native, share-restricted handle check (see
+    /// <see cref="WindowsExpectedFileCasReplacer"/>) immediately before the durable write,
+    /// instead of trusting a plain content read captured earlier. The write itself still goes
+    /// through the injected <see cref="IDurableAtomicFileWriter"/> so fault-injection tests
+    /// covering the write step keep working — this narrows the CRUU14-002 TOCTOU window right
+    /// up to the write call, but does not hold an exclusive lock through it.
+    /// </summary>
     public CommitResult CommitIfPrimaryUnchanged(CanonicalLibraryPackage package, string expectedRawSha256Hex)
     {
         ArgumentNullException.ThrowIfNull(package);
-        VerifyPrimaryUnchanged(expectedRawSha256Hex);
-        return Commit(package);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedRawSha256Hex);
+
+        MetadataFileState primaryState = ReadMetadataFileState(_paths.LibraryPath);
+
+        if (primaryState is MetadataFileState.Future futurePrimary)
+        {
+            throw new UnsupportedLibrarySchemaException(futurePrimary.Version);
+        }
+
+        if (primaryState is MetadataFileState.Unreadable unreadablePrimary)
+        {
+            throw new IOException(
+                $"library.json cannot be safely replaced because it cannot be read: {unreadablePrimary.Error.Message}",
+                unreadablePrimary.Error);
+        }
+
+        try
+        {
+            _casReplacer.VerifyCurrentMatches(_paths.LibraryPath, expectedRawSha256Hex);
+        }
+        catch (StaleExpectedFileException ex)
+        {
+            throw new InvalidOperationException(
+                "The library changed outside the current Prompt Helper state. Reload before editing.", ex);
+        }
+
+        _durableWriter.ReplaceDurable(
+            _paths.LibraryPath,
+            package.CanonicalBytes,
+            DurableFileClass.LibraryMetadata);
+
+        return SynchronizeBackup(package);
     }
 
     public CommitResult Commit(CanonicalLibraryPackage package)
@@ -159,7 +203,16 @@ public sealed class LibraryRepository
         return Commit(package);
     }
 
-    public CommitResult SynchronizeBackup(CanonicalLibraryPackage package)
+    /// <summary>
+    /// Internal (CRUU14-009): a public overload here would let any caller construct an
+    /// arbitrary valid <see cref="CanonicalLibraryPackage"/> and publish it to the backup
+    /// independently of the actual current primary. The only legitimate callers are
+    /// <see cref="Commit(CanonicalLibraryPackage)"/> (which writes the same package to
+    /// primary immediately before this call) and the internal
+    /// <see cref="SynchronizeBackup(HealthyLibraryPackage)"/> overload used by startup
+    /// recovery, which is itself derived from an inspected-healthy primary/backup read.
+    /// </summary>
+    internal CommitResult SynchronizeBackup(CanonicalLibraryPackage package)
     {
         ArgumentNullException.ThrowIfNull(package);
         MetadataFileState state = ReadMetadataFileState(_paths.LibraryBackupPath);

@@ -1,22 +1,11 @@
 using System;
-using System.ComponentModel;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PromptHelper.Services;
 
 internal sealed class WindowsDurableSettingsFileWriter : IDurableSettingsFileWriter
 {
-    private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
-    private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool MoveFileExW(
-        string lpExistingFileName,
-        string lpNewFileName,
-        uint dwFlags);
-
     public void WriteDurable(string targetPath, string content)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
@@ -29,60 +18,31 @@ internal sealed class WindowsDurableSettingsFileWriter : IDurableSettingsFileWri
 
         string tempFileName = SettingsTempName.Generate(targetPath, Guid.NewGuid());
         string tempPath = Path.Combine(directory, tempFileName);
+        byte[] bytes = new UTF8Encoding(false).GetBytes(content);
 
-        bool promoted = false;
-        Exception? primaryFailure = null;
-
+        // CRUU14-001: retain the staging handle from creation through promotion; never
+        // close it and re-open the temp path by name for the rename or for cleanup.
+        using var stage = WindowsOwnedDurableStage.CreateNew(tempPath);
         try
         {
-            using (var stream = new FileStream(
-                       tempPath,
-                       FileMode.CreateNew,
-                       FileAccess.Write,
-                       FileShare.None))
-            using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+            stage.Write(bytes);
+            stage.FlushDurable();
+            stage.PromoteReplaceExact(targetPath);
+        }
+        catch (Exception primaryFailure)
+        {
+            try
             {
-                writer.Write(content);
-                writer.Flush();
-                stream.Flush(flushToDisk: true);
+                stage.DeleteExact();
             }
-
-            if (!MoveFileExW(
-                    tempPath,
-                    targetPath,
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            catch (Exception cleanupEx)
             {
-                int error = Marshal.GetLastWin32Error();
                 throw new IOException(
-                    $"Durable settings promotion failed for '{targetPath}'.",
-                    new Win32Exception(error));
+                    $"Settings write failed for '{targetPath}' and staging cleanup failed for '{tempPath}': {primaryFailure.Message} | Cleanup: {cleanupEx.Message}",
+                    primaryFailure);
             }
 
-            promoted = true;
-        }
-        catch (Exception ex)
-        {
-            primaryFailure = ex;
             throw;
-        }
-        finally
-        {
-            if (!promoted)
-            {
-                try
-                {
-                    if (new StrictPathAuthority().Probe(tempPath).Kind != StrictPathKind.Missing)
-                    {
-                        File.Delete(tempPath);
-                    }
-                }
-                catch (Exception cleanupEx)
-                {
-                    throw new IOException(
-                        $"Settings write failed for '{targetPath}' and staging cleanup failed for '{tempPath}': {primaryFailure?.Message} | Cleanup: {cleanupEx.Message}",
-                        primaryFailure ?? cleanupEx);
-                }
-            }
         }
     }
 }

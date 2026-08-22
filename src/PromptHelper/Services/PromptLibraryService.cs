@@ -126,7 +126,7 @@ public sealed class PromptLibraryService
         candidate.Categories.Add(newCategory);
         LibraryValidator.Validate(candidate);
 
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        CommitResult commitResult = CommitCandidateIfUnchanged(candidate);
         _document = candidate;
 
         var returnedCategory = new CategoryRecord
@@ -161,7 +161,7 @@ public sealed class PromptLibraryService
         target.Name = trimmedName;
         LibraryValidator.Validate(candidate);
 
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        CommitResult commitResult = CommitCandidateIfUnchanged(candidate);
         _document = candidate;
 
         return new OperationResult(commitResult.Warning);
@@ -196,7 +196,7 @@ public sealed class PromptLibraryService
         candidate.Categories.Remove(target);
         LibraryValidator.Validate(candidate);
 
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        CommitResult commitResult = CommitCandidateIfUnchanged(candidate);
         _document = candidate;
 
         return new OperationResult(commitResult.Warning);
@@ -355,7 +355,7 @@ public sealed class PromptLibraryService
 
         LibraryValidator.Validate(candidate);
 
-        CommitResult commitResult = _libraryRepo.Commit(candidate);
+        CommitResult commitResult = CommitCandidateIfUnchanged(candidate);
         _document = candidate;
 
         return new OperationResult(commitResult.Warning);
@@ -536,6 +536,27 @@ public sealed class PromptLibraryService
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// Commits <paramref name="candidate"/> only if disk still matches the in-memory
+    /// <see cref="_document"/> the caller built it from, using write-bound CAS rather than a
+    /// separate check-then-blind-write (CRUU14-002 Problem B: CreateCategory, RenameCategory,
+    /// DeleteCategory, and MovePrompt previously called <see cref="LibraryRepository.Commit"/>
+    /// directly with no disk precondition at all).
+    /// </summary>
+    private CommitResult CommitCandidateIfUnchanged(LibraryDocument candidate)
+    {
+        LibraryPrimarySnapshot disk = _libraryRepo.CapturePrimarySnapshot();
+        byte[] currentCanonical = _libraryRepo.SerializeCanonicalBytes(_document);
+        if (!disk.CanonicalBytes.AsSpan().SequenceEqual(currentCanonical))
+        {
+            throw new InvalidOperationException(
+                "The library changed outside the current Prompt Helper state. Reload before editing.");
+        }
+
+        CanonicalLibraryPackage package = _libraryRepo.CreateCanonicalPackage(candidate);
+        return _libraryRepo.CommitIfPrimaryUnchanged(package, disk.RawSha256Hex);
+    }
 
     private Guid GenerateUniquePromptGuid(LibraryDocument candidate)
     {

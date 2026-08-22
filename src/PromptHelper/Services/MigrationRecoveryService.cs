@@ -232,7 +232,7 @@ public sealed class MigrationRecoveryService
             }
 
             // 6. Delete marker LAST
-            _manifestRepo.DeleteStrict(markerPath);
+            _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
 
             if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)
             {
@@ -355,7 +355,7 @@ public sealed class MigrationRecoveryService
             }
 
             // Retire marker
-            _manifestRepo.DeleteStrict(markerPath);
+            _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
             if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)
             {
                 throw new IOException(

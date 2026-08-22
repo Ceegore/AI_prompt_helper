@@ -521,6 +521,22 @@ public sealed class DataFolderMigrationService
             }
 
             byte[] bodyBytes = _fileOps.ReadAllBytes(promptPath);
+
+            // CRUU14-007: a target could otherwise have a fully valid, strictly-UTF-8
+            // library.json with stable content fingerprints while an active prompt body is
+            // UTF-16 or otherwise invalid UTF-8 — content normal prompt reading would refuse.
+            // Reject that target here, in both content passes, not just when it is later read.
+            try
+            {
+                DecodeUtf8Text(bodyBytes);
+            }
+            catch (Exception ex) when (ex is DecoderFallbackException or InvalidDataException)
+            {
+                throw new InvalidDataException(
+                    $"{metadataDescription} references prompt file '{prompt.Id:N}.md', but it is not valid UTF-8 text.",
+                    ex);
+            }
+
             promptHashes[prompt.Id] = SHA256.HashData(bodyBytes);
         }
 

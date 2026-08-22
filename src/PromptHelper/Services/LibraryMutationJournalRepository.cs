@@ -111,41 +111,30 @@ internal sealed class LibraryMutationJournalRepository
         journal.Revision = candidate.Revision;
     }
 
+    /// <summary>
+    /// Handle-bound retirement (CRUU14-005): the journal is opened once, read and validated
+    /// from that handle, and — only if it still matches — deleted through that exact same
+    /// handle. There is no window between "validate by path" and "delete by path" where a
+    /// foreign object substituted at the journal path could be destroyed in its place.
+    /// </summary>
     public void DeleteStrict(Guid expectedOperationId, long expectedRevision)
     {
-        LibraryMutationJournal? current = TryReadStrict();
-        if (current is null)
+        using WindowsHandleBoundFile? handle = WindowsHandleBoundFile.OpenExistingOrNull(_paths.LibraryMutationJournalPath);
+        if (handle is null)
         {
             return;
         }
+
+        byte[] bytes = handle.ReadAllBytes();
+        string json = StrictUtf8Text.Decode(bytes, "library mutation journal");
+        LibraryMutationJournal current = ParseValidate(json);
 
         if (current.OperationId != expectedOperationId || current.Revision != expectedRevision)
         {
             throw new InvalidDataException("Mutation journal changed before retire.");
         }
 
-        StrictPathProbe state = _strictPaths.Probe(_paths.LibraryMutationJournalPath);
-        if (state.Kind == StrictPathKind.File)
-        {
-            File.Delete(_paths.LibraryMutationJournalPath);
-        }
-    }
-
-    public void DeleteStrict()
-    {
-        StrictPathProbe state = _strictPaths.Probe(_paths.LibraryMutationJournalPath);
-
-        if (state.Kind == StrictPathKind.Missing)
-        {
-            return;
-        }
-
-        if (state.Kind != StrictPathKind.File)
-        {
-            throw new InvalidDataException("Mutation journal path is not a file.");
-        }
-
-        File.Delete(_paths.LibraryMutationJournalPath);
+        handle.DeleteExact();
     }
 
     public static bool IsAllowedTransition(LibraryMutationKind kind, LibraryMutationPhase current, LibraryMutationPhase next)

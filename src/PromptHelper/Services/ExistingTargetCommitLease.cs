@@ -2,23 +2,23 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
 using PromptHelper.Models;
 
 namespace PromptHelper.Services;
 
 /// <summary>
 /// Opens and hashes an existing target library's metadata file and every active prompt body,
-/// holding all of them open with <see cref="FileShare.Read"/> (denying concurrent writers)
-/// through the commit window from immediately before settings commit to
-/// <see cref="AppSettingsRepository.SaveIfUnchanged"/> returning. Unlike
-/// <see cref="MigrationPayloadCommitLease"/> (which binds a migration's own copied payload),
-/// this binds the pre-existing target content that the transition is about to point settings
-/// at, closing the gap where an external process could still edit it between the last
-/// inspection and the settings commit.
+/// holding all of them open (denying concurrent writers) through the commit window from
+/// immediately before settings commit to <see cref="AppSettingsRepository.SaveIfUnchanged"/>
+/// returning. Unlike <see cref="MigrationPayloadCommitLease"/> (which binds a migration's own
+/// copied payload), this binds the pre-existing target content that the transition is about to
+/// point settings at, closing the gap where an external process could still edit it between
+/// the last inspection and the settings commit.
 /// </summary>
 internal sealed class ExistingTargetCommitLease : IDisposable
 {
-    private readonly List<FileStream> _streams = [];
+    private readonly List<SafeFileHandle> _handles = [];
     private bool _disposed;
 
     private ExistingTargetCommitLease() { }
@@ -38,14 +38,28 @@ internal sealed class ExistingTargetCommitLease : IDisposable
 
         try
         {
-            byte[] metadataBytes = lease.OpenAndRead(metadataPath);
+            byte[] metadataBytes = lease.OpenAndRead(metadataPath, targetPhysicalRoot);
 
             string promptsDir = Path.Combine(targetPhysicalRoot, "prompts");
             var promptHashes = new Dictionary<Guid, byte[]>();
             foreach (PromptRecord prompt in document.Prompts)
             {
                 string promptPath = Path.Combine(promptsDir, $"{prompt.Id:N}.md");
-                byte[] bodyBytes = lease.OpenAndRead(promptPath);
+                byte[] bodyBytes = lease.OpenAndRead(promptPath, targetPhysicalRoot);
+
+                // CRUU14-007: revalidate strict UTF-8 from the exact bytes held by this
+                // lease, not just the hash computed from an earlier inspection pass.
+                try
+                {
+                    StrictUtf8Text.Decode(bodyBytes, $"prompt file '{prompt.Id:N}.md'");
+                }
+                catch (InvalidDataException ex)
+                {
+                    throw new IOException(
+                        $"Target prompt file '{prompt.Id:N}.md' is not valid UTF-8 text. Transition cancelled.",
+                        ex);
+                }
+
                 promptHashes[prompt.Id] = SHA256.HashData(bodyBytes);
             }
 
@@ -65,35 +79,24 @@ internal sealed class ExistingTargetCommitLease : IDisposable
         }
     }
 
-    private byte[] OpenAndRead(string path)
+    private byte[] OpenAndRead(string path, string physicalRoot)
     {
-        FileStream stream = new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read);
+        // CRUU14-008: reject reparse-point files and assert the final physical path is a
+        // strict descendant of the expected root, instead of trusting an ordinary FileStream
+        // open (which follows reparse points) to have resolved to the intended managed file.
+        SafeFileHandle handle = WindowsStrictFileOpener.OpenNonReparseUnderRoot(path, physicalRoot);
 
         try
         {
-            byte[] bytes = new byte[stream.Length];
-            int total = 0;
-            while (total < bytes.Length)
-            {
-                int read = stream.Read(bytes, total, bytes.Length - total);
-                if (read == 0)
-                {
-                    break;
-                }
-                total += read;
-            }
-
-            stream.Position = 0;
-            _streams.Add(stream);
+            long length = RandomAccess.GetLength(handle);
+            byte[] bytes = new byte[length];
+            RandomAccess.Read(handle, bytes, 0);
+            _handles.Add(handle);
             return bytes;
         }
         catch
         {
-            stream.Dispose();
+            handle.Dispose();
             throw;
         }
     }
@@ -106,11 +109,11 @@ internal sealed class ExistingTargetCommitLease : IDisposable
         }
 
         _disposed = true;
-        foreach (FileStream stream in _streams)
+        foreach (SafeFileHandle handle in _handles)
         {
-            stream.Dispose();
+            handle.Dispose();
         }
 
-        _streams.Clear();
+        _handles.Clear();
     }
 }

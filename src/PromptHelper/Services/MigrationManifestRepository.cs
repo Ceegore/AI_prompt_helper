@@ -261,16 +261,41 @@ public sealed class MigrationManifestRepository
         }
     }
 
-    public void DeleteStrict(string markerPath)
+    /// <summary>
+    /// Handle-bound marker retirement (CRUU14-005): opens the marker once, parses and
+    /// validates it against the expected attempt ID and phase from that same handle, and
+    /// deletes through that same handle. Never re-opens the marker path to delete it after
+    /// validating it — a foreign object substituted at the marker path in between would
+    /// otherwise be destroyed in its place.
+    /// </summary>
+    public void DeleteStrict(string markerPath, Guid expectedAttemptId, MigrationManifestPhase expectedPhase)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
-        if (_fileOps.FileExists(markerPath))
-        {
-            _fileOps.DeleteFile(markerPath);
-        }
-    }
 
-    public void DeleteDurable(string markerPath) => DeleteStrict(markerPath);
+        using WindowsHandleBoundFile? handle = WindowsHandleBoundFile.OpenExistingOrNull(markerPath);
+        if (handle is null)
+        {
+            return;
+        }
+
+        byte[] rawBytes = handle.ReadAllBytes();
+        string json = StrictUtf8Text.Decode(rawBytes, $"migration manifest '{markerPath}'");
+        ValidateJsonStructure(json, markerPath);
+
+        MigrationAttemptManifest? manifest = JsonSerializer.Deserialize<MigrationAttemptManifest>(json, JsonOptions);
+        if (manifest is null)
+        {
+            throw new InvalidDataException($"Migration manifest deserialized to null: '{markerPath}'.");
+        }
+
+        if (manifest.AttemptId != expectedAttemptId || manifest.Phase != expectedPhase)
+        {
+            throw new InvalidDataException(
+                $"Migration manifest changed before retire at '{markerPath}'. Expected attempt {expectedAttemptId} phase {expectedPhase}, found attempt {manifest.AttemptId} phase {manifest.Phase}.");
+        }
+
+        handle.DeleteExact();
+    }
 
     private static int ValidateJsonStructure(string json, string path)
     {

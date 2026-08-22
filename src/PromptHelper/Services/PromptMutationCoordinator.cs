@@ -15,6 +15,7 @@ internal sealed class PromptMutationCoordinator
     private readonly LibraryMutationRecoveryService _recovery;
     private readonly IDurableAtomicFileWriter _writer;
     private readonly IVerifiedArtifactDeleter _verifiedDeleter;
+    private readonly IExpectedFileCasReplacer _casReplacer;
 
     public PromptMutationCoordinator(
         AppPaths paths,
@@ -24,7 +25,8 @@ internal sealed class PromptMutationCoordinator
         LibraryMutationJournalRepository journalRepo,
         LibraryMutationRecoveryService recovery,
         IDurableAtomicFileWriter writer,
-        IVerifiedArtifactDeleter? verifiedDeleter = null)
+        IVerifiedArtifactDeleter? verifiedDeleter = null,
+        IExpectedFileCasReplacer? casReplacer = null)
     {
         _paths = paths;
         _promptRepo = promptRepo;
@@ -34,6 +36,7 @@ internal sealed class PromptMutationCoordinator
         _recovery = recovery;
         _writer = writer;
         _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        _casReplacer = casReplacer ?? new WindowsExpectedFileCasReplacer();
     }
 
     public CommitResult CommitCreatePrompt(
@@ -165,25 +168,18 @@ internal sealed class PromptMutationCoordinator
                 journal,
                 LibraryMutationPhase.RecoveryBodyDurable);
 
-            // Narrow the TOCTOU window on the prompt body: re-verify the active body still
-            // matches what was read at the start of this operation immediately before the
-            // destructive replace, instead of trusting a read that may be stale by the time
-            // an interactive edit dialog was closed.
-            byte[] currentBodyBeforeReplace;
+            // Re-verify the prompt body with a native, share-restricted handle check
+            // immediately before the destructive replace, instead of trusting a plain read
+            // captured earlier. The replace itself still goes through the injected
+            // IDurableAtomicFileWriter so fault-injection tests covering it keep working.
             try
             {
-                currentBodyBeforeReplace = _promptRepo.ReadBytesStrict(promptId);
+                _casReplacer.VerifyCurrentMatches(bodyPath, journal.OldBodySha256Hex!);
             }
-            catch (FileNotFoundException ex)
+            catch (StaleExpectedFileException ex)
             {
                 throw new InvalidOperationException(
-                    "The prompt file was removed outside the current Prompt Helper state. Reload before editing.", ex);
-            }
-
-            if (!currentBodyBeforeReplace.AsSpan().SequenceEqual(oldBody))
-            {
-                throw new InvalidOperationException(
-                    "The prompt file changed outside the current Prompt Helper state. Reload before editing.");
+                    "The prompt file changed outside the current Prompt Helper state. Reload before editing.", ex);
             }
 
             _writer.ReplaceDurable(
@@ -265,8 +261,16 @@ internal sealed class PromptMutationCoordinator
     {
         if (!_promptRepo.Exists(promptId))
         {
+            LibraryPrimarySnapshot missingBodyDisk = _libraryRepo.CapturePrimarySnapshot();
+            byte[] missingBodyCurrentCanonical = _libraryRepo.SerializeCanonicalBytes(current);
+            if (!missingBodyDisk.CanonicalBytes.AsSpan().SequenceEqual(missingBodyCurrentCanonical))
+            {
+                throw new InvalidOperationException(
+                    "The library changed outside the current Prompt Helper state. Reload before editing.");
+            }
+
             CanonicalLibraryPackage pkg = _libraryRepo.CreateCanonicalPackage(candidate);
-            return _libraryRepo.Commit(pkg);
+            return _libraryRepo.CommitIfPrimaryUnchanged(pkg, missingBodyDisk.RawSha256Hex);
         }
 
         LibraryPrimarySnapshot disk = _libraryRepo.CapturePrimarySnapshot();

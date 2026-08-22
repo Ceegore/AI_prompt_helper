@@ -123,24 +123,28 @@ internal sealed class LibraryInitializationJournalRepository
         journal.Revision = candidate.Revision;
     }
 
+    /// <summary>
+    /// Handle-bound retirement (CRUU14-005): open once, validate from that handle, delete
+    /// through that same handle — never re-open the path after validation to delete it.
+    /// </summary>
     public void DeleteStrict(Guid expectedInitializationId, long expectedRevision)
     {
-        LibraryInitializationJournal? current = TryReadStrict();
-        if (current is null)
+        using WindowsHandleBoundFile? handle = WindowsHandleBoundFile.OpenExistingOrNull(_paths.InitializationMarkerPath);
+        if (handle is null)
         {
             return;
         }
+
+        byte[] bytes = handle.ReadAllBytes();
+        string json = StrictUtf8Text.Decode(bytes, "library initialization journal");
+        LibraryInitializationJournal current = ParseValidate(json);
 
         if (current.InitializationId != expectedInitializationId || current.Revision != expectedRevision)
         {
             throw new InvalidDataException("Initialization journal changed before retire.");
         }
 
-        StrictPathProbe state = _strictPaths.Probe(_paths.InitializationMarkerPath);
-        if (state.Kind == StrictPathKind.File)
-        {
-            File.Delete(_paths.InitializationMarkerPath);
-        }
+        handle.DeleteExact();
     }
 
     private static byte[] SerializeValidate(LibraryInitializationJournal journal)

@@ -1,19 +1,10 @@
 using System;
-using System.ComponentModel;
 using System.IO;
-using System.Runtime.InteropServices;
 
 namespace PromptHelper.Services;
 
 internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
 {
-    private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
-    private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, uint dwFlags);
-
     public void ReplaceDurable(
         string targetPath,
         ReadOnlySpan<byte> bytes,
@@ -22,29 +13,32 @@ internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
 
         string temp = CreateOwnedTempPath(targetPath, fileClass);
-        bool promoted = false;
 
+        // CRUU14-001: the staging handle is retained from creation through promotion (or,
+        // on failure, through handle-bound deletion). There is no window where "the temp
+        // path" is closed and later re-opened by path, so a foreign object substituted at
+        // that path in between can never be promoted or destroyed in its place.
+        using var stage = WindowsOwnedDurableStage.CreateNew(temp);
         try
         {
-            using (var stream = new FileStream(
-                temp,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None))
+            stage.Write(bytes);
+            stage.FlushDurable();
+            stage.PromoteReplaceExact(targetPath);
+        }
+        catch (Exception primary)
+        {
+            try
             {
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
+                stage.DeleteExact();
+            }
+            catch (Exception cleanup)
+            {
+                throw new IOException(
+                    $"Durable write failed for '{targetPath}' and staging cleanup also failed for '{temp}': {primary.Message} | Cleanup: {cleanup.Message}",
+                    primary);
             }
 
-            MoveDurable(temp, targetPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-            promoted = true;
-        }
-        finally
-        {
-            if (!promoted)
-            {
-                BestEffortDelete(temp);
-            }
+            throw;
         }
     }
 
@@ -56,44 +50,32 @@ internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
 
         string temp = CreateOwnedTempPath(targetPath, fileClass);
-        bool promoted = false;
 
+        using var stage = WindowsOwnedDurableStage.CreateNew(temp);
         try
         {
-            using (var stream = new FileStream(
-                temp,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None))
+            stage.Write(bytes);
+            stage.FlushDurable();
+            stage.PromoteNoOverwriteExact(targetPath);
+        }
+        catch (Exception primary)
+        {
+            try
             {
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
+                stage.DeleteExact();
+            }
+            catch (Exception cleanup)
+            {
+                throw new IOException(
+                    $"Durable create failed for '{targetPath}' and staging cleanup also failed for '{temp}': {primary.Message} | Cleanup: {cleanup.Message}",
+                    primary);
             }
 
-            MoveDurable(temp, targetPath, MOVEFILE_WRITE_THROUGH);
-            promoted = true;
-        }
-        finally
-        {
-            if (!promoted)
-            {
-                BestEffortDelete(temp);
-            }
+            throw;
         }
     }
 
-    private static void MoveDurable(string source, string destination, uint flags)
-    {
-        if (!MoveFileExW(source, destination, flags))
-        {
-            int error = Marshal.GetLastWin32Error();
-            throw new IOException(
-                $"Failed to atomically promote temp file '{source}' to '{destination}' with flags 0x{flags:X}.",
-                new Win32Exception(error));
-        }
-    }
-
-    private static string CreateOwnedTempPath(string targetPath, DurableFileClass fileClass)
+    internal static string CreateOwnedTempPath(string targetPath, DurableFileClass fileClass)
     {
         string dir = Path.GetDirectoryName(Path.GetFullPath(targetPath))
             ?? throw new ArgumentException($"Invalid directory for target path '{targetPath}'.", nameof(targetPath));
@@ -116,19 +98,4 @@ internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
         DurableFileClass.MutationControl => "mutation",
         _ => throw new ArgumentOutOfRangeException(nameof(fileClass), fileClass, "Unknown durable file class.")
     };
-
-    private static void BestEffortDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch
-        {
-            // Best effort in failure rollback
-        }
-    }
 }

@@ -653,7 +653,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                     {
                         try
                         {
-                            _manifestRepo.DeleteStrict(markerPath);
+                            _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
                         }
                         catch (Exception markerEx)
                         {
@@ -680,7 +680,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             string? manifestCleanupWarning = null;
             try
             {
-                _manifestRepo.DeleteStrict(markerPath);
+                _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
             }
             catch (Exception ex)
             {

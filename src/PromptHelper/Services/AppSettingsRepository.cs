@@ -42,15 +42,18 @@ public sealed class AppSettingsRepository
     private readonly string _lockPath;
     private readonly string _bootstrapRoot;
     private readonly IDurableSettingsFileWriter _durableWriter;
+    private readonly IExpectedFileCasReplacer _casReplacer;
     private readonly SettingsLeasePolicy _leasePolicy;
 
     public AppSettingsRepository(
         IDurableSettingsFileWriter? durableWriter = null,
         string? settingsPathOverride = null,
         string? backupPathOverride = null,
-        SettingsLeasePolicy? leasePolicy = null)
+        SettingsLeasePolicy? leasePolicy = null,
+        IExpectedFileCasReplacer? casReplacer = null)
     {
         _durableWriter = durableWriter ?? new WindowsDurableSettingsFileWriter();
+        _casReplacer = casReplacer ?? new WindowsExpectedFileCasReplacer();
         _leasePolicy = leasePolicy ?? SettingsLeasePolicy.Default;
 
         if (settingsPathOverride != null)
@@ -284,7 +287,7 @@ public sealed class AppSettingsRepository
             throw new InvalidOperationException("Settings were modified concurrently. Save operation cancelled.");
         }
 
-        return SaveCore(settings);
+        return SaveCoreWithCas(settings, precondition);
     }
 
     private static bool PreconditionsMatch(
@@ -339,6 +342,91 @@ public sealed class AppSettingsRepository
 
         string? backupWarning = TrySynchronizeBackupInternal(normalized);
         return new SettingsSaveResult(backupWarning);
+    }
+
+    /// <summary>
+    /// Used only by <see cref="SaveIfUnchanged"/>: re-verifies the precondition with a
+    /// native, share-restricted handle check immediately before the write (CRUU14-003),
+    /// instead of trusting the plain content read <see cref="CapturePrecondition"/> did
+    /// earlier. The write itself still goes through the injected
+    /// <see cref="IDurableSettingsFileWriter"/> so fault-injection tests covering the write
+    /// step keep working.
+    /// </summary>
+    private SettingsSaveResult SaveCoreWithCas(AppSettings settings, SettingsWritePrecondition precondition)
+    {
+        SettingsReadState primaryState = ReadSettingsFileState(_settingsPath);
+        if (primaryState is SettingsReadState.FutureSchema primaryFuture)
+        {
+            throw new UnsupportedSettingsSchemaException(primaryFuture.Version);
+        }
+        if (primaryState is SettingsReadState.Unreadable primaryUnreadable)
+        {
+            throw new SettingsReadException(_settingsPath, primaryUnreadable.Error.Message, primaryUnreadable.Error);
+        }
+
+        AppSettings normalized = new()
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+        };
+
+        string json = JsonSerializer.Serialize(normalized, JsonOptions);
+
+        if (precondition.Primary.Exists && precondition.Primary.Sha256 != null)
+        {
+            string expectedHex = Convert.ToHexStringLower(precondition.Primary.Sha256);
+            try
+            {
+                _casReplacer.VerifyCurrentMatches(_settingsPath, expectedHex);
+            }
+            catch (StaleExpectedFileException ex)
+            {
+                throw new InvalidOperationException("Settings were modified concurrently. Save operation cancelled.", ex);
+            }
+        }
+
+        _durableWriter.WriteDurable(_settingsPath, json);
+
+        string? backupWarning = TrySynchronizeBackupWithCas(normalized, precondition.Backup);
+        return new SettingsSaveResult(backupWarning);
+    }
+
+    private string? TrySynchronizeBackupWithCas(AppSettings settings, SettingsFileToken expectedBackupToken)
+    {
+        SettingsReadState backupState = ReadSettingsFileState(_backupPath);
+        if (backupState is SettingsReadState.FutureSchema future)
+        {
+            return $"Settings backup uses newer schema version {future.Version} and was preserved without overwrite.";
+        }
+        if (backupState is SettingsReadState.Unreadable)
+        {
+            return "The settings backup could not be synchronized (settings.backup.json could not be synchronized, could not be inspected or synchronized).";
+        }
+
+        try
+        {
+            AppSettings normalized = new()
+            {
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
+                DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+            };
+
+            string json = JsonSerializer.Serialize(normalized, JsonOptions);
+
+            if (expectedBackupToken.Exists && expectedBackupToken.Sha256 != null)
+            {
+                string expectedHex = Convert.ToHexStringLower(expectedBackupToken.Sha256);
+                _casReplacer.VerifyCurrentMatches(_backupPath, expectedHex);
+            }
+
+            _durableWriter.WriteDurable(_backupPath, json);
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"The settings backup could not be synchronized (settings.backup.json could not be synchronized, could not be inspected or synchronized): {ex.Message}";
+        }
     }
 
     private string? TrySynchronizeBackupInternal(AppSettings settings)

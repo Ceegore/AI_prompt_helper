@@ -149,7 +149,7 @@ public sealed class Cruu13ComprehensiveVerificationTests
 
         CommitResult result = coordinator.CommitEditPrompt(doc, doc, promptId, "New Body");
 
-        Assert.IsTrue(result.BackupSynchronized || result.Warning != null || true, "call completed without throwing");
+        Assert.IsTrue(result.BackupSynchronized, "Self-healing recovery must report the mutation as committed.");
         Assert.AreEqual("New Body", File.ReadAllText(promptPath),
             "A body-only edit whose content-neutral primary commit failed after the journal " +
             "already recorded MetadataDurable must keep the new body, not roll back to the old one.");
