@@ -2,9 +2,26 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace PromptHelper.Services;
+
+/// <summary>What a provenance-bound cleanup attempt actually did.</summary>
+internal enum ArtifactCleanupOutcome
+{
+    /// <summary>Nothing was there.</summary>
+    Missing,
+
+    /// <summary>A durable ownership record proved the object, and it was removed.</summary>
+    DeletedProvenOwned,
+
+    /// <summary>
+    /// Something is there, but nothing proves this application created it. It was left
+    /// untouched — the caller must fail closed rather than assume it can be destroyed.
+    /// </summary>
+    PreservedUnproven
+}
 
 internal interface IMigrationFileOps
 {
@@ -12,7 +29,36 @@ internal interface IMigrationFileOps
     Stream CreateNewFile(string path);
     Stream OpenRead(string path);
     void FlushToDisk(Stream stream);
-    void MoveNoOverwriteWriteThrough(string source, string destination);
+
+    /// <summary>
+    /// Creates an owned stage at <paramref name="path"/> whose handle is retained through
+    /// promotion or deletion (CRUU15-002). Fails if anything already occupies that pathname,
+    /// and leaves such an object untouched.
+    /// </summary>
+    IOwnedFileStage CreateOwnedStage(string path);
+
+    /// <summary>
+    /// Deletes the object at <paramref name="path"/> only if a durable ownership record proves
+    /// this application created it (CRUU15-006). An object with no such proof is preserved and
+    /// reported, never destroyed on the strength of its pathname alone.
+    /// </summary>
+    ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path);
+
+    /// <summary>
+    /// Removes the exact directory object at <paramref name="path"/> through a single retained
+    /// handle, so the directory that was inspected and the directory that is removed are
+    /// provably the same object. Fails if it is not empty when the removal is applied.
+    /// </summary>
+    void DeleteDirectoryExact(string physicalRoot, string path);
+
+    /// <summary>
+    /// Settles the ownership journal for <paramref name="physicalRoot"/>: proven-owned
+    /// leftovers are destroyed, interrupted atomic replacements are restored, dead claims are
+    /// dropped, and the journal file itself is removed once nothing is left to claim. Called at
+    /// the points where the managed tree must contain no in-flight control state.
+    /// </summary>
+    void RetireOwnedArtifacts(string physicalRoot);
+
     IEnumerable<string> EnumeratePromptFiles(string directory);
     bool FileExists(string path);
     bool DirectoryExists(string path);
@@ -25,14 +71,7 @@ internal interface IMigrationFileOps
 
 internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 {
-    private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
     private readonly StrictPathAuthority _strictPathAuthority = new();
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool MoveFileExW(
-        string lpExistingFileName,
-        string lpNewFileName,
-        uint dwFlags);
 
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
 
@@ -64,11 +103,83 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
         fs.Flush(flushToDisk: true);
     }
 
-    public void MoveNoOverwriteWriteThrough(string source, string destination)
+    private readonly IOwnedArtifactJournal _ownedArtifacts = new WindowsOwnedArtifactJournal();
+
+    public IOwnedFileStage CreateOwnedStage(string path)
     {
-        if (!MoveFileExW(source, destination, MOVEFILE_WRITE_THROUGH))
+        var stage = new OwnedMigrationStage(WindowsOwnedDurableStage.CreateNew(path));
+        try
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            // Claim it durably while the handle is still held, so a crash before promotion
+            // leaves behind an artifact whose provenance a later process can actually prove.
+            RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);
+            return stage;
+        }
+        catch
+        {
+            stage.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Records a stage in the ownership journal of the data root it lives in. The root is
+    /// derived by walking up from the stage until a directory holding managed control state is
+    /// found, so a prompt-body stage under <c>prompts\</c> is recorded in the same journal as
+    /// a root-level one.
+    /// </summary>
+    internal static void RecordStageOwnership(IOwnedArtifactJournal journal, string path, string identityToken)
+    {
+        string full = Path.GetFullPath(path);
+        string directory = Path.GetDirectoryName(full)
+            ?? throw new ArgumentException($"Stage path has no directory: '{path}'.", nameof(path));
+
+        string root = ResolveJournalRoot(directory);
+
+        if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
+        {
+            throw new InvalidOperationException($"Owned stage produced an unparsable identity token for '{path}'.");
+        }
+
+        journal.Record(root, new OwnedArtifactRecord(
+            OwnedArtifactKind.Stage,
+            Path.GetRelativePath(root, full),
+            identity,
+            RestoreRelativePath: null));
+    }
+
+    internal static string ResolveJournalRoot(string directory)
+    {
+        string name = Path.GetFileName(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.Equals(name, "prompts", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(name, "recovery", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.GetDirectoryName(directory) ?? directory;
+        }
+
+        return directory;
+    }
+
+    public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path) =>
+        ProvenanceBoundCleanup.DeleteFileIfProven(physicalRoot, path, _ownedArtifacts);
+
+    public void DeleteDirectoryExact(string physicalRoot, string path)
+    {
+        using WindowsRetirableDirectory? directory =
+            WindowsRetirableDirectory.OpenExistingOrNull(path, physicalRoot);
+        directory?.DeleteExact();
+    }
+
+    public void RetireOwnedArtifacts(string physicalRoot)
+    {
+        var failures = new List<TempCleanupFailure>();
+        OwnedArtifactReconciler.Reconcile(physicalRoot, _ownedArtifacts, failures);
+
+        if (failures.Count > 0)
+        {
+            throw new IOException(
+                "Transient ownership records could not be settled for " +
+                $"'{physicalRoot}': {string.Join("; ", failures.Select(f => $"{f.Path}: {f.ErrorMessage}"))}");
         }
     }
 
@@ -148,5 +259,21 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             list.Add(entry);
         }
         return list;
+    }
+
+    private sealed class OwnedMigrationStage : IOwnedFileStage
+    {
+        private readonly WindowsOwnedDurableStage _stage;
+
+        public OwnedMigrationStage(WindowsOwnedDurableStage stage) => _stage = stage;
+
+        public string IdentityToken => _stage.Identity.ToToken();
+
+        public void Write(ReadOnlySpan<byte> bytes) => _stage.Write(bytes);
+        public void FlushDurable() => _stage.FlushDurable();
+        public void PromoteReplaceExact(string targetPath) => _stage.PromoteReplaceExact(targetPath);
+        public void PromoteNoOverwriteExact(string targetPath) => _stage.PromoteNoOverwriteExact(targetPath);
+        public void DeleteExact() => _stage.DeleteExact();
+        public void Dispose() => _stage.Dispose();
     }
 }

@@ -103,11 +103,11 @@ public sealed class IconAssetTests
         string scriptPath = Path.Combine(repoRoot, "tools", "VerifyReleaseAssets.ps1");
         string exePath = Path.Combine(repoRoot, "src", "PromptHelper", "bin", "Debug", "net10.0-windows", "PromptHelper.exe");
 
-        if (!File.Exists(exePath))
-        {
-            Assert.Inconclusive($"Built PromptHelper.exe not found at '{exePath}'; build the main project before running this test.");
-            return;
-        }
+        // CRUU15-011: the release-asset check must not report success (or "not applicable")
+        // when the artefact it exists to validate is absent — that is precisely how an
+        // unvalidated executable ships.
+        Assert.IsTrue(File.Exists(exePath),
+            $"Built PromptHelper.exe not found at '{exePath}'. Build the main project before running the release-asset tests.");
 
         var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe")
         {
@@ -125,20 +125,12 @@ public sealed class IconAssetTests
             WorkingDirectory = repoRoot
         };
 
-        using var proc = System.Diagnostics.Process.Start(psi)!;
-        // Both streams must be drained concurrently with waiting for exit: reading stdout to
-        // completion before starting to read stderr (or vice versa) deadlocks if the child
-        // fills the other pipe's OS buffer while blocked writing to it.
-        System.Threading.Tasks.Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        System.Threading.Tasks.Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-        bool exited = proc.WaitForExit(60000);
-        string stdout = stdoutTask.GetAwaiter().GetResult();
-        string stderr = stderrTask.GetAwaiter().GetResult();
-        Assert.IsTrue(exited, "VerifyReleaseAssets.ps1 timed out.");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 60_000);
+        Assert.IsTrue(run.Exited, "VerifyReleaseAssets.ps1 timed out.");
 
-        Assert.AreEqual(0, proc.ExitCode,
-            $"VerifyReleaseAssets.ps1 -RequireIcon must pass against the built PromptHelper.exe.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
-        StringAssert.Contains(stdout, "Release asset verification completed successfully.");
+        Assert.AreEqual(0, run.ExitCode,
+            $"VerifyReleaseAssets.ps1 -RequireIcon must pass against the built PromptHelper.exe.\nSTDOUT:\n{run.StandardOutput}\nSTDERR:\n{run.StandardError}");
+        StringAssert.Contains(run.StandardOutput, "Release asset verification completed successfully.");
     }
 
     [TestMethod]
@@ -219,11 +211,10 @@ public sealed class IconAssetTests
     [TestMethod]
     public void CRUU14_012_Approved_SVG_hash_matches_manifest()
     {
-        if (!File.Exists(ManifestPath))
-        {
-            Assert.Inconclusive("No icon approval manifest is committed yet; not treated as a passing release-identity check.");
-            return;
-        }
+        // CRUU15-011: a missing approval manifest is a release blocker, not a reason to skip
+        // the identity check.
+        Assert.IsTrue(File.Exists(ManifestPath),
+            $"The icon approval manifest is required and is missing: '{ManifestPath}'.");
 
         IconApprovalManifest manifest = IconApprovalManifest.Load(ManifestPath);
         string actualSvgHash = IconApprovalManifest.ComputeSvgHash(SvgPath);
@@ -236,11 +227,10 @@ public sealed class IconAssetTests
     [TestMethod]
     public void CRUU14_012_Checked_in_ICO_matches_approved_normalized_RGBA_hashes()
     {
-        if (!File.Exists(ManifestPath))
-        {
-            Assert.Inconclusive("No icon approval manifest is committed yet; not treated as a passing release-identity check.");
-            return;
-        }
+        // CRUU15-011: a missing approval manifest is a release blocker, not a reason to skip
+        // the identity check.
+        Assert.IsTrue(File.Exists(ManifestPath),
+            $"The icon approval manifest is required and is missing: '{ManifestPath}'.");
 
         IconApprovalManifest manifest = IconApprovalManifest.Load(ManifestPath);
         byte[] icoBytes = File.ReadAllBytes(IcoPath);
@@ -261,11 +251,10 @@ public sealed class IconAssetTests
         // Cross-check: the manifest itself must cover every mandatory size, independent of
         // whether the checked-in ICO happens to (that is the previous test's job) — a manifest
         // silently missing a required size would let that size's identity go unreviewed.
-        if (!File.Exists(ManifestPath))
-        {
-            Assert.Inconclusive("No icon approval manifest is committed yet; not treated as a passing release-identity check.");
-            return;
-        }
+        // CRUU15-011: a missing approval manifest is a release blocker, not a reason to skip
+        // this check either.
+        Assert.IsTrue(File.Exists(ManifestPath),
+            $"The icon approval manifest is required and is missing: '{ManifestPath}'.");
 
         IconApprovalManifest manifest = IconApprovalManifest.Load(ManifestPath);
         var coveredSizes = new HashSet<int>();

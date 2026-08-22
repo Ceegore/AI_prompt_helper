@@ -5,36 +5,50 @@ using System.IO;
 namespace PromptHelper.Services;
 
 /// <summary>
-/// CRUU14-010: a filename that matches a Prompt Helper temp-file naming convention is not
-/// ownership evidence by itself — see <see cref="SettingsTempReconciler"/> for the same
-/// reasoning applied to settings temps. Files matching the current, class-tagged naming
-/// convention (<see cref="DurableTempReconciler.TryParseDurableTemp"/>) are deleted through
-/// <see cref="IVerifiedArtifactDeleter.VerifyIdentityAndDelete"/> instead of a raw
-/// <c>File.Delete</c>, so a reparse point or an escape outside the data root at that pathname
-/// is refused rather than destroyed. Files matching only a *legacy* naming convention
-/// (predating the current scheme) are preserved rather than deleted — there is no formally
-/// justified policy here for auto-destroying them.
+/// Startup reconciliation of leftover staging files inside the data root.
 /// </summary>
+/// <remarks>
+/// <para>CRUU15-007: a filename is not ownership, and neither is "a filename in the current
+/// grammar that currently holds a regular non-reparse file inside the data root". That
+/// combination proves the object is well-formed and well-located; it proves nothing about who
+/// created it. After a crash, any process can leave a file at exactly such a pathname, and the
+/// previous implementation deleted it.</para>
+/// <para>So the only artifacts destroyed here are the ones an
+/// <see cref="IOwnedArtifactJournal"/> proves this application created, matched by the object
+/// identity recorded when it was created (<see cref="ArtifactProvenance.JournalOwned"/>).
+/// Everything else - current-format files with no record
+/// (<see cref="ArtifactProvenance.UnprovenCurrentFormat"/>), legacy names
+/// (<see cref="ArtifactProvenance.LegacyUnverifiable"/>), and objects that replaced a recorded
+/// one (<see cref="ArtifactProvenance.Foreign"/>) - is preserved and reported, never
+/// auto-destroyed.</para>
+/// </remarks>
 internal static class DataRootTempReconciler
 {
     public static TempReconciliationResult Reconcile(
         AppPaths paths,
         bool isBootstrapRoot = false,
-        IVerifiedArtifactDeleter? verifiedDeleter = null)
+        IVerifiedArtifactDeleter? verifiedDeleter = null,
+        IOwnedArtifactJournal? ownedArtifacts = null)
     {
         var failures = new List<TempCleanupFailure>();
+        var preserved = new List<PreservedArtifact>();
         string dataRoot = paths.RootDirectory;
 
         if (!Directory.Exists(dataRoot))
         {
-            return new TempReconciliationResult(failures);
+            return new TempReconciliationResult(failures, preserved);
         }
 
-        var deleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        IOwnedArtifactJournal journal = ownedArtifacts ?? new WindowsOwnedArtifactJournal();
 
         bool hasActiveMigration = File.Exists(paths.MigrationMarkerPath);
         bool hasActiveMutation = File.Exists(paths.LibraryMutationJournalPath);
         bool hasActiveInit = File.Exists(paths.InitializationMarkerPath);
+
+        // Restore interrupted atomic replacements and destroy proven-owned leftovers before
+        // classifying whatever remains.
+        IReadOnlySet<string> proven =
+            OwnedArtifactReconciler.Reconcile(dataRoot, journal, failures);
 
         // 1. Root directory
         foreach (string file in Directory.GetFiles(dataRoot))
@@ -63,12 +77,11 @@ internal static class DataRootTempReconciler
                     continue; // Recovery-owned
                 }
 
-                TryVerifiedDelete(deleter, dataRoot, file, failures);
+                RecordUnproven(file, proven, preserved);
             }
 
             // Legacy data-root temps (DurableTempReconciler.TryParseLegacyDataRootTemp) are
-            // intentionally left alone: preserved for manual review rather than deleted on a
-            // filename match with no ownership proof behind it.
+            // preserved for the same reason: a name is not provenance.
         }
 
         // 2. Prompts directory
@@ -80,11 +93,8 @@ internal static class DataRootTempReconciler
                 string name = Path.GetFileName(file);
                 if (DurableTempReconciler.TryParseDurableTemp(name, out var fileClass) && fileClass == DurableFileClass.PromptBody)
                 {
-                    TryVerifiedDelete(deleter, dataRoot, file, failures);
+                    RecordUnproven(file, proven, preserved);
                 }
-
-                // Legacy prompt temps (DurableTempReconciler.TryParseLegacyPromptTemp) are
-                // preserved for the same reason as legacy data-root temps above.
             }
         }
 
@@ -102,27 +112,27 @@ internal static class DataRootTempReconciler
                         continue; // Active mutation recovery owns recovery temps
                     }
 
-                    TryVerifiedDelete(deleter, dataRoot, file, failures);
+                    RecordUnproven(file, proven, preserved);
                 }
             }
         }
 
-        return new TempReconciliationResult(failures);
+        return new TempReconciliationResult(failures, preserved);
     }
 
-    private static void TryVerifiedDelete(
-        IVerifiedArtifactDeleter deleter,
-        string physicalRoot,
-        string path,
-        List<TempCleanupFailure> failures)
+    /// <summary>
+    /// Anything still present after journal-driven reconciliation was, by definition, not
+    /// proven owned. It is left exactly where it is and reported.
+    /// </summary>
+    private static void RecordUnproven(
+        string fullPath,
+        IReadOnlySet<string> proven,
+        List<PreservedArtifact> preserved)
     {
-        try
-        {
-            deleter.VerifyIdentityAndDelete(physicalRoot, path);
-        }
-        catch (Exception ex)
-        {
-            failures.Add(new TempCleanupFailure(path, ex.Message));
-        }
+        preserved.Add(new PreservedArtifact(
+            fullPath,
+            proven.Contains(Path.GetFullPath(fullPath))
+                ? ArtifactProvenance.JournalOwned
+                : ArtifactProvenance.UnprovenCurrentFormat));
     }
 }

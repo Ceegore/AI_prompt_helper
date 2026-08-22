@@ -72,7 +72,14 @@ public sealed class DataFolderMigrationService
     {
         TempPlanned,
         TempOwned,
-        FinalOwned
+        FinalOwned,
+
+        /// <summary>
+        /// The stage was created and then destroyed through its own retained handle, so
+        /// nothing this attempt owns remains at the temp pathname. Rollback must not touch
+        /// that pathname afterwards: anything there now belongs to someone else.
+        /// </summary>
+        TempAbandoned
     }
 
     public sealed class MigrationOwnedFile
@@ -95,6 +102,11 @@ public sealed class DataFolderMigrationService
         public void MarkFinalOwnedAfterMove()
         {
             State = MigrationOwnedFileState.FinalOwned;
+        }
+
+        public void MarkTempAbandoned()
+        {
+            State = MigrationOwnedFileState.TempAbandoned;
         }
     }
 
@@ -776,6 +788,12 @@ public sealed class DataFolderMigrationService
             CopyPayloadFileDurablyWithTemp(sourcePath, destPath, tempPath, artifact, tx);
         }
 
+        // Every payload stage created above reached a terminal state (promoted, or destroyed
+        // through its own handle), so its ownership claims are spent. Settle them now, while
+        // this operation still owns the target, rather than leaving in-flight control state
+        // behind for the terminal invariants to trip over (CRUU15-006).
+        _fileOps.RetireOwnedArtifacts(targetRoot);
+
         // Verify eligible source file set has not changed
         HashSet<string> currentEligibleSourceFiles = EnumerateEligiblePayloadFiles(currentRoot);
         if (!currentEligibleSourceFiles.SetEquals(snapshot.RelativePathSet))
@@ -881,15 +899,42 @@ public sealed class DataFolderMigrationService
             artifact.Length,
             artifact.Sha256Hex);
 
+        // CRUU15-002: the staged copy is owned by a retained handle from creation through
+        // promotion. "Owned temp" used to be a path string, so an object substituted at that
+        // pathname after the copy closed could be promoted into the target in place of the
+        // bytes actually written here.
+        byte[] payload;
         using (Stream source = _fileOps.OpenRead(sourcePath))
-        using (Stream destination = _fileOps.CreateNewFile(tempPath))
         {
-            source.CopyTo(destination);
-            _fileOps.FlushToDisk(destination);
+            using var buffer = new MemoryStream();
+            source.CopyTo(buffer);
+            payload = buffer.ToArray();
         }
+
+        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(tempPath);
         owned.MarkTempOwned();
 
-        _fileOps.MoveNoOverwriteWriteThrough(tempPath, finalPath);
+        try
+        {
+            stage.Write(payload);
+            stage.FlushDurable();
+            stage.PromoteNoOverwriteExact(finalPath);
+        }
+        catch
+        {
+            try
+            {
+                stage.DeleteExact();
+                owned.MarkTempAbandoned();
+            }
+            catch (Exception cleanupEx) when (cleanupEx is IOException or UnauthorizedAccessException)
+            {
+                // Left for rollback/recovery, which can still prove ownership from the manifest.
+            }
+
+            throw;
+        }
+
         owned.MarkFinalOwnedAfterMove();
     }
 

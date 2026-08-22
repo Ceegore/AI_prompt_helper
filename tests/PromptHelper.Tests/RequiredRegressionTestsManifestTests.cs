@@ -36,19 +36,11 @@ public sealed class RequiredRegressionTestsManifestTests
             CreateNoWindow = true
         };
 
-        using Process proc = Process.Start(psi)!;
-        // Both streams must be drained concurrently with waiting for exit — see the identical
-        // note in IconAssetTests; reading one stream to completion before the other risks a
-        // pipe-buffer deadlock if the child writes enough to fill the other one first.
-        System.Threading.Tasks.Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        System.Threading.Tasks.Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-        bool exited = proc.WaitForExit(30000);
-        string stdout = stdoutTask.GetAwaiter().GetResult();
-        string stderr = stderrTask.GetAwaiter().GetResult();
-        Assert.IsTrue(exited, "Import-PowerShellDataFile timed out.");
-        Assert.AreEqual(0, proc.ExitCode, $"Failed to parse RequiredRegressionTests.psd1.\nSTDERR:\n{stderr}");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 30_000);
+        Assert.IsTrue(run.Exited, "Import-PowerShellDataFile timed out.");
+        Assert.AreEqual(0, run.ExitCode, $"Failed to parse RequiredRegressionTests.psd1.\nSTDERR:\n{run.StandardError}");
 
-        string json = stdout.Trim();
+        string json = run.StandardOutput.Trim();
         // A single-element array serializes as a bare string with -Compress; normalize to an array.
         if (!json.StartsWith('['))
         {

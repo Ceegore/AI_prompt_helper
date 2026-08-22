@@ -40,10 +40,10 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
         _inner.FlushToDisk(stream);
     }
 
-    public void MoveNoOverwriteWriteThrough(string source, string destination)
+    public IOwnedFileStage CreateOwnedStage(string path)
     {
-        Trace.Add($"MoveWriteThrough:{Path.GetFileName(source)}->{Path.GetFileName(destination)}");
-        _inner.MoveNoOverwriteWriteThrough(source, destination);
+        Trace.Add($"CreateNewFile:{Path.GetFileName(path)}");
+        return new TracingStage(_inner.CreateOwnedStage(path), path, Trace);
     }
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
@@ -69,6 +69,55 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
 
     public void DeleteFile(string path) => _inner.DeleteFile(path);
     public void DeleteDirectory(string path) => _inner.DeleteDirectory(path);
+
+    public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
+        => _inner.DeleteOwnedFileIfProven(physicalRoot, path);
+
+    public void DeleteDirectoryExact(string physicalRoot, string path)
+        => _inner.DeleteDirectoryExact(physicalRoot, path);
+
+    public void RetireOwnedArtifacts(string physicalRoot)
+        => _inner.RetireOwnedArtifacts(physicalRoot);
     public IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*") => _inner.EnumerateFiles(directory, searchPattern);
     public IReadOnlyList<string> EnumerateEntries(string directory) => _inner.EnumerateEntries(directory);
+
+    private sealed class TracingStage : IOwnedFileStage
+    {
+        private readonly IOwnedFileStage _stage;
+        private readonly string _path;
+        private readonly List<string> _trace;
+
+        public TracingStage(IOwnedFileStage stage, string path, List<string> trace)
+        {
+            _stage = stage;
+            _path = path;
+            _trace = trace;
+        }
+
+        public string IdentityToken => _stage.IdentityToken;
+
+        public void Write(ReadOnlySpan<byte> bytes) => _stage.Write(bytes);
+
+        public void FlushDurable()
+        {
+            _trace.Add("FlushToDisk");
+            _stage.FlushDurable();
+        }
+
+        public void PromoteReplaceExact(string targetPath)
+        {
+            _trace.Add($"MoveWriteThrough:{Path.GetFileName(_path)}->{Path.GetFileName(targetPath)}");
+            _stage.PromoteReplaceExact(targetPath);
+        }
+
+        public void PromoteNoOverwriteExact(string targetPath)
+        {
+            _trace.Add($"MoveWriteThrough:{Path.GetFileName(_path)}->{Path.GetFileName(targetPath)}");
+            _stage.PromoteNoOverwriteExact(targetPath);
+        }
+
+        public void DeleteExact() => _stage.DeleteExact();
+
+        public void Dispose() => _stage.Dispose();
+    }
 }

@@ -59,21 +59,11 @@ public sealed class Cruu9ComprehensiveVerificationTests
 
     private static void CreateJunction(string linkPath, string targetPath)
     {
-        var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"{targetPath}\"")
+        var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"{targetPath}\"");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 30_000);
+        if (!run.Exited || run.ExitCode != 0)
         {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            // Only stderr is ever read; leaving stdout unredirected (inherited) avoids any
-            // risk of that unread pipe filling and blocking the child while we wait on it.
-            RedirectStandardError = true,
-            RedirectStandardOutput = false
-        };
-        using var proc = Process.Start(psi)!;
-        string stderr = proc.StandardError.ReadToEndAsync().GetAwaiter().GetResult();
-        proc.WaitForExit();
-        if (proc.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"mklink failed: {stderr}");
+            throw new InvalidOperationException($"mklink failed: {run.StandardError}");
         }
     }
 
@@ -882,9 +872,12 @@ public sealed class Cruu9ComprehensiveVerificationTests
         var repo = new MigrationManifestRepository();
         repo.CreateInitialCopyingManifestDurable(markerPath, manifest);
 
-        // Inject Ready stage file residue
+        // Inject Ready stage file residue, with the ownership record the interrupted attempt
+        // would have written when it created the stage (CRUU15-006): without one, recovery
+        // has no proof the file is ours and must preserve it.
         string stagePath = Path.Combine(target.Root, $".prompthelper-migration.stage-{attemptId:N}.tmp");
         File.WriteAllText(stagePath, "partial stage data");
+        OwnedArtifactTestSupport.ClaimOwnership(target.Root, stagePath);
 
         var recovery = new MigrationRecoveryService();
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);
@@ -920,6 +913,10 @@ public sealed class Cruu9ComprehensiveVerificationTests
         string settingsPath = Path.Combine(temp.Root, "settings.json");
         string staleTemp = Path.Combine(temp.Root, SettingsTempName.Generate(settingsPath, Guid.NewGuid()));
         File.WriteAllText(staleTemp, "stale temp content");
+
+        // The interrupted write's ownership record is what entitles reconciliation to destroy
+        // this file; a matching filename alone never does (CRUU15-007).
+        OwnedArtifactTestSupport.ClaimOwnership(temp.Root, staleTemp);
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath);
         repo.LoadOrRecover();
@@ -1183,15 +1180,9 @@ public sealed class Cruu9ComprehensiveVerificationTests
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        using var proc = Process.Start(psi)!;
-        // Drain both streams concurrently with waiting for exit to avoid a pipe-buffer
-        // deadlock if the script's output grows large enough to fill either OS pipe.
-        System.Threading.Tasks.Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        System.Threading.Tasks.Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-        proc.WaitForExit();
-        string stdout = stdoutTask.GetAwaiter().GetResult();
-        string stderr = stderrTask.GetAwaiter().GetResult();
-        Assert.AreEqual(0, proc.ExitCode, $"Script failed with exit code {proc.ExitCode}.\nStdout: {stdout}\nStderr: {stderr}");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 60_000);
+        Assert.IsTrue(run.Exited, "VerifyTestEvidence.ps1 timed out.");
+        Assert.AreEqual(0, run.ExitCode, $"Script failed with exit code {run.ExitCode}.\nStdout: {run.StandardOutput}\nStderr: {run.StandardError}");
     }
 
     [TestMethod]
@@ -1215,19 +1206,10 @@ public sealed class Cruu9ComprehensiveVerificationTests
 
         string scriptPath = Path.Combine(GetRepositoryRoot(), "tools", "VerifyTestEvidence.ps1");
 
-        var psi = new ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -TrxPath \"{trxPath}\" -RequiredTests NonExistentSentinelTest")
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            // Output is not inspected here, so it is not redirected at all — redirecting a
-            // pipe and never reading it risks a deadlock if the child fills that pipe's OS
-            // buffer while WaitForExit() blocks waiting for it to exit.
-            RedirectStandardOutput = false,
-            RedirectStandardError = false
-        };
-        using var proc = Process.Start(psi)!;
-        proc.WaitForExit();
-        Assert.AreNotEqual(0, proc.ExitCode);
+        var psi = new ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -TrxPath \"{trxPath}\" -RequiredTests NonExistentSentinelTest");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 60_000);
+        Assert.IsTrue(run.Exited, "VerifyTestEvidence.ps1 timed out.");
+        Assert.AreNotEqual(0, run.ExitCode);
     }
 
     // ==========================================

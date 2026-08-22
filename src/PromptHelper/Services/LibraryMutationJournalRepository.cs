@@ -112,14 +112,18 @@ internal sealed class LibraryMutationJournalRepository
     }
 
     /// <summary>
-    /// Handle-bound retirement (CRUU14-005): the journal is opened once, read and validated
-    /// from that handle, and — only if it still matches — deleted through that exact same
-    /// handle. There is no window between "validate by path" and "delete by path" where a
-    /// foreign object substituted at the journal path could be destroyed in its place.
+    /// Strict handle-bound retirement: the journal is opened once — without following reparse
+    /// points and proven to resolve physically inside the data root — read and validated from
+    /// that handle, and, only if it still matches, deleted through that exact same handle.
+    /// CRUU14-005 closed the "validate by path, then delete by path" window; CRUU15-005 closes
+    /// the remaining one, where a symlink at the journal path was followed and the
+    /// exact-object deletion destroyed its target instead.
     /// </summary>
     public void DeleteStrict(Guid expectedOperationId, long expectedRevision)
     {
-        using WindowsHandleBoundFile? handle = WindowsHandleBoundFile.OpenExistingOrNull(_paths.LibraryMutationJournalPath);
+        using WindowsStrictRetirableFile? handle = WindowsStrictRetirableFile.OpenExistingOrNull(
+            _paths.LibraryMutationJournalPath,
+            _paths.RootDirectory);
         if (handle is null)
         {
             return;

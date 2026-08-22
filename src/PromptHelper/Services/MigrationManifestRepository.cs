@@ -195,50 +195,66 @@ public sealed class MigrationManifestRepository
         string json = JsonSerializer.Serialize(manifest, JsonOptions);
         byte[] bytes = Encoding.UTF8.GetBytes(json);
 
-        bool promoted = false;
-        Exception? primaryFailure = null;
+        // CRUU15-001: create the stage, keep its handle, and promote or delete that exact
+        // object. If something already occupies the stage pathname the creation fails and the
+        // pre-existing object is left untouched — the old implementation would have deleted
+        // it in its cleanup block purely because it sat at the declared stage name.
+        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(stagePath);
 
         try
         {
-            using (Stream stream = _fileOps.CreateNew(stagePath))
-            {
-                stream.Write(bytes, 0, bytes.Length);
-                _fileOps.FlushToDisk(stream);
-            }
-
-            if (_fileOps.FileExists(markerPath))
-            {
-                _fileOps.ReplaceWriteThrough(stagePath, markerPath);
-            }
-            else
-            {
-                _fileOps.MoveNoOverwriteWriteThrough(stagePath, markerPath);
-            }
-
-            promoted = true;
+            stage.Write(bytes);
+            stage.FlushDurable();
+            stage.PromoteReplaceExact(markerPath);
         }
-        catch (Exception ex)
+        catch (Exception primaryFailure)
         {
-            primaryFailure = ex;
+            try
+            {
+                stage.DeleteExact();
+            }
+            catch (Exception cleanupEx)
+            {
+                throw new ManifestWriteCleanupException(
+                    markerPath,
+                    stagePath,
+                    primaryFailure,
+                    cleanupEx);
+            }
+
             throw;
         }
-        finally
+    }
+
+    /// <summary>
+    /// Re-reads the persisted marker through strict authority and proves it is byte-for-byte
+    /// the manifest that was just written. CRUU15-001: the coordinator's Ready gate runs
+    /// <i>before</i> the phase promotion, so without this the settings point of no return could
+    /// be crossed on the strength of a marker nobody re-read after it landed.
+    /// </summary>
+    public void AssertPersistedMarkerMatches(string markerPath, MigrationAttemptManifest expected)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
+        ArgumentNullException.ThrowIfNull(expected);
+
+        MigrationAttemptManifest? persisted = TryReadStrict(markerPath)
+            ?? throw new InvalidDataException(
+                $"The migration marker disappeared after it was written: '{markerPath}'.");
+
+        if (persisted.AttemptId != expected.AttemptId || persisted.Phase != expected.Phase)
         {
-            if (!promoted && _fileOps.FileExists(stagePath))
-            {
-                try
-                {
-                    _fileOps.DeleteFile(stagePath);
-                }
-                catch (Exception cleanupEx)
-                {
-                    throw new ManifestWriteCleanupException(
-                        markerPath,
-                        stagePath,
-                        primaryFailure ?? cleanupEx,
-                        cleanupEx);
-                }
-            }
+            throw new InvalidDataException(
+                $"The migration marker at '{markerPath}' does not match what was just written. " +
+                $"Expected attempt {expected.AttemptId} phase {expected.Phase}, " +
+                $"found attempt {persisted.AttemptId} phase {persisted.Phase}.");
+        }
+
+        byte[] expectedBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(expected, JsonOptions));
+        byte[] persistedBytes = _fileOps.ReadAllBytes(markerPath);
+        if (!expectedBytes.AsSpan().SequenceEqual(persistedBytes))
+        {
+            throw new InvalidDataException(
+                $"The migration marker at '{markerPath}' was replaced after it was written.");
         }
     }
 
@@ -262,17 +278,24 @@ public sealed class MigrationManifestRepository
     }
 
     /// <summary>
-    /// Handle-bound marker retirement (CRUU14-005): opens the marker once, parses and
-    /// validates it against the expected attempt ID and phase from that same handle, and
-    /// deletes through that same handle. Never re-opens the marker path to delete it after
-    /// validating it — a foreign object substituted at the marker path in between would
-    /// otherwise be destroyed in its place.
+    /// Strict handle-bound marker retirement: opens the marker once without following reparse
+    /// points, proves it resolves physically inside its own root, parses and validates it
+    /// against the expected attempt ID and phase from that same handle, and deletes through
+    /// that same handle (CRUU14-005/CRUU15-005).
     /// </summary>
-    public void DeleteStrict(string markerPath, Guid expectedAttemptId, MigrationManifestPhase expectedPhase)
+    public void DeleteStrict(
+        string markerPath,
+        Guid expectedAttemptId,
+        MigrationManifestPhase expectedPhase,
+        string? expectedPhysicalRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(markerPath);
 
-        using WindowsHandleBoundFile? handle = WindowsHandleBoundFile.OpenExistingOrNull(markerPath);
+        string root = expectedPhysicalRoot
+            ?? Path.GetDirectoryName(Path.GetFullPath(markerPath))
+            ?? throw new ArgumentException($"Marker path has no directory: '{markerPath}'.", nameof(markerPath));
+
+        using WindowsStrictRetirableFile? handle = WindowsStrictRetirableFile.OpenExistingOrNull(markerPath, root);
         if (handle is null)
         {
             return;

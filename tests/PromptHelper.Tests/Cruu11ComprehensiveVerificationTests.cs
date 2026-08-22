@@ -132,16 +132,9 @@ public class Cruu11ComprehensiveVerificationTests
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink \"{linkPath}\" \"{targetPath}\"")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var proc = System.Diagnostics.Process.Start(psi)!;
-            proc.WaitForExit(5000);
-            return proc.ExitCode == 0 && File.Exists(linkPath);
+            var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink \"{linkPath}\" \"{targetPath}\"");
+            ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 5_000);
+            return run.Exited && run.ExitCode == 0 && File.Exists(linkPath);
         }
         catch
         {
@@ -163,11 +156,13 @@ public class Cruu11ComprehensiveVerificationTests
         File.WriteAllBytes(realFile, bytes);
 
         string linkPath = Path.Combine(dataRoot, "file.bin");
-        if (!TryCreateFileSymlink(linkPath, realFile))
-        {
-            Assert.Inconclusive("This environment does not permit creating file symlinks (requires admin or Developer Mode).");
-            return;
-        }
+        // CRUU15-009: a required sentinel may not opt out of the environment it needs. If file
+        // symlinks cannot be created here, the reparse-point defence is simply unverified, and
+        // reporting that as anything other than a failure is how it stops being verified at
+        // all. Enable Windows Developer Mode, or run elevated.
+        Assert.IsTrue(
+            TryCreateFileSymlink(linkPath, realFile),
+            "Creating a file symlink is required for this test. Enable Windows Developer Mode or run elevated.");
 
         var deleter = new WindowsVerifiedArtifactDeleter();
 

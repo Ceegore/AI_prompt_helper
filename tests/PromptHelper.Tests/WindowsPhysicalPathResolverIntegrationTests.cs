@@ -17,17 +17,12 @@ public sealed class WindowsPhysicalPathResolverIntegrationTests
         var psi = new ProcessStartInfo
         {
             FileName = "cmd.exe",
-            Arguments = $"/c mklink /J \"{junction}\" \"{target}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true
+            Arguments = $"/c mklink /J \"{junction}\" \"{target}\""
         };
 
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start cmd.exe.");
-
-        bool exited = process.WaitForExit(5000);
-        Assert.IsTrue(exited, "mklink /J timed out.");
-        Assert.AreEqual(0, process.ExitCode, "mklink /J failed.");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 30_000);
+        Assert.IsTrue(run.Exited, "mklink /J timed out.");
+        Assert.AreEqual(0, run.ExitCode, $"mklink /J failed: {run.StandardError}");
     }
 
     private static void DeleteJunction(string junction)

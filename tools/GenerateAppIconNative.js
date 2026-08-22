@@ -8,12 +8,29 @@
 // degraded by resampling a larger bitmap.
 //
 // Usage: node tools/GenerateAppIconNative.js <source.svg> <output.ico>
-// Requires the "sharp" package (npm install sharp) to be available to Node's module
-// resolution when this script is run.
+//
+// The renderer is pinned: "sharp" is resolved only from tools/icon-generator, whose
+// package.json pins an exact version and whose package-lock.json pins the whole dependency
+// tree (CRUU15-011). A floating renderer version would silently change the rendered pixels,
+// which is exactly what the approval manifest exists to prevent — so this refuses to fall back
+// to an ambient install.
+//   cd tools/icon-generator && npm ci
 
-const sharp = require("sharp");
 const fs = require("fs");
 const path = require("path");
+
+const PINNED_MODULES = path.join(__dirname, "icon-generator", "node_modules");
+
+let sharp;
+try {
+  sharp = require(require.resolve("sharp", { paths: [PINNED_MODULES] }));
+} catch (err) {
+  console.error("The pinned renderer is not installed. Run:");
+  console.error("  cd tools/icon-generator && npm ci");
+  console.error("Resolution root: " + PINNED_MODULES);
+  console.error(String(err && err.message ? err.message : err));
+  process.exit(2);
+}
 
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
 

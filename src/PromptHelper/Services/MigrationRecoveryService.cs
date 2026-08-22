@@ -155,38 +155,49 @@ public sealed class MigrationRecoveryService
                 }
                 else if (control.Kind == MigrationControlArtifactKind.ManifestPhaseStaging)
                 {
-                    if (_fileOps.FileExists(controlPath))
+                    // CRUU15-006: a manifest stage holds a copy of the manifest itself, so its
+                    // hash cannot be embedded in the manifest without circularity. Identity
+                    // checks alone proved only that the object is a regular file in the right
+                    // place - not that this attempt created it. Ownership recorded at creation
+                    // time is what authorizes the deletion; anything else is preserved and the
+                    // recovery fails closed.
+                    ArtifactCleanupOutcome outcome =
+                        _fileOps.DeleteOwnedFileIfProven(context.TargetPhysicalRoot, controlPath);
+
+                    if (outcome == ArtifactCleanupOutcome.PreservedUnproven)
                     {
-                        _verifiedDeleter.VerifyIdentityAndDelete(context.TargetPhysicalRoot, controlPath);
+                        throw new InvalidDataException(
+                            $"A file occupies the declared manifest staging path '{control.RelativePath}', but nothing proves " +
+                            "this application created it. It was preserved and recovery was aborted to protect data.");
                     }
                 }
                 else if (control.Kind == MigrationControlArtifactKind.CapabilityProbeDirectory)
                 {
-                    if (_fileOps.DirectoryExists(controlPath))
-                    {
-                        if (_fileOps.EnumerateEntries(controlPath).Count > 0)
-                        {
-                            throw new InvalidDataException(
-                                $"Declared control directory '{control.RelativePath}' is not empty. Recovery aborted to protect data.");
-                        }
-
-                        _fileOps.DeleteDirectory(controlPath);
-                    }
+                    // CRUU15-006: removed through a single retained directory handle, so the
+                    // object proven empty and the object removed are the same one. The kernel
+                    // re-checks emptiness atomically when the disposition is applied, which is
+                    // strictly stronger than the previous enumerate-then-delete-by-path pair.
+                    _fileOps.DeleteDirectoryExact(context.TargetPhysicalRoot, controlPath);
                 }
             }
 
             // 2. Delete declared payload temps. A temp being cleaned up during retry may
-            // legitimately be partially written (the attempt was interrupted mid-copy), so
-            // its content cannot be required to match the final artifact's hash/length.
-            // Identity (reparse-point rejection + strict-descendant-path binding under the
-            // target root), not content, is the safety property that matters here: it still
-            // refuses to delete a foreign file that happens to sit at the declared temp path.
+            // legitimately be partially written (the attempt was interrupted mid-copy), so its
+            // content cannot be required to match the final artifact's hash/length - but that
+            // does not make "whatever regular file currently sits at the declared temp path"
+            // ours to destroy (CRUU15-006). Only the ownership recorded when the stage was
+            // created authorizes deletion; anything else is preserved and recovery aborts.
             foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
             {
                 string tempFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.TempRelativePath);
-                if (_fileOps.FileExists(tempFullPath))
+                ArtifactCleanupOutcome outcome =
+                    _fileOps.DeleteOwnedFileIfProven(context.TargetPhysicalRoot, tempFullPath);
+
+                if (outcome == ArtifactCleanupOutcome.PreservedUnproven)
                 {
-                    _verifiedDeleter.VerifyIdentityAndDelete(context.TargetPhysicalRoot, tempFullPath);
+                    throw new InvalidDataException(
+                        $"A file occupies the declared payload staging path '{artifact.TempRelativePath}', but nothing proves " +
+                        "this application created it. It was preserved and recovery was aborted to protect data.");
                 }
             }
 
@@ -198,19 +209,22 @@ public sealed class MigrationRecoveryService
             }
 
             // 4. Remove attempt-created directories before retiring marker (throwing if deletion fails)
+            // CRUU15-006: removed through a retained directory handle rather than a fresh
+            // pathname lookup, so a directory substituted at these names after the baseline
+            // decision cannot be removed in place of the one this attempt created.
             string promptsDir = Path.Combine(context.TargetPhysicalRoot, "prompts");
-            if ((manifest.TargetBaseline == null || !manifest.TargetBaseline.PromptsDirectoryExistedBefore) &&
-                _fileOps.DirectoryExists(promptsDir))
+            if (manifest.TargetBaseline == null || !manifest.TargetBaseline.PromptsDirectoryExistedBefore)
             {
-                _fileOps.DeleteDirectory(promptsDir);
+                _fileOps.DeleteDirectoryExact(context.TargetPhysicalRoot, promptsDir);
             }
 
             string recoveryDir = Path.Combine(context.TargetPhysicalRoot, "recovery");
-            if ((manifest.TargetBaseline == null || !manifest.TargetBaseline.RecoveryDirectoryExistedBefore) &&
-                _fileOps.DirectoryExists(recoveryDir))
+            if (manifest.TargetBaseline == null || !manifest.TargetBaseline.RecoveryDirectoryExistedBefore)
             {
-                _fileOps.DeleteDirectory(recoveryDir);
+                _fileOps.DeleteDirectoryExact(context.TargetPhysicalRoot, recoveryDir);
             }
+
+            _fileOps.RetireOwnedArtifacts(context.TargetPhysicalRoot);
 
             // 5. Re-inspect inventory and assert all attempt-created directories and temps are gone
             MigrationTargetInventory after = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest, context.IsExactBootstrapRoot);
@@ -286,12 +300,23 @@ public sealed class MigrationRecoveryService
                     $"Migration manifest target root '{manifest.TargetPhysicalRoot}' does not match configured physical root '{context.TargetPhysicalRoot}'.");
             }
 
-            // Reconcile declared stage file if present before checking terminal inventory
+            // Reconcile the declared stage file before checking terminal inventory.
+            // CRUU15-006: this used to be a bare path probe followed by a raw DeleteFile,
+            // bypassing every ownership guarantee the rest of recovery establishes. A stage
+            // this attempt cannot prove it created is now preserved and startup fails closed
+            // rather than destroying it.
             string stagePath = Path.Combine(context.TargetPhysicalRoot, $".prompthelper-migration.stage-{manifest.AttemptId:N}.tmp");
-            if (_fileOps.FileExists(stagePath))
+            ArtifactCleanupOutcome stageOutcome =
+                _fileOps.DeleteOwnedFileIfProven(context.TargetPhysicalRoot, stagePath);
+
+            if (stageOutcome == ArtifactCleanupOutcome.PreservedUnproven)
             {
-                _fileOps.DeleteFile(stagePath);
+                throw new InvalidDataException(
+                    $"A file occupies the migration staging path '{Path.GetFileName(stagePath)}' at '{context.TargetPhysicalRoot}', " +
+                    "but nothing proves this application created it. It was preserved and startup was aborted to protect data.");
             }
+
+            _fileOps.RetireOwnedArtifacts(context.TargetPhysicalRoot);
 
             // Verify no declared temps exist
             foreach (MigrationManifestArtifact artifact in manifest.Artifacts)

@@ -30,6 +30,7 @@ internal static class ManagedControlPathPolicy
         return EqualsName(p, ".app.lock") ||
                EqualsName(p, ".prompthelper-migration.json") ||
                EqualsName(p, ".prompthelper-library-mutation.json") ||
+               EqualsName(p, WindowsOwnedArtifactJournal.JournalFileName) ||
                EqualsName(p, "initializing.marker");
     }
 

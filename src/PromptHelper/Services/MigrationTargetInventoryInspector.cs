@@ -35,11 +35,21 @@ internal sealed record MigrationTargetInventory(
 /// individual file — is explicitly checked and rejected if it is a reparse point, so a
 /// substituted redirect can never be silently classified as ordinary managed content.</item>
 /// </list>
-/// A residual, not-fully-closed gap: an object that changes identity between the attribute
-/// probe and whatever a caller does with the classification afterward (a TOCTOU at the
-/// granularity of a single directory listing pass) is not detected here — that is the same
-/// class of race the write-bound CAS/lease primitives elsewhere in this codebase exist to
-/// narrow for the specific artifacts that get destructively acted on.
+/// CRUU15-008 closes the two gaps that remained:
+/// <list type="bullet">
+/// <item>Enumeration is bound to the directory <i>object</i>. Entries come from
+/// <see cref="WindowsDirectoryEnumeration.ListStrict"/>, which lists through a handle already
+/// proven to be a genuine non-reparse directory, instead of re-resolving the pathname on every
+/// <c>Directory.GetFiles</c>/<c>GetDirectories</c> call.</item>
+/// <item>An entry whose type changes between that listing and its own probe is rejected rather
+/// than reclassified: the attributes the directory object reported are cross-checked against
+/// the probe, so a file swapped for a directory, or either swapped for a reparse point, fails
+/// closed.</item>
+/// </list>
+/// The inventory is deliberately <b>advisory classification</b> and not destructive authority.
+/// Every operation that destroys something now carries its own creation-bound ownership proof
+/// (CRUU15-006/CRUU15-007), so a same-type content swap that this pass could not detect cannot
+/// authorize a deletion downstream either.
 /// </summary>
 internal static class MigrationTargetInventoryInspector
 {
@@ -174,8 +184,18 @@ internal static class MigrationTargetInventoryInspector
                 return;
             }
 
-            foreach (string file in Directory.GetFiles(dir))
+            IReadOnlyList<DirectoryEntry> entries =
+                WindowsDirectoryEnumeration.ListStrict(dir) ?? [];
+
+            foreach (DirectoryEntry entry in entries)
             {
+                if (entry.IsDirectory)
+                {
+                    continue;
+                }
+
+                string file = Path.Combine(dir, entry.Name);
+
                 StrictPathProbe fileProbe = strictPaths.Probe(file);
                 if (fileProbe.Kind == StrictPathKind.Missing)
                 {
@@ -189,6 +209,7 @@ internal static class MigrationTargetInventoryInspector
                 }
 
                 AssertNotReparse(fileProbe, file);
+                AssertProbeAgreesWithEnumeration(entry, fileProbe, file);
 
                 string normFile = PathIdentity.NormalizeForComparison(file);
                 string fileName = Path.GetFileName(file);
@@ -219,8 +240,15 @@ internal static class MigrationTargetInventoryInspector
                 }
             }
 
-            foreach (string subDir in Directory.GetDirectories(dir))
+            foreach (DirectoryEntry entry in entries)
             {
+                if (!entry.IsDirectory)
+                {
+                    continue;
+                }
+
+                string subDir = Path.Combine(dir, entry.Name);
+
                 StrictPathProbe subDirProbe = strictPaths.Probe(subDir);
                 if (subDirProbe.Kind == StrictPathKind.Missing)
                 {
@@ -232,6 +260,8 @@ internal static class MigrationTargetInventoryInspector
                 {
                     throw new InvalidDataException($"Expected a directory but found a file: '{subDir}'.");
                 }
+
+                AssertProbeAgreesWithEnumeration(entry, subDirProbe, subDir);
 
                 string normSubDir = PathIdentity.NormalizeForComparison(subDir);
 
@@ -265,6 +295,27 @@ internal static class MigrationTargetInventoryInspector
             attemptCreatedDirs.Where(DirectoryPresentStrict).ToList(),
             preExistingDirs.Where(DirectoryPresentStrict).ToList(),
             unknownEntries);
+    }
+
+    /// <summary>
+    /// Rejects an entry whose kind changed between the directory object's own listing and the
+    /// probe of that entry (CRUU15-008). Reclassifying it would let a swapped object inherit
+    /// the classification the original earned.
+    /// </summary>
+    private static void AssertProbeAgreesWithEnumeration(
+        DirectoryEntry entry,
+        StrictPathProbe probe,
+        string path)
+    {
+        bool probeIsDirectory = probe.Kind == StrictPathKind.Directory;
+        bool probeIsReparse = probe.Attributes.HasValue &&
+                              (probe.Attributes.Value & FileAttributes.ReparsePoint) != 0;
+
+        if (probeIsDirectory != entry.IsDirectory || probeIsReparse != entry.IsReparsePoint)
+        {
+            throw new InvalidDataException(
+                $"'{path}' changed between directory enumeration and inspection. Inspection aborted to protect data.");
+        }
     }
 
     private static void AssertNotReparse(StrictPathProbe probe, string path)

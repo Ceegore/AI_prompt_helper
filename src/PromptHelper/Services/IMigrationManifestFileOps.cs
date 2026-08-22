@@ -9,24 +9,20 @@ public interface IMigrationManifestFileOps
 {
     Stream CreateNew(string path);
     void FlushToDisk(Stream stream);
-    void MoveNoOverwriteWriteThrough(string source, string destination);
-    void ReplaceWriteThrough(string source, string destination);
+
+    /// <summary>
+    /// Creates an owned stage at <paramref name="path"/>. Fails if anything already occupies
+    /// that pathname — and a pre-existing object there is <b>preserved</b>, never adopted and
+    /// never deleted, because this invocation did not create it.
+    /// </summary>
+    IOwnedFileStage CreateOwnedStage(string path);
+
     bool FileExists(string path);
-    void DeleteFile(string path);
     byte[] ReadAllBytes(string path);
 }
 
 public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
 {
-    private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
-    private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool MoveFileExW(
-        string lpExistingFileName,
-        string lpNewFileName,
-        uint dwFlags);
-
     public Stream CreateNew(string path)
     {
         return new FileStream(
@@ -46,19 +42,20 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
         fs.Flush(flushToDisk: true);
     }
 
-    public void MoveNoOverwriteWriteThrough(string source, string destination)
-    {
-        if (!MoveFileExW(source, destination, MOVEFILE_WRITE_THROUGH))
-        {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-        }
-    }
+    private readonly IOwnedArtifactJournal _ownedArtifacts = new WindowsOwnedArtifactJournal();
 
-    public void ReplaceWriteThrough(string source, string destination)
+    public IOwnedFileStage CreateOwnedStage(string path)
     {
-        if (!MoveFileExW(source, destination, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        var stage = new OwnedManifestStage(WindowsOwnedDurableStage.CreateNew(path));
+        try
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            DefaultMigrationFileOps.RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);
+            return stage;
+        }
+        catch
+        {
+            stage.Dispose();
+            throw;
         }
     }
 
@@ -66,18 +63,21 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
 
     public bool FileExists(string path) => _strictPathAuthority.Probe(path).Kind == StrictPathKind.File;
 
-    public void DeleteFile(string path)
-    {
-        StrictPathProbe probe = _strictPathAuthority.Probe(path);
-        if (probe.Kind == StrictPathKind.File)
-        {
-            File.Delete(path);
-        }
-        else if (probe.Kind == StrictPathKind.Directory)
-        {
-            throw new InvalidOperationException($"Expected a file but found a directory at '{path}'.");
-        }
-    }
-
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
+
+    private sealed class OwnedManifestStage : IOwnedFileStage
+    {
+        private readonly WindowsOwnedDurableStage _stage;
+
+        public OwnedManifestStage(WindowsOwnedDurableStage stage) => _stage = stage;
+
+        public string IdentityToken => _stage.Identity.ToToken();
+
+        public void Write(ReadOnlySpan<byte> bytes) => _stage.Write(bytes);
+        public void FlushDurable() => _stage.FlushDurable();
+        public void PromoteReplaceExact(string targetPath) => _stage.PromoteReplaceExact(targetPath);
+        public void PromoteNoOverwriteExact(string targetPath) => _stage.PromoteNoOverwriteExact(targetPath);
+        public void DeleteExact() => _stage.DeleteExact();
+        public void Dispose() => _stage.Dispose();
+    }
 }

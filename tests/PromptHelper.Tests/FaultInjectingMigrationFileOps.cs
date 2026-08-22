@@ -18,12 +18,13 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
     public Func<string, Stream>? OnCreateNewFile { get; set; }
     public Func<string, Stream>? OnOpenRead { get; set; }
     public Action<Stream>? OnFlushToDisk { get; set; }
-    public Action<string, string>? OnMoveNoOverwriteWriteThrough { get; set; }
-    public Action<string, string>? OnMoveNoOverwrite
-    {
-        get => OnMoveNoOverwriteWriteThrough;
-        set => OnMoveNoOverwriteWriteThrough = value;
-    }
+    /// <summary>
+    /// Invoked instead of the handle-bound promotion of a staged payload file. The third
+    /// argument performs the real promotion, so a test can fail before it, run it and then
+    /// interfere, or skip it entirely. The staging object itself is never addressable by
+    /// pathname any more, which is the whole point of the owned-stage design (CRUU15-002).
+    /// </summary>
+    public Action<string, string, Action>? OnPromoteStage { get; set; }
     public Func<string, IEnumerable<string>>? OnEnumeratePromptFiles { get; set; }
     public Func<string, bool>? OnFileExists { get; set; }
     public Func<string, bool>? OnDirectoryExists { get; set; }
@@ -73,16 +74,52 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         _inner.FlushToDisk(stream);
     }
 
-    public void MoveNoOverwriteWriteThrough(string source, string destination)
+    public IOwnedFileStage CreateOwnedStage(string path)
     {
-        if (OnMoveNoOverwriteWriteThrough != null)
+        IOwnedFileStage inner = _inner.CreateOwnedStage(path);
+        var stage = new FakeOwnedFileStage(inner);
+
+        if (OnFlushToDisk != null)
         {
-            OnMoveNoOverwriteWriteThrough(source, destination);
+            Action<Stream> flushHook = OnFlushToDisk;
+            stage.OnFlushDurable = () => flushHook(Stream.Null);
+        }
+
+        if (OnPromoteStage != null)
+        {
+            Action<string, string, Action> hook = OnPromoteStage;
+            stage.OnPromoteNoOverwriteExact =
+                target => hook(path, target, () => inner.PromoteNoOverwriteExact(target));
+            stage.OnPromoteReplaceExact =
+                target => hook(path, target, () => inner.PromoteReplaceExact(target));
+        }
+
+        return stage;
+    }
+
+    public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
+    {
+        if (OnDeleteFile != null)
+        {
+            OnDeleteFile(path);
+            return ArtifactCleanupOutcome.DeletedProvenOwned;
+        }
+
+        return _inner.DeleteOwnedFileIfProven(physicalRoot, path);
+    }
+
+    public void DeleteDirectoryExact(string physicalRoot, string path)
+    {
+        if (OnDeleteDirectory != null)
+        {
+            OnDeleteDirectory(path);
             return;
         }
 
-        _inner.MoveNoOverwriteWriteThrough(source, destination);
+        _inner.DeleteDirectoryExact(physicalRoot, path);
     }
+
+    public void RetireOwnedArtifacts(string physicalRoot) => _inner.RetireOwnedArtifacts(physicalRoot);
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {

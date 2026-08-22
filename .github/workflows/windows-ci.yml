@@ -31,9 +31,26 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      # CRUU15-009: every audited finding must have a named behavioral regression test, and the
+      # generated sentinel list must still match that coverage authority.
+      - name: Verify finding coverage authority
+        shell: pwsh
+        run: ./tools/VerifyFindingCoverage.ps1
+
       - name: Verify repository release assets
         shell: pwsh
         run: ./tools/VerifyReleaseAssets.ps1
+
+      # CRUU15-011: prove the committed icon is what the pinned renderer produces from the
+      # approved vector source, on every push rather than only at release time.
+      - name: Verify icon is reproducible from the approved vector source
+        shell: pwsh
+        run: ./tools/VerifyIconGeneration.ps1
 
       - name: Verify strict release assets
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate }}
@@ -108,6 +125,21 @@ jobs:
             --no-build `
             --filter "TestCategory=WpfIntegration" `
             --logger "trx;LogFileName=cruu9-wpf.trx"
+
+      # CRUU15-005 requires creating file symlinks; its tests fail rather than opt out, so the
+      # runner has to be able to create them.
+      - name: Enable symlink creation
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWord -Force | Out-Null
+
+          $probeDir = Join-Path $env:RUNNER_TEMP 'symlink-probe'
+          New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+          Set-Content -Path (Join-Path $probeDir 'target.txt') -Value 'probe' -Encoding utf8
+          cmd /c mklink "$probeDir\link.txt" "$probeDir\target.txt"
+          if ($LASTEXITCODE -ne 0) { throw 'This runner cannot create file symlinks; CRUU15-005 cannot be verified here.' }
 
       - name: Test Windows Filesystem Integration Category
         shell: pwsh

@@ -18,6 +18,23 @@ namespace PromptHelper.Services;
 /// delete (<c>FileDispositionInfo</c>), so both the "commit" and the "abort" path stay bound
 /// to the exact object this process created.
 /// </summary>
+/// <remarks>
+/// <para><b>Durability contract (CRUU15-012).</b> The staging handle is opened with
+/// <c>FILE_FLAG_WRITE_THROUGH</c>. Microsoft documents that this flag makes NTFS write
+/// through to disk any metadata changes that result from processing the request — which
+/// covers the <c>FileRenameInfo</c> rename issued on this same handle, i.e. exactly the
+/// metadata change that publishes the staged content under its final name. The previous
+/// path-based implementation obtained the same guarantee through
+/// <c>MOVEFILE_WRITE_THROUGH</c>; when promotion moved to a handle-bound rename, that
+/// guarantee had to move with it, because <see cref="FlushDurable"/> happens *before* the
+/// rename and therefore cannot cover the rename's own metadata. File *data* is still flushed
+/// explicitly with <see cref="FlushDurable"/> before promotion, so both halves of "durable"
+/// — the bytes and the name that publishes them — have an explicit barrier.</para>
+/// <para>References: CreateFileW / <c>FILE_FLAG_WRITE_THROUGH</c>
+/// (learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-createfilew) and
+/// <c>FILE_RENAME_INFO</c>
+/// (learn.microsoft.com/windows/win32/api/winbase/ns-winbase-file_rename_info).</para>
+/// </remarks>
 internal sealed class WindowsOwnedDurableStage : IDisposable
 {
     private const uint GENERIC_READ = 0x80000000;
@@ -26,6 +43,7 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
     private const uint FILE_SHARE_NONE = 0x00000000;
     private const uint CREATE_NEW = 1;
     private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+    private const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
     private const int FileRenameInfoClass = 3;
     private const int FileDispositionInfoClass = 4;
     private const int FileAttributeTagInfoClass = 9;
@@ -97,7 +115,9 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
 
     /// <summary>
     /// Creates a brand-new staging file (fails if one already exists at this path) and
-    /// retains its handle.
+    /// retains its handle. Opened <c>FILE_FLAG_WRITE_THROUGH</c> so the handle-bound rename
+    /// that later promotes it carries the documented rename-metadata write-through guarantee
+    /// (see the type remarks, CRUU15-012).
     /// </summary>
     public static WindowsOwnedDurableStage CreateNew(string stagingPath)
     {
@@ -109,7 +129,7 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
             FILE_SHARE_NONE,
             IntPtr.Zero,
             CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
             IntPtr.Zero);
 
         if (handle.IsInvalid)
@@ -123,6 +143,41 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
 
         return new WindowsOwnedDurableStage(stagingPath, handle);
     }
+
+    /// <summary>
+    /// Creates an owned stage and immediately proves, from the retained handle, that the new
+    /// object is a genuine non-reparse file physically inside <paramref name="physicalRoot"/>.
+    /// Production promotion paths use this rather than <see cref="CreateNew"/> so that the
+    /// containment proof is systematic instead of optional (CRUU15-012).
+    /// </summary>
+    public static WindowsOwnedDurableStage CreateNewUnderRoot(string stagingPath, string physicalRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
+
+        WindowsOwnedDurableStage stage = CreateNew(stagingPath);
+        try
+        {
+            stage.AssertNonReparseAndUnderRoot(physicalRoot);
+            return stage;
+        }
+        catch
+        {
+            try
+            {
+                stage.DeleteExact();
+            }
+            catch
+            {
+                // Reported through the primary failure below.
+            }
+
+            stage.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>The exact on-disk identity of the staged object, for durable provenance records.</summary>
+    public WindowsFileIdentity Identity => WindowsFileIdentity.FromHandle(_handle);
 
     public void Write(ReadOnlySpan<byte> bytes)
     {

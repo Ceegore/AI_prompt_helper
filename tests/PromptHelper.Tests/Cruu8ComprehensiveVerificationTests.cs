@@ -124,6 +124,10 @@ public sealed class Cruu8ComprehensiveVerificationTests
             ]
         };
 
+        // The interrupted attempt would have claimed the temp when it created it; without
+        // that record recovery must preserve the file rather than destroy it (CRUU15-006).
+        OwnedArtifactTestSupport.ClaimOwnership(target.Root, tempFullPath);
+
         var repo = new MigrationManifestRepository();
         repo.WriteDurable(Path.Combine(target.Root, ".prompthelper-migration.json"), manifest);
 

@@ -585,9 +585,21 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                     snapshot,
                     runtime.BootstrapPhysicalRoot);
 
-                // Update manifest to ReadyToCommit via write-through staging
+                // Update manifest to ReadyToCommit via an owned, handle-bound staging promotion
                 manifest.Phase = MigrationManifestPhase.ReadyToCommit;
                 _manifestRepo.WriteReadyManifestDurable(markerPath, manifest);
+
+                // CRUU15-001: the ready gate above ran before this phase promotion, so the
+                // marker that actually landed has to be re-read and proven identical before
+                // the settings commit — otherwise the point of no return would be crossed on
+                // the strength of a marker nothing revalidated after it was persisted.
+                _manifestRepo.AssertPersistedMarkerMatches(markerPath, manifest);
+
+                // The Ready manifest's own staging file reached a terminal state during that
+                // write, so settle its ownership claim now. Leaving the ownership journal in
+                // place would make the target non-empty for rollback and would violate the
+                // "no in-flight control state" invariant the committed-startup path asserts.
+                _fileOps.RetireOwnedArtifacts(bound.PhysicalRoot);
 
                 // 8. PHYSICAL REVALIDATION #2 immediately before settings commit
                 AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);

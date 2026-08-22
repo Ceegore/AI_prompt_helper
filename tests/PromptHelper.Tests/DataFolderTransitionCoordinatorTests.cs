@@ -219,9 +219,9 @@ public sealed class DataFolderTransitionCoordinatorTests
 
         var ops = new FaultInjectingMigrationFileOps
         {
-            OnMoveNoOverwrite = (src, dst) =>
+            OnPromoteStage = (src, dst, promote) =>
             {
-                File.Move(src, dst, overwrite: false);
+                promote();
                 if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                 {
                     // Mutate settings file mid-migration
@@ -534,17 +534,24 @@ public sealed class DataFolderTransitionCoordinatorTests
         FileStream? lockStream = null;
         try
         {
-            var ops = new FaultInjectingMigrationFileOps
+            // Lock the promoted library.json during post-copy verification, once the owned
+            // stage handle that produced it has been released, so that rollback's
+            // verified deletion of that final fails and is reported. Locking inside the
+            // promotion hook is not possible any more: the stage owns the object exclusively
+            // right through the rename (CRUU15-002).
+            var ops = new FaultInjectingMigrationFileOps();
+            ops.OnReadAllBytes = path =>
             {
-                OnMoveNoOverwrite = (src, dst) =>
+                byte[] bytes = File.ReadAllBytes(path);
+
+                if (lockStream is null &&
+                    path.EndsWith("library.json", StringComparison.OrdinalIgnoreCase) &&
+                    path.StartsWith(target, StringComparison.OrdinalIgnoreCase))
                 {
-                    File.Move(src, dst, overwrite: false);
-                    if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Lock destination file so rollback deletion fails
-                        lockStream = new FileStream(dst, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-                    }
+                    lockStream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
                 }
+
+                return bytes;
             };
 
             // Fault writer to trigger rollback on settings save
@@ -870,7 +877,7 @@ public sealed class DataFolderTransitionCoordinatorTests
         {
             var ops = new FaultInjectingMigrationFileOps
             {
-                OnMoveNoOverwrite = (src, dst) =>
+                OnPromoteStage = (src, dst, promote) =>
                 {
                     // Lock .app.lock so deletion during reservation release fails
                     string targetLock = Path.Combine(target, ".app.lock");

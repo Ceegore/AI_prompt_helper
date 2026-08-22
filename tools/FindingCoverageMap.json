@@ -1,0 +1,848 @@
+{
+  "$schema": "https://prompthelper.local/schemas/finding-coverage-map/v1",
+  "schemaVersion": 1,
+  "description": "Canonical finding -> behavioral regression test map. This file is the coverage authority; tools/RequiredRegressionTests.psd1 is generated from it. Completeness is proved against an authority outside this file: the finding IDs named by the checked-in audit reports themselves (see gatedReports). Adding a finding to a report without adding it here fails the gate, and deleting it from here does not make it stop being required.",
+  "gatedReports": {
+    "CRUU12": "cruu12_v2.md",
+    "CRUU13": "cruu13.md",
+    "CRUU14": "cruu14.md",
+    "CRUU15": "cruu15.md"
+  },
+  "findings": {
+    "CRUU10-001": [
+      "CRUU10_001_Strict_path_authority_probes_file_and_directory_and_missing"
+    ],
+    "CRUU10-002": [
+      "CRUU10_002_Primary_missing_body_does_not_overwrite_complete_backup_and_recovers_with_diagnostics"
+    ],
+    "CRUU10-003": [
+      "CRUU10_003_Primary_missing_and_backup_missing_body_rejects_recovery"
+    ],
+    "CRUU10-006": [
+      "CRUU10_006_Atomic_text_writer_rejects_invalid_utf8"
+    ],
+    "CRUU10-007": [
+      "CRUU10_007_Session_lease_prevents_node_swapping"
+    ],
+    "CRUU10-008": [
+      "CRUU10_008_Migration_recovery_deletes_attempt_created_empty_prompts_and_recovery_dirs",
+      "CRUU10_008_Migration_recovery_preserves_pre_existing_empty_prompts_and_recovery_dirs"
+    ],
+    "CRUU10-009": [
+      "CRUU10_009_Future_schema_throws_unsupported_schema_exception",
+      "CRUU10_009_Library_duplicate_category_property_rejected",
+      "CRUU10_009_Library_unknown_category_property_rejected",
+      "CRUU10_009_Settings_duplicate_property_rejected",
+      "CRUU10_009_Settings_unknown_property_rejected"
+    ],
+    "CRUU10-010": [
+      "CRUU10_010_Prompt_library_service_get_prompts_captures_io_fault_as_unavailable"
+    ],
+    "CRUU10-011": [
+      "CRUU10_011_Library_validator_validates_160_text_elements_boundary"
+    ],
+    "CRUU10-014": [
+      "CRUU10_014_Startup_decision_matrix_unreadable_primary_throws_without_fallback"
+    ],
+    "CRUU10-015": [
+      "CRUU10_015_Case_sensitivity_inspector_boolean_api_is_removed"
+    ],
+    "CRUU11-001": [
+      "CRUU11_001_Buffer_resize_retries_when_API_returns_required_size",
+      "CRUU11_001_Prefix_collision_C_Data_vs_C_DataOutside_is_rejected",
+      "CRUU11_001_Reparse_artifact_is_rejected_before_deletion",
+      "CRUU11_001_Strict_descendant_file_is_accepted",
+      "CRUU11_001_UNC_final_path_prefix_normalizes_correctly"
+    ],
+    "CRUU11-002": [
+      "CRUU11_002_Create_crash_after_Prepared_recovers_old_state",
+      "CRUU11_002_Create_crash_after_body_before_metadata_removes_exact_orphan",
+      "CRUU11_002_Create_crash_after_metadata_before_journal_retire_finalizes",
+      "CRUU11_002_Delete_crash_after_metadata_before_body_delete_is_recoverable",
+      "CRUU11_002_Duplicate_uses_Create_transaction_state_machine",
+      "CRUU11_002_Edit_crash_after_metadata_keeps_new_body",
+      "CRUU11_002_Edit_crash_after_new_body_before_metadata_restores_old_body",
+      "CRUU11_002_Edit_crash_after_recovery_copy_before_body_is_safe",
+      "CRUU11_002_Unexpected_body_hash_preserves_journal_and_stops",
+      "CRUU11_002_Unexpected_library_hash_preserves_journal_and_stops"
+    ],
+    "CRUU11-003": [
+      "CRUU11_003_Active_mutation_journal_preserves_body",
+      "CRUU11_003_Backup_reference_protects_body",
+      "CRUU11_003_Future_backup_preserves_orphans",
+      "CRUU11_003_Unreadable_backup_preserves_orphans",
+      "CRUU11_003_Unreferenced_GUID_body_is_removed"
+    ],
+    "CRUU11-004": [
+      "CRUU11_004_Prompts_directory_rename_fails_while_session_lease_held",
+      "CRUU11_004_Recovery_directory_rename_fails_while_session_lease_held"
+    ],
+    "CRUU11-005": [
+      "CRUU11_005_Access_denied_ancestor_is_not_skipped"
+    ],
+    "CRUU11-006": [
+      "CRUU11_006_Resolver_uses_the_handle_returned_by_strict_opener"
+    ],
+    "CRUU11-007": [
+      "CRUU11_007_Prompts_file_is_rejected"
+    ],
+    "CRUU11-008": [
+      "CRUU11_008_Case_sensitive_prompts_is_rejected"
+    ],
+    "CRUU11-009": [
+      "CRUU11_009_Retry_same_root_changed_payload_fails_closed",
+      "CRUU11_009_Source_active_body_changes_after_copy_aborts_Ready"
+    ],
+    "CRUU11-010": [
+      "CRUU11_010_Ready_gate_rejects_existing_stage",
+      "CRUU11_010_Ready_gate_rejects_new_nested_foreign_file"
+    ],
+    "CRUU11-011": [
+      "CRUU11_011_Directory_cleanup_failure_preserves_marker"
+    ],
+    "CRUU11-012": [
+      "CRUU11_012_New_manifest_baseline_captured_after_old_attempt_cleanup"
+    ],
+    "CRUU11-013": [
+      "CRUU11_013_Preexisting_planned_probe_collision_is_never_deleted"
+    ],
+    "CRUU11-016": [
+      "CRUU11_016_Settings_primary_recovery_uses_durable_settings_writer"
+    ],
+    "CRUU11-017": [
+      "CRUU11_017_Parser_rejects_foreign_target_basename"
+    ],
+    "CRUU11-018": [
+      "CRUU11_018_Invalid_UTF8_library_is_rejected",
+      "CRUU11_018_Invalid_UTF8_prompt_body_is_not_Healthy",
+      "CRUU11_018_Invalid_UTF8_settings_is_rejected"
+    ],
+    "CRUU11-019": [
+      "CRUU11_019_CreateNewDurable_never_replaces_existing_target"
+    ],
+    "CRUU11-021": [
+      "CRUU11_021_Foreign_body_created_after_GUID_check_is_not_overwritten"
+    ],
+    "CRUU11-022": [
+      "CRUU11_022_Duplicate_programmer_exception_propagates"
+    ],
+    "CRUU11-023": [
+      "CRUU11_023_Backup_sync_API_requires_HealthyLibraryPackage"
+    ],
+    "CRUU11-025": [
+      "CRUU11_025_Missing_required_test_fails_evidence_script",
+      "CRUU11_025_Substring_test_name_does_not_satisfy_required_exact_name"
+    ],
+    "CRUU12-001": [
+      "CRUU12_001_Create_primary_committed_MetadataDurable_write_fails_does_not_delete_body",
+      "CRUU12_001_Edit_primary_committed_MetadataDurable_write_fails_does_not_restore_old_body"
+    ],
+    "CRUU12-002": [
+      "CRUU12_002_Noncanonical_valid_primary_body_create_crash_recovers_old_state"
+    ],
+    "CRUU12-003": [
+      "CRUU12_003_Body_only_edit_crash_at_MetadataDurable_keeps_new_body"
+    ],
+    "CRUU12-004": [
+      "CRUU12_004_Advance_write_failure_does_not_mutate_RAM_phase"
+    ],
+    "CRUU12-005": [
+      "CRUU12_005_Mutation_journal_grammar_rejects_fields_that_do_not_belong_to_its_kind"
+    ],
+    "CRUU12-006": [
+      "CRUU12_006_Second_instance_settings_load_cannot_delete_live_data_temp"
+    ],
+    "CRUU12-007": [
+      "CRUU12_007_Temp_reconciliation_covers_root_prompts_and_recovery_locations"
+    ],
+    "CRUU12-008": [
+      "CRUU12_008_Primary_access_denied_token_is_not_Missing"
+    ],
+    "CRUU12-009": [
+      "CRUU12_009_Settings_schema_below_current_is_not_silently_accepted_as_valid"
+    ],
+    "CRUU12-010": [
+      "CRUU12_010_Loaded_and_saved_data_root_path_goes_through_normalization"
+    ],
+    "CRUU12-011": [
+      "CRUU12_011_Retry_prompts_swap_attempt_fails_while_target_operation_lease_held"
+    ],
+    "CRUU12-012": [
+      "CRUU12_012_Concurrent_directory_creator_foreign_content_is_preserved"
+    ],
+    "CRUU12-013": [
+      "CRUU12_013_Move_success_before_bookkeeping_failure_final_is_recoverable"
+    ],
+    "CRUU12-014": [
+      "CRUU12_014_Declared_payload_temp_replaced_with_foreign_bytes_is_preserved"
+    ],
+    "CRUU12-015": [
+      "CRUU12_015_V4_probe_arbitrary_suffix_rejected"
+    ],
+    "CRUU12-016": [
+      "CRUU12_016_V3_same_library_json_changed_prompt_body_rejects_retry"
+    ],
+    "CRUU12-017": [
+      "CRUU12_017_Target_baseline_records_absence_before_reservation_creates_the_root"
+    ],
+    "CRUU12-018": [
+      "CRUU12_018_Custom_to_empty_default_bootstrap_with_settings_controls_succeeds"
+    ],
+    "CRUU12-019": [
+      "CRUU12_019_Inventory_fails_closed_on_an_entry_it_cannot_classify"
+    ],
+    "CRUU12-020": [
+      "CRUU12_020_Migration_and_mutation_journals_conflict_without_mutation"
+    ],
+    "CRUU12-021": [
+      "CRUU12_021_UTF16_BOM_source_library_rejected"
+    ],
+    "CRUU12-022": [
+      "CRUU12_022_Strict_directory_opener_rejects_a_handle_that_is_not_a_directory"
+    ],
+    "CRUU12-023": [
+      "CRUU12_023_Session_lease_validates_final_handle_identity"
+    ],
+    "CRUU12-024": [
+      "CRUU12_024_Target_prompt_replace_fails_while_commit_lease_held"
+    ],
+    "CRUU12-025": [
+      "CRUU12_025_Rollback_stage_residue_preserves_marker"
+    ],
+    "CRUU12-026": [
+      "CRUU12_026_Foreign_capability_lookalike_is_never_deleted"
+    ],
+    "CRUU12-027": [
+      "CRUU12_027_Probe_current_replaced_after_creation_is_preserved"
+    ],
+    "CRUU12-028": [
+      "CRUU12_028_Primary_and_backup_commit_use_same_CanonicalLibraryPackage_bytes"
+    ],
+    "CRUU12-029": [
+      "CRUU12_029_No_public_constructor_accepts_IAtomicTextWriter_for_persistence"
+    ],
+    "CRUU12-030": [
+      "CRUU12_030_Reconciliation_failure_is_reported_rather_than_swallowed"
+    ],
+    "CRUU12-031": [
+      "CRUU12_031_Crash_after_metadata_before_journal_retire_finalizes"
+    ],
+    "CRUU12-032": [
+      "CRUU12_032_Evidence_script_rejects_substring_only_TRX"
+    ],
+    "CRUU12-033": [
+      "CRUU12_033_Approved_SVG_binds_to_the_committed_ICO_through_the_approval_manifest"
+    ],
+    "CRUU12-034": [
+      "CRUU12_034_Approved_vector_logo_is_present_in_the_repository"
+    ],
+    "CRUU13-001": [
+      "CRUU13_001_Committed_mutation_exception_is_an_IOException_and_must_be_caught_first",
+      "CRUU13_001_Fatal_mutation_exception_requests_shutdown_not_swallowed_as_save_error"
+    ],
+    "CRUU13-002": [
+      "CRUU13_002_Body_only_edit_postcommit_failure_keeps_new_body_not_rolled_back",
+      "CRUU13_002_Body_only_edit_precommit_failure_still_restores_old_body"
+    ],
+    "CRUU13-003": [
+      "CRUU13_003_ExistingTargetCommitLease_denies_concurrent_write_to_leased_metadata",
+      "CRUU13_003_ExistingTargetCommitLease_rejects_content_that_changed_since_inspection"
+    ],
+    "CRUU13-004": [
+      "CRUU13_004_Foreign_content_at_declared_probe_control_path_is_not_deleted"
+    ],
+    "CRUU13-005": [
+      "CRUU13_005_Target_operation_lease_covers_children_created_after_acquisition"
+    ],
+    "CRUU13-006": [
+      "CRUU13_006_V3_retry_rejects_when_prompt_body_changed_but_library_hash_unchanged"
+    ],
+    "CRUU13-007": [
+      "CRUU13_007_Exact_bootstrap_root_settings_controls_are_not_reported_as_foreign"
+    ],
+    "CRUU13-008": [
+      "CRUU13_008_Inventory_enumeration_is_bound_to_the_directory_object"
+    ],
+    "CRUU13-009": [
+      "CRUU13_009_UTF16_encoded_target_metadata_is_not_silently_accepted"
+    ],
+    "CRUU13-010": [
+      "CRUU13_010_Rollback_keeps_the_marker_while_declared_residue_remains"
+    ],
+    "CRUU13-011": [
+      "CRUU13_011_Stale_foreign_probe_residue_is_not_wildcard_deleted"
+    ],
+    "CRUU13-012": [
+      "CRUU13_012_SynchronizeBackup_has_no_public_LibraryDocument_overload"
+    ],
+    "CRUU13-013": [
+      "CRUU13_013_Startup_maintenance_warnings_are_aggregated_for_display"
+    ],
+    "CRUU13-014": [
+      "CRUU13_014_Initialization_is_a_durable_phase_journal"
+    ],
+    "CRUU13-015": [
+      "CRUU13_015_Required_sentinels_execute_their_named_production_path"
+    ],
+    "CRUU13-016": [
+      "CRUU13_016_All_executable_icon_groups_are_compared_not_just_the_first"
+    ],
+    "CRUU13-017": [
+      "CRUU13_017_Approved_logo_and_generated_icon_are_both_release_blocking_assets"
+    ],
+    "CRUU13-018": [
+      "CRUU13_018_Journal_missing_revision_is_rejected_not_defaulted_to_zero"
+    ],
+    "CRUU13-019": [
+      "CRUU13_019_CommitIfPrimaryUnchanged_rejects_stale_precondition",
+      "CRUU13_019_Edit_rejects_body_changed_externally_between_read_and_replace"
+    ],
+    "CRUU14-001": [
+      "CRUU14_001_OwnedDurableStage_DeleteExact_removes_the_exact_staged_object",
+      "CRUU14_001_OwnedDurableStage_promotes_exact_written_content",
+      "CRUU14_001_ReplaceDurable_and_CreateNewDurable_round_trip_via_handle_bound_promotion"
+    ],
+    "CRUU14-002": [
+      "CRUU14_002_CommitIfPrimaryUnchanged_uses_native_handle_check_not_just_cached_bytes",
+      "CRUU14_002_CreateCategory_external_primary_change_is_rejected_not_overwritten",
+      "CRUU14_002_ExpectedFileCasReplacer_accepts_matching_content",
+      "CRUU14_002_ExpectedFileCasReplacer_rejects_content_changed_externally",
+      "CRUU14_002_MovePrompt_external_primary_change_is_rejected_not_overwritten"
+    ],
+    "CRUU14-003": [
+      "CRUU14_003_SaveIfUnchanged_is_atomic_against_a_non_cooperating_writer"
+    ],
+    "CRUU14-004": [
+      "CRUU14_004_Identity_only_checks_do_not_authorize_deletion_without_ownership"
+    ],
+    "CRUU14-005": [
+      "CRUU14_005_MigrationManifest_DeleteStrict_rejects_wrong_attempt_or_phase",
+      "CRUU14_005_MutationJournal_DeleteStrict_rejects_when_content_changed_since_capture"
+    ],
+    "CRUU14-006": [
+      "CRUU14_006_Inventory_rejects_a_reparse_point_instead_of_classifying_it_as_content"
+    ],
+    "CRUU14-007": [
+      "CRUU14_007_Existing_target_UTF16_prompt_body_is_rejected"
+    ],
+    "CRUU14-008": [
+      "CRUU14_008_ExistingTargetCommitLease_rejects_symlinked_metadata_file"
+    ],
+    "CRUU14-009": [
+      "CRUU14_009_SynchronizeBackup_CanonicalLibraryPackage_overload_is_not_public"
+    ],
+    "CRUU14-010": [
+      "CRUU14_010_Recognizable_filename_alone_never_authorizes_destruction"
+    ],
+    "CRUU14-011": [
+      "CRUU14_011_Required_manifest_contains_all_CRUU12_CRUU13_CRUU14_sentinels"
+    ],
+    "CRUU14-012": [
+      "CRUU14_012_Approved_SVG_hash_matches_manifest",
+      "CRUU14_012_Canonical_generator_renders_each_size_from_vector_source",
+      "CRUU14_012_Checked_in_ICO_matches_approved_normalized_RGBA_hashes",
+      "CRUU14_012_Each_native_frame_matches_approved_normalized_RGBA_hash"
+    ],
+    "CRUU15-001": [
+      "CRUU15_001_Failed_ready_promotion_preserves_foreign_stage_and_copying_marker",
+      "CRUU15_001_Manifest_stage_replacement_after_flush_before_promotion_is_never_promoted",
+      "CRUU15_001_Preexisting_manifest_stage_CreateNew_failure_never_deletes_foreign_file",
+      "CRUU15_001_Ready_manifest_promotion_uses_owned_handle_not_path_MoveFileEx",
+      "CRUU15_001_Ready_marker_bytes_are_revalidated_after_phase_promotion_before_settings_commit"
+    ],
+    "CRUU15-002": [
+      "CRUU15_002_Migration_payload_foreign_same_bytes_does_not_become_attempt_owned_by_path",
+      "CRUU15_002_Migration_payload_promotion_is_same_handle_from_create_through_final_name",
+      "CRUU15_002_Migration_payload_stage_replacement_after_flush_cannot_be_promoted"
+    ],
+    "CRUU15-003": [
+      "CRUU15_003_Body_only_edit_primary_change_after_last_check_never_gets_overwritten",
+      "CRUU15_003_Category_create_change_at_post_CAS_prewrite_barrier_aborts",
+      "CRUU15_003_Category_delete_change_at_post_CAS_prewrite_barrier_aborts",
+      "CRUU15_003_Category_rename_change_at_post_CAS_prewrite_barrier_aborts",
+      "CRUU15_003_Edit_body_change_at_post_CAS_prewrite_barrier_aborts",
+      "CRUU15_003_Move_prompt_change_at_post_CAS_prewrite_barrier_aborts",
+      "CRUU15_003_Primary_changes_after_CAS_hash_before_atomic_replace_is_preserved"
+    ],
+    "CRUU15-004": [
+      "CRUU15_004_Data_folder_settings_point_of_no_return_has_atomic_expected_state",
+      "CRUU15_004_Library_backup_future_schema_appearing_after_state_read_is_preserved",
+      "CRUU15_004_Settings_backup_expected_missing_future_schema_create_is_preserved",
+      "CRUU15_004_Settings_existing_change_at_post_verify_prewrite_barrier_is_preserved",
+      "CRUU15_004_Settings_primary_expected_missing_foreign_create_before_write_is_preserved"
+    ],
+    "CRUU15-005": [
+      "CRUU15_005_Initialization_journal_file_symlink_is_never_followed_or_deleted",
+      "CRUU15_005_Journal_retirement_final_handle_path_must_be_under_expected_root",
+      "CRUU15_005_Migration_marker_file_symlink_is_never_followed_by_retirement",
+      "CRUU15_005_Mutation_journal_file_symlink_is_never_followed_or_deleted"
+    ],
+    "CRUU15-006": [
+      "CRUU15_006_Attempt_created_directory_replacement_is_not_deleted_by_path",
+      "CRUU15_006_Capability_probe_directory_swapped_after_empty_check_is_not_deleted",
+      "CRUU15_006_FinalizeCommittedStartup_never_raw_deletes_unproven_stage",
+      "CRUU15_006_Recovery_manifest_stage_replaced_by_foreign_regular_file_is_preserved",
+      "CRUU15_006_Recovery_payload_temp_replaced_by_foreign_regular_file_is_preserved"
+    ],
+    "CRUU15-007": [
+      "CRUU15_007_Current_format_prompt_temp_without_provenance_is_preserved",
+      "CRUU15_007_Current_format_recovery_temp_without_provenance_is_preserved",
+      "CRUU15_007_Current_format_settings_temp_without_provenance_is_preserved",
+      "CRUU15_007_Recorded_owned_temp_is_cleaned_using_recorded_identity"
+    ],
+    "CRUU15-008": [
+      "CRUU15_008_Inventory_directory_swap_between_classification_and_cleanup_cannot_author_delete",
+      "CRUU15_008_Inventory_file_swap_between_enumeration_and_probe_fails_closed",
+      "CRUU15_008_Unreadable_entry_is_never_reclassified_as_absent"
+    ],
+    "CRUU15-009": [
+      "CRUU15_009_Canonical_finding_coverage_map_contains_every_CRUU12_through_CRUU15_required_ID",
+      "CRUU15_009_Failed_required_TRX_fixture_is_rejected_by_executing_VerifyTestEvidence",
+      "CRUU15_009_Inconclusive_required_TRX_fixture_is_rejected",
+      "CRUU15_009_Missing_required_TRX_fixture_is_rejected_by_executing_VerifyTestEvidence",
+      "CRUU15_009_No_required_sentinel_opts_out_with_Inconclusive",
+      "CRUU15_009_Removing_required_ID_from_manifest_fails_coverage_gate",
+      "CRUU15_009_Substring_only_TRX_fixture_is_rejected_by_executing_VerifyTestEvidence"
+    ],
+    "CRUU15-010": [
+      "CRUU15_010_Process_runner_hung_child_is_killed_at_timeout",
+      "CRUU15_010_Process_runner_hung_child_with_open_pipes_still_returns",
+      "CRUU15_010_Process_runner_kills_descendant_process_tree",
+      "CRUU15_010_Process_runner_large_stdout_and_stderr_does_not_deadlock"
+    ],
+    "CRUU15-011": [
+      "CRUU15_011_All_EXE_icon_groups_have_no_unapproved_required_frame_content",
+      "CRUU15_011_Deleting_required_ICO_fails_required_icon_test",
+      "CRUU15_011_Fresh_checkout_can_run_pinned_canonical_icon_generator",
+      "CRUU15_011_Generated_native_frames_match_approved_RGBA_hashes",
+      "CRUU15_011_Release_tag_path_requires_strict_icon_verification"
+    ],
+    "CRUU15-012": [
+      "CRUU15_012_Durable_promotion_uses_documented_rename_metadata_write_through_contract",
+      "CRUU15_012_Durable_stage_asserts_physical_root_before_promotion",
+      "CRUU15_012_ReplaceDurable_does_not_report_success_before_required_post_rename_barrier"
+    ],
+    "CRUU2-003": [
+      "CRUU2_003_Configured_custom_root_missing_does_not_create_directory_or_defaults",
+      "CRUU2_003_Configured_existing_empty_root_is_not_treated_as_first_run"
+    ],
+    "CRUU2-004": [
+      "CRUU2_004_Legacy_EditPrompt_overload_preserves_custom_title"
+    ],
+    "CRUU2-005": [
+      "CRUU2_005_Automatic_headline_prefill_untouched_remains_null_after_edit",
+      "CRUU2_005_User_edited_headline_becomes_custom_title_after_edit"
+    ],
+    "CRUU3-001": [
+      "CRUU3_001_MainWindow_Requests_Shutdown_On_RestartRequired"
+    ],
+    "CRUU3-002": [
+      "CRUU3_002_Corrupt_primary_with_future_schema_backup_stops",
+      "CRUU3_002_Missing_primary_with_future_schema_backup_stops",
+      "CRUU3_002_Primary_future_schema_with_valid_old_backup_stops_without_recovery"
+    ],
+    "CRUU3-003": [
+      "CRUU3_003_Locked_valid_primary_does_not_fall_back_to_stale_backup"
+    ],
+    "CRUU3-004": [
+      "CRUU3_004_Backup_recovery_primary_restore_failure_returns_warning_and_backup_settings",
+      "CRUU3_004_Valid_primary_backup_sync_failure_returns_warning_and_primary_settings"
+    ],
+    "CRUU3-005": [
+      "CRUU3_005_Save_invalid_schema_writes_nothing"
+    ],
+    "CRUU3-006": [
+      "CRUU3_006_Prompt_changed_during_copy_aborts_and_rolls_back"
+    ],
+    "CRUU3-009": [
+      "CRUU3_009_Corrupt_primary_valid_backup_target_rejected_conservatively",
+      "CRUU3_009_Future_schema_target_rejected",
+      "CRUU3_009_Valid_backup_only_target_detected_existing_and_not_overwritten"
+    ],
+    "CRUU3-010": [
+      "CRUU3_010_Capability_probe_failure_on_new_target_rolls_back_migrated_files"
+    ],
+    "CRUU3-011": [
+      "CRUU3_011_SettingsDialog_Existing_Target_Confirmation_Flow"
+    ],
+    "CRUU3-012": [
+      "CRUU3_012_Target_lock_held_is_detected"
+    ],
+    "CRUU3-016": [
+      "CRUU3_016_Category_name_Unicode_line_separators_rejected",
+      "CRUU3_016_Prompt_title_Unicode_line_separators_rejected_without_file_creation"
+    ],
+    "CRUU4-001": [
+      "CRUU4_001_Valid_primary_preserves_future_schema_backup",
+      "CRUU4_001_Valid_primary_unreadable_backup_starts_with_warning"
+    ],
+    "CRUU4-002": [
+      "CRUU4_002_Corrupt_primary_future_backup_throws_unsupported_schema",
+      "CRUU4_002_Valid_primary_locked_backup_still_starts",
+      "CRUU4_002_Valid_primary_preserves_future_schema_library_backup"
+    ],
+    "CRUU4-003": [
+      "CRUU4_003_Snapshot_document_is_parsed_from_same_bytes_that_are_hashed",
+      "CRUU4_003_Snapshot_referenced_prompt_set_matches_snapshot_document"
+    ],
+    "CRUU4-004": [
+      "CRUU4_004_Altered_but_valid_target_library_bytes_abort_and_rollback"
+    ],
+    "CRUU4-005": [
+      "CRUU4_005_Snapshot_read_failure_leaves_nonexistent_target_nonexistent"
+    ],
+    "CRUU4-006": [
+      "CRUU4_006_Damaged_current_prompt_does_not_block_switch_to_existing_good_library",
+      "CRUU4_006_Damaged_current_prompt_still_blocks_copy_to_empty_target"
+    ],
+    "CRUU4-007": [
+      "CRUU4_007_Backup_only_target_with_all_prompt_bodies_is_selectable",
+      "CRUU4_007_Backup_only_target_with_missing_prompt_is_not_recoverable"
+    ],
+    "CRUU4-008": [
+      "CRUU4_008_Exact_bootstrap_root_is_allowed",
+      "CRUU4_008_Persisted_bootstrap_parent_is_rejected",
+      "CRUU4_008_Persisted_volume_root_is_rejected_before_bootstrap"
+    ],
+    "CRUU4-009": [
+      "CRUU4_009_Normalization_preserves_drive_root_semantics",
+      "CRUU4_009_Physical_alias_into_bootstrap_is_rejected",
+      "CRUU4_009_Physical_alias_of_current_is_treated_as_same_root"
+    ],
+    "CRUU4-010": [
+      "CRUU4_010_Existing_target_confirmation_cancel_writes_no_target_probe_files",
+      "CRUU4_010_New_target_is_rolled_back_if_settings_primary_write_fails",
+      "CRUU4_010_Reservation_blocks_second_transition_writer",
+      "CRUU4_010_Target_state_change_after_inspection_is_detected_under_reservation"
+    ],
+    "CRUU4-011": [
+      "CRUU4_011_Strict_workflow_path_invokes_RequireIcon",
+      "CRUU4_011_Workflow_invokes_non_strict_release_asset_verification"
+    ],
+    "CRUU4-012": [
+      "CRUU4_012_Release_asset_script_actually_validates_the_built_exe_icon",
+      "CRUU4_012_Release_asset_script_checks_ico_payload_bounds",
+      "CRUU4_012_Release_asset_script_supports_published_exe_icon_check"
+    ],
+    "CRUU5-001": [
+      "CRUU5_001_Save_preserves_future_schema_backup_exactly",
+      "CRUU5_001_Save_refuses_to_overwrite_future_schema_primary",
+      "CRUU5_001_Save_with_unreadable_backup_saves_primary_and_preserves_backup",
+      "CRUU5_001_Save_with_unreadable_primary_writes_nothing"
+    ],
+    "CRUU5-002": [
+      "CRUU5_002_Future_schema_cannot_be_hidden_by_duplicate",
+      "CRUU5_002_Noninteger_schemaVersion_is_corrupt",
+      "CRUU5_002_Nonobject_settings_root_is_corrupt",
+      "CRUU5_002_Settings_duplicate_case_variant_schemaVersion_is_corrupt",
+      "CRUU5_002_Settings_duplicate_same_case_schemaVersion_is_corrupt",
+      "CRUU5_002_Settings_missing_schemaVersion_is_corrupt"
+    ],
+    "CRUU5-003": [
+      "CRUU5_003_Commit_preserves_future_schema_backup_exactly",
+      "CRUU5_003_Commit_refuses_future_schema_primary",
+      "CRUU5_003_CreateCategory_preserves_future_backup",
+      "CRUU5_003_DeletePrompt_preserves_body_if_backup_not_synchronized",
+      "CRUU5_003_SynchronizeBackup_preserves_future_backup"
+    ],
+    "CRUU5-004": [
+      "CRUU5_004_Transition_uses_active_process_root_not_mutated_settings_pointer"
+    ],
+    "CRUU5-005": [
+      "CRUU5_005_Empty_target_rolls_back_when_settings_change_during_copy",
+      "CRUU5_005_Existing_target_switch_aborts_when_settings_change_after_confirmation",
+      "CRUU5_005_SaveIfUnchanged_accepts_unchanged_primary",
+      "CRUU5_005_SaveIfUnchanged_rejects_appearing_primary",
+      "CRUU5_005_SaveIfUnchanged_rejects_changed_primary",
+      "CRUU5_005_SaveIfUnchanged_rejects_disappearing_primary"
+    ],
+    "CRUU5-006": [
+      "CRUU5_006_Resolver_IO_failure_aborts_transition",
+      "CRUU5_006_Resolver_Unauthorized_failure_aborts_transition",
+      "CRUU5_006_Resolver_Win32_failure_aborts_transition"
+    ],
+    "CRUU5-007": [
+      "CRUU5_007_Alias_resolving_to_volume_root_is_rejected",
+      "CRUU5_007_Physical_UNC_share_root_alias_rejected",
+      "CRUU5_007_Startup_rejects_physical_volume_alias"
+    ],
+    "CRUU5-008": [
+      "CRUU5_008_Physical_same_root_alias_is_noop"
+    ],
+    "CRUU5-009": [
+      "CRUU5_009_Preexisting_empty_target_is_preserved_after_failure",
+      "CRUU5_009_Settings_failure_removes_reservation_created_empty_root"
+    ],
+    "CRUU5-010": [
+      "CRUU5_010_Backup_only_target_changed_to_different_backup_aborts",
+      "CRUU5_010_Prompt_body_changed_during_confirmation_aborts",
+      "CRUU5_010_Unchanged_target_fingerprint_allows_transition",
+      "CRUU5_010_Valid_library_A_replaced_by_valid_library_B_aborts"
+    ],
+    "CRUU5-012": [
+      "CRUU5_012_Rollback_failure_is_reported_with_details_and_preserves_inner_exception"
+    ],
+    "CRUU5-013": [
+      "CRUU5_013_Real_junction_alias_of_active_root_is_noop",
+      "CRUU5_013_Real_junction_into_bootstrap_is_rejected",
+      "CRUU5_013_Real_junction_resolves_to_target",
+      "CRUU5_013_Real_junction_to_volume_root_is_rejected"
+    ],
+    "CRUU6-001": [
+      "CRUU6_001_Persisted_alias_of_active_root_allows_transition",
+      "CRUU6_001_Real_persisted_junction_alias_allows_third_root_transition"
+    ],
+    "CRUU6-002": [
+      "CRUU6_002_Target_becomes_bootstrap_alias_after_reservation_aborts",
+      "CRUU6_002_Target_physical_identity_change_after_validation_aborts"
+    ],
+    "CRUU6-003": [
+      "CRUU6_003_Backup_appearing_invalidates_transition_precondition",
+      "CRUU6_003_Backup_change_invalidates_settings_precondition",
+      "CRUU6_003_Backup_change_invalidates_transition_precondition",
+      "CRUU6_003_Backup_disappearing_invalidates_transition_precondition",
+      "CRUU6_003_Final_compare_and_write_happen_under_settings_lease",
+      "CRUU6_003_Future_backup_appearing_before_commit_is_not_overwritten"
+    ],
+    "CRUU6-004": [
+      "CRUU6_004_Post_recovery_precondition_does_not_self_invalidate"
+    ],
+    "CRUU6-005": [
+      "CRUU6_005_Foreign_collision_file_is_never_deleted_by_rollback",
+      "CRUU6_005_Mid_copy_failure_leaves_no_untracked_partial_file"
+    ],
+    "CRUU6-006": [
+      "CRUU6_006_Probe_cleanup_failure_is_reported",
+      "CRUU6_006_Probe_residue_is_in_transition_cleanup_report"
+    ],
+    "CRUU6-007": [
+      "CRUU6_007_Reservation_lock_cleanup_failure_is_reported"
+    ],
+    "CRUU6-008": [
+      "CRUU6_008_Metadata_change_during_fingerprint_capture_aborts"
+    ],
+    "CRUU6-009": [
+      "CRUU6_009_Future_settings_schema_mid_transition_is_controlled_dialog_error",
+      "CRUU6_009_Future_target_schema_is_controlled_dialog_error"
+    ],
+    "CRUU6-010": [
+      "CRUU6_010_Readonly_active_prompt_file_rejects_existing_target",
+      "CRUU6_010_Readonly_existing_library_primary_rejects_switch"
+    ],
+    "CRUU6-011": [
+      "CRUU6_011_Unavailable_configured_root_uses_dedicated_safety_error"
+    ],
+    "CRUU7-001": [
+      "CRUU7_001_A_Selected_unc_host_alias_resolves_and_binds_to_physical_target",
+      "CRUU7_001_B_Symlink_retargeting_prior_to_commit_fails_physical_target_check",
+      "CRUU7_001_C_Mutations_occur_exclusively_in_bound_physical_root"
+    ],
+    "CRUU7-002": [
+      "CRUU7_002_A_Promotion_moves_use_write_through_flag",
+      "CRUU7_002_B_Streams_are_flushed_to_disk_before_promotion"
+    ],
+    "CRUU7-003": [
+      "CRUU7_003_A_Active_prompts_classified_as_PromptBody",
+      "CRUU7_003_B_Orphan_prompts_classified_as_OrphanPromptBody",
+      "CRUU7_003_C_Top_level_recovery_artifacts_classified_as_RecoveryArtifact",
+      "CRUU7_003_D_Transient_probe_files_excluded_from_snapshot"
+    ],
+    "CRUU7-004": [
+      "CRUU7_004_A_Interrupted_migration_detected_and_cleared_if_unmodified",
+      "CRUU7_004_B_Interrupted_migration_fails_closed_if_foreign_file_present",
+      "CRUU7_004_C_Interrupted_migration_fails_closed_if_payload_tampered",
+      "CRUU7_004_D_Interrupted_migration_fails_closed_if_manifest_corrupted"
+    ],
+    "CRUU7-005": [
+      "CRUU7_005_A_Direct_caller_cannot_bypass_lease_precondition",
+      "CRUU7_005_B_Stale_precondition_token_prevents_settings_overwrite"
+    ],
+    "CRUU7-006": [
+      "CRUU7_006_A_Target_metadata_change_between_passes_throws_TargetInspectionUnstableException",
+      "CRUU7_006_B_Target_prompt_body_change_between_passes_throws_TargetInspectionUnstableException",
+      "CRUU7_006_C_Stable_target_content_passes_equal_snapshot_fingerprint"
+    ],
+    "CRUU7-007": [
+      "CRUU7_007_A_Unreadable_primary_does_not_fallback_to_backup_as_corrupt",
+      "CRUU7_007_B_Unstable_primary_is_retryable_not_corrupt"
+    ],
+    "CRUU7-008": [
+      "CRUU7_008_A_Reservation_lock_handles_are_disposed_idempotently",
+      "CRUU7_008_B_Cleanup_failure_does_not_throw_from_Release",
+      "CRUU7_008_C_Reservation_creates_root_and_removes_if_unused"
+    ],
+    "CRUU7-009": [
+      "CRUU7_009_A_Post_commit_cleanup_failure_returns_changed_and_restart_required",
+      "CRUU7_009_B_Post_commit_cleanup_failure_includes_warning_text"
+    ],
+    "CRUU7-010": [
+      "CRUU7_010_A_Probe_uses_explicit_probe_files_not_atomic_writer",
+      "CRUU7_010_B_Probe_cleans_temporary_probe_files_on_failure"
+    ],
+    "CRUU7-011": [
+      "CRUU7_011_A_Unavailable_data_folder_displays_controlled_error_and_preserves_settings",
+      "CRUU7_011_B_Unavailable_data_folder_dialog_error_keeps_dialog_open_or_safe"
+    ],
+    "CRUU7-012": [
+      "CRUU7_012_A_Readonly_safety_backup_yields_warning_not_hard_error",
+      "CRUU7_012_B_Future_schema_safety_backup_is_ignored_and_preserved"
+    ],
+    "CRUU7-013": [
+      "CRUU7_013_A_Multiple_transition_warnings_are_combined_and_deduplicated",
+      "CRUU7_013_B_Warning_combiner_ignores_null_or_empty_values"
+    ],
+    "CRUU7-014": [
+      "CRUU7_014_A_Lease_only_retries_sharing_and_lock_violations",
+      "CRUU7_014_B_Lease_fails_immediately_on_access_denied_or_file_not_found",
+      "CRUU7_014_C_Fast_test_policy_executes_within_configured_timeout"
+    ],
+    "CRUU7-015": [
+      "CRUU7_015_A_SettingsDialog_uses_injected_transition_service",
+      "CRUU7_015_B_SettingsDialog_handles_all_transition_result_states"
+    ],
+    "CRUU7-016": [
+      "CRUU7_016_A_Case_sensitive_data_root_is_rejected_on_windows",
+      "CRUU7_016_B_Case_insensitive_data_root_is_accepted_on_windows"
+    ],
+    "CRUU7-017": [
+      "CRUU7_017_A_GenerateAppIcon_accepts_custom_input_and_output_paths",
+      "CRUU7_017_B_VerifyReleaseAssets_validates_multi_frame_ico_binary_structure"
+    ],
+    "CRUU8-001": [
+      "CRUU8_001_Precommit_rollback_failure_preserves_manifest_marker"
+    ],
+    "CRUU8-002": [
+      "CRUU8_002_Predeclared_nonces_used_for_temps_and_cleaned_on_recovery"
+    ],
+    "CRUU8-003": [
+      "CRUU8_003_OccupiedNonLibrary_is_rejected_and_distinguished_from_empty"
+    ],
+    "CRUU8-004": [
+      "CRUU8_004_WriteDurable_cleans_failed_temp_and_throws_ManifestWriteCleanupException"
+    ],
+    "CRUU8-005": [
+      "CRUU8_005_Schema_version_1_manifest_fails_closed"
+    ],
+    "CRUU8-006": [
+      "CRUU8_006_FinalizeCommittedStartup_verifies_all_finals_and_retires_marker"
+    ],
+    "CRUU8-007": [
+      "CRUU8_007_Interrupted_custom_to_default_migration_preserves_bootstrap_settings"
+    ],
+    "CRUU8-008": [
+      "CRUU8_008_Precommit_failures_combine_into_MigrationRollbackException"
+    ],
+    "CRUU8-009": [
+      "CRUU8_009_Reservation_cleans_full_missing_parent_directory_chain"
+    ],
+    "CRUU8-010": [
+      "CRUU8_010_Case_sensitivity_native_error_fails_closed_with_InspectionException"
+    ],
+    "CRUU8-011": [
+      "CRUU8_011_Backup_only_target_capability_succeeds_with_readonly_backup"
+    ],
+    "CRUU8-012": [
+      "CRUU8_012_InspectCompatibility_distinguishes_current_future_corrupt"
+    ],
+    "CRUU8-013": [
+      "CRUU8_013_SettingsDialog_sets_RestartRequired_before_notification_dialogs"
+    ],
+    "CRUU8-014": [
+      "CRUU8_014_ExecuteSaveForTest_invokes_complete_save_flow"
+    ],
+    "CRUU8-015": [
+      "CRUU8_015_Verified_artifact_deleter_validates_handle_before_deletion"
+    ],
+    "CRUU8-016": [
+      "CRUU8_016_Verified_artifact_deleter_throws_on_hash_mismatch_and_preserves_file"
+    ],
+    "CRUU8-017": [
+      "CRUU8_017_Exhaustive_target_library_kind_switch_handles_all_cases"
+    ],
+    "CRUU8-018": [
+      "CRUU8_018_DataRootCapabilityValidator_constructors_are_explicit"
+    ],
+    "CRUU8-019": [
+      "CRUU8_019_VerifyTestEvidence_script_exists_and_parses_valid_trx"
+    ],
+    "CRUU9-001": [
+      "CRUU9_001_Committed_startup_rejects_managed_child_reparse",
+      "CRUU9_001_Empty_prompts_junction_outside_target_is_rejected",
+      "CRUU9_001_Empty_recovery_junction_outside_target_is_rejected",
+      "CRUU9_001_Migration_never_writes_through_prompts_junction",
+      "CRUU9_001_Normal_managed_directories_are_accepted",
+      "CRUU9_001_Retry_never_deletes_outside_bound_root",
+      "CRUU9_001_Retry_never_deletes_through_prompts_junction"
+    ],
+    "CRUU9-002": [
+      "CRUU9_002_App_startup_does_not_skip_unreadable_marker",
+      "CRUU9_002_Unreadable_final_is_not_treated_as_missing",
+      "CRUU9_002_Unreadable_marker_is_not_treated_as_missing",
+      "CRUU9_002_Unreadable_temp_is_not_treated_as_missing",
+      "CRUU9_002_Verified_deleter_access_denied_is_not_noop"
+    ],
+    "CRUU9-003": [
+      "CRUU9_003_Arbitrary_prompt_cannot_be_declared_as_temp",
+      "CRUU9_003_Production_temp_grammar_accepted",
+      "CRUU9_003_Temp_in_different_directory_rejected",
+      "CRUU9_003_Temp_with_nonhex_nonce_rejected",
+      "CRUU9_003_Temp_with_other_attempt_id_rejected",
+      "CRUU9_003_Temp_with_short_nonce_rejected",
+      "CRUU9_003_Temp_without_attempt_id_rejected"
+    ],
+    "CRUU9-004": [
+      "CRUU9_004_Final_A_equal_Temp_B_rejected",
+      "CRUU9_004_Temp_A_equal_Final_B_rejected",
+      "CRUU9_004_Two_finals_equal_rejected",
+      "CRUU9_004_Two_temps_equal_rejected"
+    ],
+    "CRUU9-005": [
+      "CRUU9_005_Committed_startup_does_not_require_source_to_exist",
+      "CRUU9_005_Different_source_files_preserved_byte_exact",
+      "CRUU9_005_Different_source_interrupted_retry_fails_closed",
+      "CRUU9_005_Same_source_interrupted_retry_can_clean"
+    ],
+    "CRUU9-006": [
+      "CRUU9_006_Crash_after_probe_dir_creation_recovers"
+    ],
+    "CRUU9-007": [
+      "CRUU9_007_Crash_during_ready_stage_is_recoverable"
+    ],
+    "CRUU9-008": [
+      "CRUU9_008_Settings_primary_uses_write_through_promotion"
+    ],
+    "CRUU9-009": [
+      "CRUU9_009_Invalid_similar_filename_not_deleted",
+      "CRUU9_009_Stale_primary_settings_temp_cleaned_under_lease"
+    ],
+    "CRUU9-010": [
+      "CRUU9_010_New_foreign_entry_after_cleanup_preserves_marker"
+    ],
+    "CRUU9-012": [
+      "CRUU9_012_New_target_success_has_no_false_cleanup_warning"
+    ],
+    "CRUU9-014": [
+      "CRUU9_014_Held_root_app_lock_blocks_transition",
+      "CRUU9_014_Stale_root_app_lock_does_not_make_target_occupied"
+    ],
+    "CRUU9-016": [
+      "CRUU9_016_Nested_app_lock_is_unknown"
+    ],
+    "CRUU9-017": [
+      "CRUU9_017_Ready_gate_rejects_declared_temp"
+    ],
+    "CRUU9-020": [
+      "CRUU9_020_RestartRequired_false_does_not_shutdown",
+      "CRUU9_020_RestartRequired_true_Result_null_shuts_down",
+      "CRUU9_020_Restart_message_failure_still_requests_shutdown"
+    ],
+    "CRUU9-021": [
+      "CRUU9_021_VerifyTestEvidence_accepts_valid_fixture_TRX",
+      "CRUU9_021_VerifyTestEvidence_rejects_missing_sentinel_TRX"
+    ],
+    "CRUU9-024": [
+      "CRUU9_024_Duplicate_targetPhysicalRoot_rejected",
+      "CRUU9_024_Invalid_UTF8_manifest_rejected"
+    ]
+  }
+}

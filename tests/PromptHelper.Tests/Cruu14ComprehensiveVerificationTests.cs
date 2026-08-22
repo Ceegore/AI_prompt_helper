@@ -92,9 +92,16 @@ public sealed class Cruu14ComprehensiveVerificationTests
         string target = Path.Combine(temp.Root, "library.json");
         byte[] content = System.Text.Encoding.UTF8.GetBytes("current content");
         File.WriteAllBytes(target, content);
+        byte[] replacement = System.Text.Encoding.UTF8.GetBytes("replacement content");
 
-        var replacer = new WindowsExpectedFileCasReplacer();
-        replacer.VerifyCurrentMatches(target, Hash(content));
+        new WindowsAtomicExpectedFileReplacer().ReplaceIfExpected(
+            temp.Root,
+            target,
+            ExpectedFileState.Present(Hash(content)),
+            replacement,
+            DurableFileClass.LibraryMetadata);
+
+        CollectionAssert.AreEqual(replacement, File.ReadAllBytes(target));
     }
 
     [TestMethod]
@@ -107,10 +114,18 @@ public sealed class Cruu14ComprehensiveVerificationTests
         string expectedHex = Hash(originalContent);
 
         // External writer changes the file after the caller captured its expected hash.
-        File.WriteAllBytes(target, System.Text.Encoding.UTF8.GetBytes("changed by someone else"));
+        byte[] foreign = System.Text.Encoding.UTF8.GetBytes("changed by someone else");
+        File.WriteAllBytes(target, foreign);
 
-        var replacer = new WindowsExpectedFileCasReplacer();
-        Assert.Throws<StaleExpectedFileException>(() => replacer.VerifyCurrentMatches(target, expectedHex));
+        Assert.Throws<StaleExpectedFileException>(() =>
+            new WindowsAtomicExpectedFileReplacer().ReplaceIfExpected(
+                temp.Root,
+                target,
+                ExpectedFileState.Present(expectedHex),
+                System.Text.Encoding.UTF8.GetBytes("our replacement"),
+                DurableFileClass.LibraryMetadata));
+
+        CollectionAssert.AreEqual(foreign, File.ReadAllBytes(target));
     }
 
     [TestMethod]
@@ -317,11 +332,13 @@ public sealed class Cruu14ComprehensiveVerificationTests
         File.WriteAllText(realFile, "{\"schemaVersion\":1,\"categories\":[],\"prompts\":[]}");
 
         string linkPath = Path.Combine(temp.Root, "library.json");
-        if (!TryCreateFileSymlink(linkPath, realFile))
-        {
-            Assert.Inconclusive("This environment does not permit creating file symlinks (requires admin or Developer Mode).");
-            return;
-        }
+        // CRUU15-009: a required sentinel may not opt out of the environment it needs. If file
+        // symlinks cannot be created here, the reparse-point defence is simply unverified, and
+        // reporting that as anything other than a failure is how it stops being verified at
+        // all. Enable Windows Developer Mode, or run elevated.
+        Assert.IsTrue(
+            TryCreateFileSymlink(linkPath, realFile),
+            "Creating a file symlink is required for this test. Enable Windows Developer Mode or run elevated.");
 
         var doc = new LibraryDocument { SchemaVersion = 1, Categories = [], Prompts = [] };
         byte[] metadataBytes = File.ReadAllBytes(realFile);
@@ -336,16 +353,9 @@ public sealed class Cruu14ComprehensiveVerificationTests
     {
         try
         {
-            var psi = new ProcessStartInfo("cmd.exe", $"/c mklink \"{linkPath}\" \"{targetPath}\"")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var proc = Process.Start(psi)!;
-            proc.WaitForExit(5000);
-            return proc.ExitCode == 0 && File.Exists(linkPath);
+            var psi = new ProcessStartInfo("cmd.exe", $"/c mklink \"{linkPath}\" \"{targetPath}\"");
+            ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 5_000);
+            return run.Exited && run.ExitCode == 0 && File.Exists(linkPath);
         }
         catch
         {

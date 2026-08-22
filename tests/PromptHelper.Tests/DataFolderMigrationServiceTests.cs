@@ -373,17 +373,20 @@ public class DataFolderMigrationServiceTests
 
         var ops = new FaultInjectingMigrationFileOps
         {
-            OnMoveNoOverwrite = (src, dst) =>
+            OnPromoteStage = (src, dst, promote) =>
             {
+                promote();
+
                 if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                 {
-                    string json = File.ReadAllText(src);
-                    // Add whitespace to change bytes while remaining valid JSON
+                    // Alter the promoted bytes so the target no longer matches the source
+                    // snapshot, while remaining valid JSON. The staging object itself can no
+                    // longer be tampered with by pathname (CRUU15-002), so the interference
+                    // has to happen after promotion.
+                    string json = File.ReadAllText(dst);
                     json = json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 1   ");
-                    File.WriteAllText(src, json);
+                    File.WriteAllText(dst, json);
                 }
-
-                File.Move(src, dst, overwrite: false);
             }
         };
 
@@ -544,13 +547,14 @@ public class DataFolderMigrationServiceTests
 
         var ops = new FaultInjectingMigrationFileOps
         {
-            OnMoveNoOverwrite = (src, dst) =>
+            OnPromoteStage = (src, dst, promote) =>
             {
                 if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new IOException("Simulated disk error during atomic promotion move");
                 }
-                File.Move(src, dst, overwrite: false);
+
+                promote();
             }
         };
 

@@ -807,10 +807,11 @@ public class Cruu12ComprehensiveVerificationTests
         }
     }
 
-    private sealed class FaultInjectingDurableFileWriter : IDurableAtomicFileWriter
+    private sealed class FaultInjectingDurableFileWriter : IDurableAtomicFileWriter, IAtomicExpectedFileReplacer
     {
         private readonly Dictionary<string, Exception> _faults = new(StringComparer.OrdinalIgnoreCase);
         private readonly WindowsDurableAtomicFileWriter _inner = new();
+        private readonly WindowsAtomicExpectedFileReplacer _innerReplacer = new();
         public bool FailOnPostCommitAdvance { get; set; }
         private bool _primaryCommitted;
 
@@ -848,6 +849,30 @@ public class Cruu12ComprehensiveVerificationTests
             }
 
             _inner.CreateNewDurable(targetPath, bytes, fileClass);
+        }
+
+        // Expectation-bound commits go through the atomic compare-and-swap rather than a bare
+        // durable write (CRUU15-003), so the same fault surface has to cover it. The real
+        // primitive still performs the replacement when no fault fires.
+        public void ReplaceIfExpected(
+            string physicalRoot,
+            string targetPath,
+            ExpectedFileState expected,
+            ReadOnlySpan<byte> candidateBytes,
+            DurableFileClass fileClass)
+        {
+            string full = Path.GetFullPath(targetPath);
+            if (fileClass == DurableFileClass.LibraryMetadata && targetPath.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
+            {
+                _primaryCommitted = true;
+            }
+
+            if (_faults.TryGetValue(full, out var fault))
+            {
+                throw fault;
+            }
+
+            _innerReplacer.ReplaceIfExpected(physicalRoot, targetPath, expected, candidateBytes, fileClass);
         }
     }
 }

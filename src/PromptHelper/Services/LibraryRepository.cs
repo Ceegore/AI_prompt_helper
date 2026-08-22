@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Security;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
@@ -37,16 +38,23 @@ public sealed class LibraryRepository
 
     private readonly AppPaths _paths;
     private readonly IDurableAtomicFileWriter _durableWriter;
-    private readonly IExpectedFileCasReplacer _casReplacer;
+    private readonly IAtomicExpectedFileReplacer _atomicReplacer;
 
     internal LibraryRepository(
         AppPaths paths,
         IDurableAtomicFileWriter durableWriter,
-        IExpectedFileCasReplacer? casReplacer = null)
+        IAtomicExpectedFileReplacer? atomicReplacer = null)
     {
         _paths = paths;
         _durableWriter = durableWriter;
-        _casReplacer = casReplacer ?? new WindowsExpectedFileCasReplacer();
+
+        // A durable writer that also implements the atomic replacer stays the single
+        // fault-injection seam for tests that fail "the write". Production's
+        // WindowsDurableAtomicFileWriter deliberately does not implement it, so the real
+        // compare-and-swap primitive is always used at runtime.
+        _atomicReplacer = atomicReplacer
+            ?? durableWriter as IAtomicExpectedFileReplacer
+            ?? new WindowsAtomicExpectedFileReplacer();
     }
 
     public LibraryRepository(AppPaths paths)
@@ -114,13 +122,12 @@ public sealed class LibraryRepository
     }
 
     /// <summary>
-    /// Commit precondition bound as tightly as the interface allows: the current primary is
-    /// re-verified with a native, share-restricted handle check (see
-    /// <see cref="WindowsExpectedFileCasReplacer"/>) immediately before the durable write,
-    /// instead of trusting a plain content read captured earlier. The write itself still goes
-    /// through the injected <see cref="IDurableAtomicFileWriter"/> so fault-injection tests
-    /// covering the write step keep working — this narrows the CRUU14-002 TOCTOU window right
-    /// up to the write call, but does not hold an exclusive lock through it.
+    /// Commits <paramref name="package"/> only if the primary still holds exactly
+    /// <paramref name="expectedRawSha256Hex"/>, as one atomic compare-and-swap: the expected
+    /// object is held under OS-enforced exclusion from the moment its hash is proven until the
+    /// replacement consumes that exclusion (see <see cref="IAtomicExpectedFileReplacer"/>).
+    /// CRUU14 verified and then wrote through a separate call, which left a window in which a
+    /// concurrent update was silently overwritten; there is no such window here (CRUU15-003).
     /// </summary>
     public CommitResult CommitIfPrimaryUnchanged(CanonicalLibraryPackage package, string expectedRawSha256Hex)
     {
@@ -143,7 +150,12 @@ public sealed class LibraryRepository
 
         try
         {
-            _casReplacer.VerifyCurrentMatches(_paths.LibraryPath, expectedRawSha256Hex);
+            _atomicReplacer.ReplaceIfExpected(
+                _paths.RootDirectory,
+                _paths.LibraryPath,
+                ExpectedFileState.Present(expectedRawSha256Hex),
+                package.CanonicalBytes,
+                DurableFileClass.LibraryMetadata);
         }
         catch (StaleExpectedFileException ex)
         {
@@ -151,12 +163,35 @@ public sealed class LibraryRepository
                 "The library changed outside the current Prompt Helper state. Reload before editing.", ex);
         }
 
-        _durableWriter.ReplaceDurable(
-            _paths.LibraryPath,
-            package.CanonicalBytes,
-            DurableFileClass.LibraryMetadata);
-
         return SynchronizeBackup(package);
+    }
+
+    /// <summary>
+    /// The primary commit for a body-only prompt edit, where the serialized library is
+    /// byte-identical before and after. The write is content-neutral, so a concurrent external
+    /// change must never be overwritten by it — but it also must not fail the mutation, whose
+    /// real payload (the prompt body) is already durable. A stale primary therefore yields a
+    /// warning rather than an exception, and the external content stays exactly as it is
+    /// (CRUU15-003).
+    /// </summary>
+    public CommitResult CommitContentNeutralIfPrimaryUnchanged(
+        CanonicalLibraryPackage package,
+        string expectedRawSha256Hex)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedRawSha256Hex);
+
+        try
+        {
+            return CommitIfPrimaryUnchanged(package, expectedRawSha256Hex);
+        }
+        catch (InvalidOperationException ex) when (ex.InnerException is StaleExpectedFileException)
+        {
+            return new CommitResult(
+                false,
+                "The prompt text was saved, but library.json had been changed by something else " +
+                "and was left untouched. Reload to see the current library.");
+        }
     }
 
     public CommitResult Commit(CanonicalLibraryPackage package)
@@ -215,7 +250,14 @@ public sealed class LibraryRepository
     internal CommitResult SynchronizeBackup(CanonicalLibraryPackage package)
     {
         ArgumentNullException.ThrowIfNull(package);
-        MetadataFileState state = ReadMetadataFileState(_paths.LibraryBackupPath);
+
+        // CRUU15-004: this method promises to preserve a newer-schema backup. Inspecting the
+        // backup and then replacing it in a separate step cannot keep that promise — a
+        // future-schema backup written between the two would be destroyed by a decision made
+        // before it existed. The observed state is therefore captured as an expectation and
+        // enforced by the replacement itself, so anything that appears or changes in between
+        // makes the write fail closed with the backup preserved.
+        MetadataFileState state = ReadBackupStateWithHash(out string? observedSha256Hex);
 
         if (state is MetadataFileState.Future future)
         {
@@ -233,13 +275,26 @@ public sealed class LibraryRepository
                 unreadable.Error.Message);
         }
 
+        ExpectedFileState expected = state is MetadataFileState.Missing
+            ? ExpectedFileState.Missing
+            : ExpectedFileState.Present(observedSha256Hex!);
+
         try
         {
-            _durableWriter.ReplaceDurable(
+            _atomicReplacer.ReplaceIfExpected(
+                _paths.RootDirectory,
                 _paths.LibraryBackupPath,
+                expected,
                 package.CanonicalBytes,
                 DurableFileClass.LibraryMetadata);
             return new CommitResult(true, null);
+        }
+        catch (StaleExpectedFileException ex)
+        {
+            return new CommitResult(
+                false,
+                "The library was saved, but library.backup.json was changed by something else " +
+                $"while it was being synchronized. The existing backup was preserved and was not overwritten. {ex.Message}");
         }
         catch (Exception ex)
         {
@@ -247,6 +302,56 @@ public sealed class LibraryRepository
                 false,
                 "The library was saved, but its safety backup could not be synchronized (safety backup could not be updated). " +
                 $"Current data remains stored in library.json. {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Reads the backup's compatibility state and, when it exists, the exact hash of the bytes
+    /// that state was derived from — so the two can be bound together as one expectation.
+    /// </summary>
+    private MetadataFileState ReadBackupStateWithHash(out string? sha256Hex)
+    {
+        sha256Hex = null;
+
+        byte[] raw;
+        try
+        {
+            raw = File.ReadAllBytes(_paths.LibraryBackupPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return new MetadataFileState.Missing();
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            return new MetadataFileState.Unreadable(ex);
+        }
+
+        sha256Hex = Convert.ToHexStringLower(SHA256.HashData(raw));
+
+        string json;
+        try
+        {
+            json = StrictUtf8Text.Decode(raw, $"library file '{_paths.LibraryBackupPath}'");
+        }
+        catch (Exception ex) when (ex is InvalidDataException or DecoderFallbackException)
+        {
+            return new MetadataFileState.Unreadable(ex);
+        }
+
+        try
+        {
+            InspectAndDeserialize(json);
+            return new MetadataFileState.Current();
+        }
+        catch (UnsupportedLibrarySchemaException ex)
+        {
+            return new MetadataFileState.Future(ex.SchemaVersion);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return new MetadataFileState.Corrupt(ex);
         }
     }
 

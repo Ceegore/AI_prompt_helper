@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Security;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using PromptHelper.Models;
 
@@ -42,18 +43,29 @@ public sealed class AppSettingsRepository
     private readonly string _lockPath;
     private readonly string _bootstrapRoot;
     private readonly IDurableSettingsFileWriter _durableWriter;
-    private readonly IExpectedFileCasReplacer _casReplacer;
+    private readonly IAtomicExpectedFileReplacer _atomicReplacer;
     private readonly SettingsLeasePolicy _leasePolicy;
 
     public AppSettingsRepository(
         IDurableSettingsFileWriter? durableWriter = null,
         string? settingsPathOverride = null,
         string? backupPathOverride = null,
-        SettingsLeasePolicy? leasePolicy = null,
-        IExpectedFileCasReplacer? casReplacer = null)
+        SettingsLeasePolicy? leasePolicy = null)
+        : this(durableWriter, settingsPathOverride, backupPathOverride, leasePolicy, atomicReplacer: null)
+    {
+    }
+
+    internal AppSettingsRepository(
+        IDurableSettingsFileWriter? durableWriter,
+        string? settingsPathOverride,
+        string? backupPathOverride,
+        SettingsLeasePolicy? leasePolicy,
+        IAtomicExpectedFileReplacer? atomicReplacer)
     {
         _durableWriter = durableWriter ?? new WindowsDurableSettingsFileWriter();
-        _casReplacer = casReplacer ?? new WindowsExpectedFileCasReplacer();
+        _atomicReplacer = atomicReplacer
+            ?? durableWriter as IAtomicExpectedFileReplacer
+            ?? new WindowsAtomicExpectedFileReplacer();
         _leasePolicy = leasePolicy ?? SettingsLeasePolicy.Default;
 
         if (settingsPathOverride != null)
@@ -372,20 +384,28 @@ public sealed class AppSettingsRepository
 
         string json = JsonSerializer.Serialize(normalized, JsonOptions);
 
-        if (precondition.Primary.Exists && precondition.Primary.Sha256 != null)
-        {
-            string expectedHex = Convert.ToHexStringLower(precondition.Primary.Sha256);
-            try
-            {
-                _casReplacer.VerifyCurrentMatches(_settingsPath, expectedHex);
-            }
-            catch (StaleExpectedFileException ex)
-            {
-                throw new InvalidOperationException("Settings were modified concurrently. Save operation cancelled.", ex);
-            }
-        }
+        // CRUU15-004: the settings primary write is the point of no return for a data-folder
+        // transition, so its precondition is enforced by the write itself. That includes the
+        // "was missing" case: an earlier File.Exists proves only that the file was absent at
+        // some point in the past, whereas no-overwrite promotion refuses to destroy anything
+        // that has appeared since.
+        ExpectedFileState expectedPrimary = precondition.Primary.Exists && precondition.Primary.Sha256 != null
+            ? ExpectedFileState.Present(Convert.ToHexStringLower(precondition.Primary.Sha256))
+            : ExpectedFileState.Missing;
 
-        _durableWriter.WriteDurable(_settingsPath, json);
+        try
+        {
+            _atomicReplacer.ReplaceIfExpected(
+                _bootstrapRoot,
+                _settingsPath,
+                expectedPrimary,
+                new UTF8Encoding(false).GetBytes(json),
+                DurableFileClass.Settings);
+        }
+        catch (StaleExpectedFileException ex)
+        {
+            throw new InvalidOperationException("Settings were modified concurrently. Save operation cancelled.", ex);
+        }
 
         string? backupWarning = TrySynchronizeBackupWithCas(normalized, precondition.Backup);
         return new SettingsSaveResult(backupWarning);
@@ -413,15 +433,26 @@ public sealed class AppSettingsRepository
 
             string json = JsonSerializer.Serialize(normalized, JsonOptions);
 
-            if (expectedBackupToken.Exists && expectedBackupToken.Sha256 != null)
-            {
-                string expectedHex = Convert.ToHexStringLower(expectedBackupToken.Sha256);
-                _casReplacer.VerifyCurrentMatches(_backupPath, expectedHex);
-            }
+            // Same expected-state binding as the primary, for the same reason: the
+            // future-schema check above is a promise to preserve a newer backup, and a
+            // newer backup written after that check must not be destroyed by it.
+            ExpectedFileState expected = expectedBackupToken.Exists && expectedBackupToken.Sha256 != null
+                ? ExpectedFileState.Present(Convert.ToHexStringLower(expectedBackupToken.Sha256))
+                : ExpectedFileState.Missing;
 
-            _durableWriter.WriteDurable(_backupPath, json);
+            _atomicReplacer.ReplaceIfExpected(
+                _bootstrapRoot,
+                _backupPath,
+                expected,
+                new UTF8Encoding(false).GetBytes(json),
+                DurableFileClass.Settings);
 
             return null;
+        }
+        catch (StaleExpectedFileException ex)
+        {
+            return "The settings backup was changed by something else while it was being " +
+                   $"synchronized. The existing backup was preserved and was not overwritten. {ex.Message}";
         }
         catch (Exception ex)
         {

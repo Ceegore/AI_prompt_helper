@@ -1,0 +1,13 @@
+{
+  "name": "prompthelper-icon-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned toolchain for rendering the approved PromptHelperLogo.svg into the release ICO. Pinned exactly (no range) so the same source always produces the same approved pixels.",
+  "license": "MIT",
+  "scripts": {
+    "generate": "node ../GenerateAppIconNative.js ../../src/PromptHelper/Assets/PromptHelperLogo.svg ../../src/PromptHelper/Assets/PromptHelper.ico"
+  },
+  "dependencies": {
+    "sharp": "0.34.4"
+  }
+}

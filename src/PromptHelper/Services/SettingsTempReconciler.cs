@@ -8,60 +8,77 @@ public sealed record TempCleanupFailure(
     string Path,
     string ErrorMessage);
 
+/// <summary>
+/// A transient artifact that was deliberately left on disk, with the reason it was not
+/// destroyed. Reported rather than silently ignored so a data root that accumulates unproven
+/// files is visible instead of invisible.
+/// </summary>
+internal sealed record PreservedArtifact(
+    string Path,
+    ArtifactProvenance Provenance);
+
 public sealed record TempReconciliationResult(
     IReadOnlyList<TempCleanupFailure> Failures)
 {
+    internal TempReconciliationResult(
+        IReadOnlyList<TempCleanupFailure> failures,
+        IReadOnlyList<PreservedArtifact> preserved)
+        : this(failures)
+    {
+        Preserved = preserved;
+    }
+
+    internal IReadOnlyList<PreservedArtifact> Preserved { get; init; } = [];
+
     public bool Success => Failures.Count == 0;
 }
 
 /// <summary>
-/// CRUU14-010: a filename that matches the current settings-temp naming convention is not
-/// ownership evidence by itself — a foreign file could occupy that exact pathname after a
-/// crash, a staging-file replacement, or unrelated interference. Files matching the current
-/// convention (GUID-suffixed, generated fresh by this process for every write) are deleted
-/// through <see cref="IVerifiedArtifactDeleter.VerifyIdentityAndDelete"/>, which at least
-/// refuses a reparse point or a path that resolves outside the settings directory. Files
-/// matching only the *legacy* naming convention (predating that scheme, with no comparable
-/// identity signal) are preserved rather than deleted — there is no formally justified policy
-/// here for auto-destroying them, so the safe default is to leave them for manual review.
+/// Startup reconciliation of leftover settings staging files. Same rule as
+/// <see cref="DataRootTempReconciler"/>: only artifacts an <see cref="IOwnedArtifactJournal"/>
+/// proves this application created - matched by the object identity recorded at creation - are
+/// destroyed. A current-format filename holding an unrecorded object is preserved, because a
+/// filename has never been evidence of ownership (CRUU15-007).
 /// </summary>
 internal static class SettingsTempReconciler
 {
     public static TempReconciliationResult Reconcile(
         string settingsPath,
         string backupPath,
-        IVerifiedArtifactDeleter? verifiedDeleter = null)
+        IVerifiedArtifactDeleter? verifiedDeleter = null,
+        IOwnedArtifactJournal? ownedArtifacts = null)
     {
         string? root = Path.GetDirectoryName(settingsPath);
         if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
         {
-            return new TempReconciliationResult([]);
+            return new TempReconciliationResult([], []);
         }
 
-        var deleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        IOwnedArtifactJournal journal = ownedArtifacts ?? new WindowsOwnedArtifactJournal();
         var failures = new List<TempCleanupFailure>();
+        var preserved = new List<PreservedArtifact>();
+
+        IReadOnlySet<string> proven = OwnedArtifactReconciler.Reconcile(root, journal, failures);
 
         foreach (string path in Directory.GetFiles(root))
         {
             string name = Path.GetFileName(path);
 
-            if (SettingsTempName.TryParse(name, out _))
+            if (SettingsTempName.TryParse(name, out _) ||
+                (DurableTempReconciler.TryParseDurableTemp(name, out DurableFileClass fileClass) &&
+                 fileClass == DurableFileClass.Settings))
             {
-                try
-                {
-                    deleter.VerifyIdentityAndDelete(root, path);
-                }
-                catch (Exception ex)
-                {
-                    failures.Add(new TempCleanupFailure(path, ex.Message));
-                }
+                preserved.Add(new PreservedArtifact(
+                    path,
+                    proven.Contains(Path.GetFullPath(path))
+                        ? ArtifactProvenance.JournalOwned
+                        : ArtifactProvenance.UnprovenCurrentFormat));
             }
 
-            // Legacy-format temps (SettingsTempName.TryParseLegacySettingsTemp) are
-            // intentionally left alone: preserved for manual review rather than deleted on a
-            // filename match with no ownership proof behind it.
+            // Legacy-format temps (SettingsTempName.TryParseLegacySettingsTemp) are preserved
+            // for the same reason.
         }
 
-        return new TempReconciliationResult(failures);
+        return new TempReconciliationResult(failures, preserved);
     }
 }

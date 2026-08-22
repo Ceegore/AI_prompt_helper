@@ -15,7 +15,7 @@ internal sealed class PromptMutationCoordinator
     private readonly LibraryMutationRecoveryService _recovery;
     private readonly IDurableAtomicFileWriter _writer;
     private readonly IVerifiedArtifactDeleter _verifiedDeleter;
-    private readonly IExpectedFileCasReplacer _casReplacer;
+    private readonly IAtomicExpectedFileReplacer _atomicReplacer;
 
     public PromptMutationCoordinator(
         AppPaths paths,
@@ -26,7 +26,7 @@ internal sealed class PromptMutationCoordinator
         LibraryMutationRecoveryService recovery,
         IDurableAtomicFileWriter writer,
         IVerifiedArtifactDeleter? verifiedDeleter = null,
-        IExpectedFileCasReplacer? casReplacer = null)
+        IAtomicExpectedFileReplacer? atomicReplacer = null)
     {
         _paths = paths;
         _promptRepo = promptRepo;
@@ -36,7 +36,9 @@ internal sealed class PromptMutationCoordinator
         _recovery = recovery;
         _writer = writer;
         _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
-        _casReplacer = casReplacer ?? new WindowsExpectedFileCasReplacer();
+        _atomicReplacer = atomicReplacer
+            ?? _writer as IAtomicExpectedFileReplacer
+            ?? new WindowsAtomicExpectedFileReplacer();
     }
 
     public CommitResult CommitCreatePrompt(
@@ -168,24 +170,24 @@ internal sealed class PromptMutationCoordinator
                 journal,
                 LibraryMutationPhase.RecoveryBodyDurable);
 
-            // Re-verify the prompt body with a native, share-restricted handle check
-            // immediately before the destructive replace, instead of trusting a plain read
-            // captured earlier. The replace itself still goes through the injected
-            // IDurableAtomicFileWriter so fault-injection tests covering it keep working.
+            // One atomic compare-and-swap: the old body is held under OS-enforced exclusion
+            // from the moment its hash is proven until the replacement consumes it, so an
+            // edit made concurrently by anything else is never silently destroyed
+            // (CRUU15-003).
             try
             {
-                _casReplacer.VerifyCurrentMatches(bodyPath, journal.OldBodySha256Hex!);
+                _atomicReplacer.ReplaceIfExpected(
+                    _paths.RootDirectory,
+                    bodyPath,
+                    ExpectedFileState.Present(journal.OldBodySha256Hex!),
+                    newBodyBytes,
+                    DurableFileClass.PromptBody);
             }
             catch (StaleExpectedFileException ex)
             {
                 throw new InvalidOperationException(
                     "The prompt file changed outside the current Prompt Helper state. Reload before editing.", ex);
             }
-
-            _writer.ReplaceDurable(
-                bodyPath,
-                newBodyBytes,
-                DurableFileClass.PromptBody);
 
             _journalRepo.AdvanceDurable(
                 journal,
@@ -218,7 +220,10 @@ internal sealed class PromptMutationCoordinator
                     journal,
                     LibraryMutationPhase.MetadataDurable);
 
-                result = _libraryRepo.Commit(newPackage);
+                // Still expectation-bound, even though the bytes are identical: an external
+                // change landing after the check above must survive rather than be flattened
+                // by a write that could not have changed anything anyway (CRUU15-003).
+                result = _libraryRepo.CommitContentNeutralIfPrimaryUnchanged(newPackage, disk.RawSha256Hex);
             }
             else
             {

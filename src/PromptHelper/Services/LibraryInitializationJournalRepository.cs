@@ -124,12 +124,16 @@ internal sealed class LibraryInitializationJournalRepository
     }
 
     /// <summary>
-    /// Handle-bound retirement (CRUU14-005): open once, validate from that handle, delete
-    /// through that same handle — never re-open the path after validation to delete it.
+    /// Strict handle-bound retirement: open once without following reparse points and proven
+    /// to resolve inside the data root, validate from that handle, delete through that same
+    /// handle — never re-open the path after validation, and never follow a symlink planted
+    /// there (CRUU14-005/CRUU15-005).
     /// </summary>
     public void DeleteStrict(Guid expectedInitializationId, long expectedRevision)
     {
-        using WindowsHandleBoundFile? handle = WindowsHandleBoundFile.OpenExistingOrNull(_paths.InitializationMarkerPath);
+        using WindowsStrictRetirableFile? handle = WindowsStrictRetirableFile.OpenExistingOrNull(
+            _paths.InitializationMarkerPath,
+            _paths.RootDirectory);
         if (handle is null)
         {
             return;

@@ -36,40 +36,46 @@ internal sealed class FakeManifestFileOps : IMigrationManifestFileOps
         _inner.FlushToDisk(stream);
     }
 
-    public void MoveNoOverwriteWriteThrough(string source, string destination)
+    public IOwnedFileStage CreateOwnedStage(string path)
     {
-        Trace.Add($"MoveWriteThrough:{Path.GetFileName(source)}->{Path.GetFileName(destination)}");
+        Trace.Add($"CreateOwnedStage:{Path.GetFileName(path)}");
+
+        var stage = new FakeOwnedFileStage(_inner.CreateOwnedStage(path));
+
         if (OnMoveNoOverwriteWriteThrough != null)
         {
-            OnMoveNoOverwriteWriteThrough(source, destination);
-            return;
+            Action<string, string> hook = OnMoveNoOverwriteWriteThrough;
+            stage.OnPromoteNoOverwriteExact = target =>
+            {
+                Trace.Add($"MoveWriteThrough:{Path.GetFileName(path)}->{Path.GetFileName(target)}");
+                hook(path, target);
+            };
         }
-        _inner.MoveNoOverwriteWriteThrough(source, destination);
-    }
 
-    public void ReplaceWriteThrough(string source, string destination)
-    {
-        Trace.Add($"ReplaceWriteThrough:{Path.GetFileName(source)}->{Path.GetFileName(destination)}");
         if (OnReplaceWriteThrough != null)
         {
-            OnReplaceWriteThrough(source, destination);
-            return;
+            Action<string, string> hook = OnReplaceWriteThrough;
+            stage.OnPromoteReplaceExact = target =>
+            {
+                Trace.Add($"ReplaceWriteThrough:{Path.GetFileName(path)}->{Path.GetFileName(target)}");
+                hook(path, target);
+            };
         }
-        _inner.ReplaceWriteThrough(source, destination);
+
+        if (OnDeleteFile != null)
+        {
+            Action<string> hook = OnDeleteFile;
+            stage.OnDeleteExact = () =>
+            {
+                Trace.Add($"DeleteFile:{Path.GetFileName(path)}");
+                hook(path);
+            };
+        }
+
+        return stage;
     }
 
     public bool FileExists(string path) => OnFileExists?.Invoke(path) ?? _inner.FileExists(path);
-
-    public void DeleteFile(string path)
-    {
-        Trace.Add($"DeleteFile:{Path.GetFileName(path)}");
-        if (OnDeleteFile != null)
-        {
-            OnDeleteFile(path);
-            return;
-        }
-        _inner.DeleteFile(path);
-    }
 
     public byte[] ReadAllBytes(string path) => OnReadAllBytes?.Invoke(path) ?? _inner.ReadAllBytes(path);
 }

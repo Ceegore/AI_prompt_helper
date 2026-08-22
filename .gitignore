@@ -9,3 +9,6 @@ TestResults/
 
 *.user
 *.suo
+
+# Pinned icon renderer: installed from the checked-in lockfile, never committed.
+tools/icon-generator/node_modules/
