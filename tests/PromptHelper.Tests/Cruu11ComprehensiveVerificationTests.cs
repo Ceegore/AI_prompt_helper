@@ -82,6 +82,33 @@ public class Cruu11ComprehensiveVerificationTests
         WindowsFinalPathHelper.AssertStrictDescendantFile(root, file);
     }
 
+    /// <summary>
+    /// Forces the exact "insufficient buffer" cut the real GetFinalPathNameByHandleW retry
+    /// loop must handle: the first call reports a required size larger than the initial
+    /// capacity (without writing anything), and only the second call actually writes the path.
+    /// </summary>
+    private sealed class ResizingFinalPathNativeApi : IFinalPathNativeApi
+    {
+        private readonly string _fullPath;
+        public int CallCount { get; private set; }
+
+        public ResizingFinalPathNativeApi(string fullPath) => _fullPath = fullPath;
+
+        public uint GetFinalPathNameByHandle(SafeFileHandle handle, System.Text.StringBuilder buffer, uint bufferLength, uint flags)
+        {
+            CallCount++;
+            if (CallCount == 1)
+            {
+                // Report a required size that exceeds the caller's current buffer, without
+                // writing to it — this is exactly what the real API does on ERROR_INSUFFICIENT_BUFFER.
+                return bufferLength + (uint)_fullPath.Length + 100;
+            }
+
+            buffer.Append(_fullPath);
+            return (uint)_fullPath.Length;
+        }
+    }
+
     [TestMethod]
     [TestCategory("FilesystemAuthority")]
     [TestCategory("WindowsFilesystemIntegration")]
@@ -92,8 +119,34 @@ public class Cruu11ComprehensiveVerificationTests
         File.WriteAllBytes(filePath, [1, 2, 3]);
 
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        string normalized = WindowsFinalPathHelper.GetNormalizedDosPath(fs.SafeFileHandle);
+        var fakeApi = new ResizingFinalPathNativeApi(filePath);
+
+        string normalized = WindowsFinalPathHelper.GetNormalizedDosPath(fs.SafeFileHandle, fakeApi);
+
+        Assert.AreEqual(2, fakeApi.CallCount,
+            "The API must be retried with a resized buffer after the first call reports the required size.");
         Assert.AreEqual(PathIdentity.NormalizeForComparison(filePath), normalized);
+    }
+
+    private static bool TryCreateFileSymlink(string linkPath, string targetPath)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink \"{linkPath}\" \"{targetPath}\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(psi)!;
+            proc.WaitForExit(5000);
+            return proc.ExitCode == 0 && File.Exists(linkPath);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     [TestMethod]
@@ -101,16 +154,28 @@ public class Cruu11ComprehensiveVerificationTests
     [TestCategory("WindowsFilesystemIntegration")]
     public void CRUU11_001_Reparse_artifact_is_rejected_before_deletion()
     {
-        // Verified deleter must open handle with FILE_FLAG_OPEN_REPARSE_POINT and check reparse tag info
         using var temp = new TestDirectory();
+        using var outside = new TestDirectory();
         string dataRoot = temp.Root;
-        string regularFile = Path.Combine(dataRoot, "file.bin");
+
+        string realFile = Path.Combine(outside.Root, "real.bin");
         byte[] bytes = [10, 20, 30];
-        File.WriteAllBytes(regularFile, bytes);
+        File.WriteAllBytes(realFile, bytes);
+
+        string linkPath = Path.Combine(dataRoot, "file.bin");
+        if (!TryCreateFileSymlink(linkPath, realFile))
+        {
+            Assert.Inconclusive("This environment does not permit creating file symlinks (requires admin or Developer Mode).");
+            return;
+        }
 
         var deleter = new WindowsVerifiedArtifactDeleter();
-        deleter.VerifyAndDelete(dataRoot, regularFile, bytes.Length, Hash(bytes));
-        Assert.IsFalse(File.Exists(regularFile));
+
+        Assert.Throws<InvalidDataException>(() =>
+            deleter.VerifyAndDelete(dataRoot, linkPath, bytes.Length, Hash(bytes)));
+
+        Assert.IsTrue(File.Exists(linkPath), "The reparse-point artifact itself must be preserved.");
+        Assert.IsTrue(File.Exists(realFile), "The real target file the reparse point redirects to must never be touched.");
     }
 
     // ==========================================

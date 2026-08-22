@@ -18,6 +18,29 @@ internal sealed record MigrationTargetInventory(
     public bool HasEphemeralControls => PayloadTemps.Count > 0 || DeclaredControls.Count > 0;
 }
 
+/// <summary>
+/// CRUU14-006: every path this inspector looks at is classified through
+/// <see cref="StrictPathAuthority.Probe"/> before being trusted, instead of
+/// <c>Directory.Exists</c>/<c>Directory.GetFiles</c>/<c>Directory.GetDirectories</c> alone.
+/// That matters for two reasons this inventory is depended on for safety decisions:
+/// <list type="bullet">
+/// <item><c>Directory.Exists</c> silently swallows access-denied and returns false — which
+/// would make an inaccessible (not actually absent) target look "clean" to every caller that
+/// treats an empty inventory as "nothing dangerous is present." <see cref="StrictPathAuthority"/>
+/// instead lets <see cref="UnauthorizedAccessException"/>/<see cref="IOException"/> propagate,
+/// so an unreadable target fails the calling operation instead of looking empty.</item>
+/// <item>Neither <c>Directory.Exists</c> nor a bare directory listing distinguishes a reparse
+/// point (symlink/junction) from a genuine file or directory. Every entry this inspector
+/// classifies — the root, "prompts"/"recovery", every declared control directory, and every
+/// individual file — is explicitly checked and rejected if it is a reparse point, so a
+/// substituted redirect can never be silently classified as ordinary managed content.</item>
+/// </list>
+/// A residual, not-fully-closed gap: an object that changes identity between the attribute
+/// probe and whatever a caller does with the classification afterward (a TOCTOU at the
+/// granularity of a single directory listing pass) is not detected here — that is the same
+/// class of race the write-bound CAS/lease primitives elsewhere in this codebase exist to
+/// narrow for the specific artifacts that get destructively acted on.
+/// </summary>
 internal static class MigrationTargetInventoryInspector
 {
     public static MigrationTargetInventory Inspect(
@@ -29,6 +52,7 @@ internal static class MigrationTargetInventoryInspector
         ArgumentNullException.ThrowIfNull(manifest);
 
         string root = PathIdentity.NormalizeForComparison(targetPhysicalRoot);
+        var strictPaths = new StrictPathAuthority();
 
         var declaredFinals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var declaredTemps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -106,27 +130,66 @@ internal static class MigrationTargetInventoryInspector
         var foundPersistentBootstrapControls = new List<string>();
         var unknownEntries = new List<string>();
 
-        if (!Directory.Exists(root))
+        bool DirectoryPresentStrict(string dir)
+        {
+            StrictPathProbe probe = strictPaths.Probe(dir);
+            if (probe.Kind == StrictPathKind.Missing)
+            {
+                return false;
+            }
+
+            if (probe.Kind != StrictPathKind.Directory)
+            {
+                throw new InvalidDataException($"Expected a directory but found a file: '{dir}'.");
+            }
+
+            AssertNotReparse(probe, dir);
+            return true;
+        }
+
+        StrictPathProbe rootProbe = strictPaths.Probe(root);
+        if (rootProbe.Kind == StrictPathKind.Missing)
         {
             return new MigrationTargetInventory(
                 foundFinals,
                 foundTemps,
                 foundControls,
                 foundPersistentBootstrapControls,
-                attemptCreatedDirs.Where(Directory.Exists).ToList(),
-                preExistingDirs.Where(Directory.Exists).ToList(),
+                attemptCreatedDirs.Where(DirectoryPresentStrict).ToList(),
+                preExistingDirs.Where(DirectoryPresentStrict).ToList(),
                 unknownEntries);
         }
 
+        if (rootProbe.Kind != StrictPathKind.Directory)
+        {
+            throw new InvalidDataException($"Migration target root is not a directory: '{root}'.");
+        }
+
+        AssertNotReparse(rootProbe, root);
+
         void ScanDirectory(string dir, bool isRoot)
         {
-            if (!Directory.Exists(dir))
+            if (!isRoot && !DirectoryPresentStrict(dir))
             {
                 return;
             }
 
             foreach (string file in Directory.GetFiles(dir))
             {
+                StrictPathProbe fileProbe = strictPaths.Probe(file);
+                if (fileProbe.Kind == StrictPathKind.Missing)
+                {
+                    // Deleted between enumeration and probing; nothing to classify.
+                    continue;
+                }
+
+                if (fileProbe.Kind != StrictPathKind.File)
+                {
+                    throw new InvalidDataException($"Expected a file but found a directory: '{file}'.");
+                }
+
+                AssertNotReparse(fileProbe, file);
+
                 string normFile = PathIdentity.NormalizeForComparison(file);
                 string fileName = Path.GetFileName(file);
 
@@ -158,19 +221,35 @@ internal static class MigrationTargetInventoryInspector
 
             foreach (string subDir in Directory.GetDirectories(dir))
             {
+                StrictPathProbe subDirProbe = strictPaths.Probe(subDir);
+                if (subDirProbe.Kind == StrictPathKind.Missing)
+                {
+                    // Deleted between enumeration and probing; nothing to classify.
+                    continue;
+                }
+
+                if (subDirProbe.Kind != StrictPathKind.Directory)
+                {
+                    throw new InvalidDataException($"Expected a directory but found a file: '{subDir}'.");
+                }
+
                 string normSubDir = PathIdentity.NormalizeForComparison(subDir);
 
                 if (isRoot && (PathIdentity.Equals(normSubDir, promptsDir) || PathIdentity.Equals(normSubDir, recoveryDir)))
                 {
+                    AssertNotReparse(subDirProbe, subDir);
                     ScanDirectory(normSubDir, isRoot: false);
                 }
                 else if (declaredDirs.Contains(normSubDir))
                 {
+                    AssertNotReparse(subDirProbe, subDir);
                     foundControls.Add(normSubDir);
                     ScanDirectory(normSubDir, isRoot: false);
                 }
                 else
                 {
+                    // An unrecognized reparse point is still reported as an unknown entry
+                    // (fail-closed via HasUnknownEntries) rather than silently descended into.
                     unknownEntries.Add(normSubDir);
                 }
             }
@@ -183,8 +262,16 @@ internal static class MigrationTargetInventoryInspector
             foundTemps,
             foundControls,
             foundPersistentBootstrapControls,
-            attemptCreatedDirs.Where(Directory.Exists).ToList(),
-            preExistingDirs.Where(Directory.Exists).ToList(),
+            attemptCreatedDirs.Where(DirectoryPresentStrict).ToList(),
+            preExistingDirs.Where(DirectoryPresentStrict).ToList(),
             unknownEntries);
+    }
+
+    private static void AssertNotReparse(StrictPathProbe probe, string path)
+    {
+        if (probe.Attributes.HasValue && (probe.Attributes.Value & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException($"Refusing to classify reparse-point path as ordinary managed content: '{path}'.");
+        }
     }
 }

@@ -9,8 +9,16 @@ namespace PromptHelper.Tests;
 [TestClass]
 public sealed class IconAssetTests
 {
+    /// <summary>
+    /// CRUU14-011 Problem E / CRUU14-012: GenerateAppIcon.ps1 is an ImageMagick-based fallback
+    /// generator, not the canonical one — it still rasterizes once at 256 and downsamples the
+    /// smaller frames from that single raster, which is exactly the pattern
+    /// GenerateAppIconNative.js was written to replace. This test still asserts that fallback
+    /// script's own real content (it must keep working as documented), but the canonical
+    /// generator asserted elsewhere is the Node/sharp per-size renderer.
+    /// </summary>
     [TestMethod]
-    public void GenerateAppIcon_script_exists_and_contains_square_padding_and_validation()
+    public void GenerateAppIcon_fallback_script_exists_and_contains_square_padding_and_validation()
     {
         string scriptPath = RepositoryTestPaths.RequireFile("tools", "GenerateAppIcon.ps1");
         string scriptContent = File.ReadAllText(scriptPath);
@@ -20,6 +28,25 @@ public sealed class IconAssetTests
         StringAssert.Contains(scriptContent, "extent \"256x256\"");
         StringAssert.Contains(scriptContent, "gravity center");
         StringAssert.Contains(scriptContent, "auto-resize=256,128,64,48,32,24,16");
+    }
+
+    [TestMethod]
+    public void CRUU14_012_Canonical_generator_renders_each_size_from_vector_source()
+    {
+        string scriptPath = RepositoryTestPaths.RequireFile("tools", "GenerateAppIconNative.js");
+        string scriptContent = File.ReadAllText(scriptPath);
+
+        // Every required size is listed once, and each one is passed straight into sharp's own
+        // per-call resize against the SVG source — not the fallback's single 256 raster
+        // downsampled afterward via ImageMagick's "auto-resize".
+        foreach (int size in new[] { 16, 24, 32, 48, 64, 128, 256 })
+        {
+            StringAssert.Contains(scriptContent, size.ToString(), $"Canonical generator must declare size {size}.");
+        }
+
+        StringAssert.Contains(scriptContent, "sharp(svgPath");
+        StringAssert.DoesNotMatch(scriptContent, new System.Text.RegularExpressions.Regex("auto-resize"),
+            "Canonical generator must not delegate to ImageMagick's single-raster auto-resize.");
     }
 
     [TestMethod]
@@ -60,7 +87,58 @@ public sealed class IconAssetTests
         string scriptContent = File.ReadAllText(scriptPath);
 
         StringAssert.Contains(scriptContent, "PublishedExe");
-        StringAssert.Contains(scriptContent, "ExtractIconEx");
+        // CRUU14-011 Problem D: this previously asserted "ExtractIconEx", which the script no
+        // longer uses for the check itself — the string only survives inside a comment noting
+        // it was superseded. Assert the marker for what the script actually runs now: an exact
+        // pixel comparison against every relevant icon group via IconIdentityVerifier.
+        StringAssert.Contains(scriptContent, "IconIdentityVerifier");
+        StringAssert.Contains(scriptContent, "compare-exe");
+    }
+
+    [TestMethod]
+    [TestCategory("WindowsFilesystemIntegration")]
+    public void CRUU4_012_Release_asset_script_actually_validates_the_built_exe_icon()
+    {
+        string repoRoot = RepositoryTestPaths.Root;
+        string scriptPath = Path.Combine(repoRoot, "tools", "VerifyReleaseAssets.ps1");
+        string exePath = Path.Combine(repoRoot, "src", "PromptHelper", "bin", "Debug", "net10.0-windows", "PromptHelper.exe");
+
+        if (!File.Exists(exePath))
+        {
+            Assert.Inconclusive($"Built PromptHelper.exe not found at '{exePath}'; build the main project before running this test.");
+            return;
+        }
+
+        var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            ArgumentList =
+            {
+                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-File", scriptPath,
+                "-RequireIcon",
+                "-PublishedExe", exePath
+            },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = repoRoot
+        };
+
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        // Both streams must be drained concurrently with waiting for exit: reading stdout to
+        // completion before starting to read stderr (or vice versa) deadlocks if the child
+        // fills the other pipe's OS buffer while blocked writing to it.
+        System.Threading.Tasks.Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        System.Threading.Tasks.Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+        bool exited = proc.WaitForExit(60000);
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
+        Assert.IsTrue(exited, "VerifyReleaseAssets.ps1 timed out.");
+
+        Assert.AreEqual(0, proc.ExitCode,
+            $"VerifyReleaseAssets.ps1 -RequireIcon must pass against the built PromptHelper.exe.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        StringAssert.Contains(stdout, "Release asset verification completed successfully.");
     }
 
     [TestMethod]
@@ -124,6 +202,81 @@ public sealed class IconAssetTests
         foreach (int required in new[] { 16, 24, 32, 48, 64, 128, 256 })
         {
             Assert.IsTrue(sizes.Contains(required), $"ICO is missing {required}x{required} frame.");
+        }
+    }
+
+    private static readonly int[] RequiredIconSizes = [16, 24, 32, 48, 64, 128, 256];
+
+    private static string ManifestPath => Path.Combine(
+        RepositoryTestPaths.Root, "src", "PromptHelper", "Assets", "PromptHelperIcon.approved.json");
+
+    private static string SvgPath => Path.Combine(
+        RepositoryTestPaths.Root, "src", "PromptHelper", "Assets", "PromptHelperLogo.svg");
+
+    private static string IcoPath => Path.Combine(
+        RepositoryTestPaths.Root, "src", "PromptHelper", "Assets", "PromptHelper.ico");
+
+    [TestMethod]
+    public void CRUU14_012_Approved_SVG_hash_matches_manifest()
+    {
+        if (!File.Exists(ManifestPath))
+        {
+            Assert.Inconclusive("No icon approval manifest is committed yet; not treated as a passing release-identity check.");
+            return;
+        }
+
+        IconApprovalManifest manifest = IconApprovalManifest.Load(ManifestPath);
+        string actualSvgHash = IconApprovalManifest.ComputeSvgHash(SvgPath);
+
+        Assert.AreEqual(manifest.SvgSha256Hex, actualSvgHash,
+            "The committed SVG no longer matches the approved artwork identity manifest. " +
+            "If this change is deliberate, regenerate and re-review the approval manifest.");
+    }
+
+    [TestMethod]
+    public void CRUU14_012_Checked_in_ICO_matches_approved_normalized_RGBA_hashes()
+    {
+        if (!File.Exists(ManifestPath))
+        {
+            Assert.Inconclusive("No icon approval manifest is committed yet; not treated as a passing release-identity check.");
+            return;
+        }
+
+        IconApprovalManifest manifest = IconApprovalManifest.Load(ManifestPath);
+        byte[] icoBytes = File.ReadAllBytes(IcoPath);
+        Dictionary<int, byte[]> framePayloads = IconApprovalManifest.ReadIcoFramePayloads(icoBytes);
+
+        foreach (IconApprovedFrame expected in manifest.Frames)
+        {
+            Assert.IsTrue(framePayloads.ContainsKey(expected.Size), $"Checked-in ICO is missing size {expected.Size}.");
+            string actualHash = IconApprovalManifest.ComputeNormalizedRgbaHash(framePayloads[expected.Size]);
+            Assert.AreEqual(expected.NormalizedRgbaSha256Hex, actualHash,
+                $"Checked-in ICO frame {expected.Size}x{expected.Size} no longer matches its approved normalized pixel content.");
+        }
+    }
+
+    [TestMethod]
+    public void CRUU14_012_Each_native_frame_matches_approved_normalized_RGBA_hash()
+    {
+        // Cross-check: the manifest itself must cover every mandatory size, independent of
+        // whether the checked-in ICO happens to (that is the previous test's job) — a manifest
+        // silently missing a required size would let that size's identity go unreviewed.
+        if (!File.Exists(ManifestPath))
+        {
+            Assert.Inconclusive("No icon approval manifest is committed yet; not treated as a passing release-identity check.");
+            return;
+        }
+
+        IconApprovalManifest manifest = IconApprovalManifest.Load(ManifestPath);
+        var coveredSizes = new HashSet<int>();
+        foreach (IconApprovedFrame frame in manifest.Frames)
+        {
+            coveredSizes.Add(frame.Size);
+        }
+
+        foreach (int required in RequiredIconSizes)
+        {
+            Assert.IsTrue(coveredSizes.Contains(required), $"Approval manifest is missing required size {required}.");
         }
     }
 }

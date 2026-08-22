@@ -8,20 +8,6 @@ internal static class DurableTempReconciler
     private const string Prefix = ".prompthelper-tmp-";
     private const string Suffix = ".tmp";
 
-    public static void ReconcileSettingsTemps(
-        string settingsPath,
-        string backupPath,
-        IDurableSettingsFileWriter? writer = null)
-    {
-        string? dir = Path.GetDirectoryName(settingsPath);
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
-        {
-            return;
-        }
-
-        ReconcileDataRootTemps(dir, isBootstrapRoot: true);
-    }
-
     public static bool TryParseDurableTemp(string fileName, out DurableFileClass fileClass)
     {
         fileClass = default;
@@ -145,78 +131,5 @@ internal static class DurableTempReconciler
         }
 
         return false;
-    }
-
-    public static void ReconcileDataRootTemps(string dataRoot, bool isBootstrapRoot)
-    {
-        if (!Directory.Exists(dataRoot))
-        {
-            return;
-        }
-
-        foreach (string file in Directory.GetFiles(dataRoot))
-        {
-            string name = Path.GetFileName(file);
-
-            if (TryParseDurableTemp(name, out var fileClass))
-            {
-                if (fileClass == DurableFileClass.Settings && !isBootstrapRoot)
-                {
-                    continue; // Foreign settings temp in non-bootstrap root
-                }
-
-                TryDelete(file);
-            }
-            else if (SettingsTempName.TryParse(name, out _))
-            {
-                if (isBootstrapRoot)
-                {
-                    TryDelete(file);
-                }
-            }
-            else if (SettingsTempName.TryParseLegacySettingsTemp(name))
-            {
-                if (isBootstrapRoot)
-                {
-                    TryDelete(file);
-                }
-            }
-            else if (TryParseLegacyDataRootTemp(name, out _))
-            {
-                TryDelete(file);
-            }
-        }
-
-        string promptsDir = Path.Combine(dataRoot, "prompts");
-        if (Directory.Exists(promptsDir))
-        {
-            foreach (string file in Directory.GetFiles(promptsDir))
-            {
-                string name = Path.GetFileName(file);
-                if (TryParseDurableTemp(name, out var fileClass) && fileClass == DurableFileClass.PromptBody)
-                {
-                    TryDelete(file);
-                }
-                else if (TryParseLegacyPromptTemp(name))
-                {
-                    TryDelete(file);
-                }
-            }
-        }
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch
-        {
-            // Ignore in background cleanup
-        }
     }
 }

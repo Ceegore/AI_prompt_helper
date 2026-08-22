@@ -1,0 +1,33 @@
+{
+  "svgSha256Hex": "b172a108e18f1eb21dc18fa1daa3965eb54711d703c18edc2814d4b7f54c9edd",
+  "frames": [
+    {
+      "size": 16,
+      "normalizedRgbaSha256Hex": "80267e70af495e372729f4de1cfab9f86c9ceae6031c137e01db8c5ea9ae9798"
+    },
+    {
+      "size": 24,
+      "normalizedRgbaSha256Hex": "6763347273492afb444c874fa580cdb816fe157335192826aced302e587ea6cb"
+    },
+    {
+      "size": 32,
+      "normalizedRgbaSha256Hex": "69c33efca23509a694e5fa1868e871efad1a3afa4a7272c7e313bd246976be7b"
+    },
+    {
+      "size": 48,
+      "normalizedRgbaSha256Hex": "683b9f974fb93e9fabcbbab24584c0ad7759d4a32fa1f019b2543bf4366f2883"
+    },
+    {
+      "size": 64,
+      "normalizedRgbaSha256Hex": "b05c7b0902216227cb054f57cbe4e61a1a48d923708a30b0aec27414c7e40250"
+    },
+    {
+      "size": 128,
+      "normalizedRgbaSha256Hex": "63aeb4b6eae88b36fc490276ffd0dbf93544e89a26a6daf77fd32cea87fc0e84"
+    },
+    {
+      "size": 256,
+      "normalizedRgbaSha256Hex": "00eebd451fada5870847a2f725e82857de39bd1f6dc9726351c41c78a1bc768a"
+    }
+  ]
+}

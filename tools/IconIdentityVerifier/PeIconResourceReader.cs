@@ -38,7 +38,25 @@ public static class PeIconResourceReader
 
     private delegate bool EnumResNameProc(IntPtr hModule, IntPtr lpszType, IntPtr lpszName, IntPtr lParam);
 
+    /// <summary>
+    /// Backward-compatible single-group accessor: returns the frames for the executable's
+    /// first <c>RT_GROUP_ICON</c> resource only. Prefer <see cref="ExtractAndReadAllGroups"/>
+    /// when the executable might carry more than one icon group (CRUU14-012).
+    /// </summary>
     public static Dictionary<(int Width, int Height), string> ExtractAndReadFrames(string exePath)
+    {
+        var groups = ExtractAndReadAllGroups(exePath);
+        return groups[0].Frames;
+    }
+
+    /// <summary>
+    /// Enumerates every <c>RT_GROUP_ICON</c> resource in the executable and returns the
+    /// decoded frame hashes for each. Earlier versions of this reader stopped enumeration
+    /// after the first group found by <c>EnumResourceNamesW</c>, so an executable carrying a
+    /// second icon group (e.g. from an embedded control or a differently-sourced resource)
+    /// would never have that group's content verified at all. See CRUU14-012.
+    /// </summary>
+    public static IReadOnlyList<(string GroupName, Dictionary<(int Width, int Height), string> Frames)> ExtractAndReadAllGroups(string exePath)
     {
         if (!File.Exists(exePath))
         {
@@ -57,19 +75,38 @@ public static class PeIconResourceReader
 
         try
         {
-            IntPtr primaryGroupName = IntPtr.Zero;
+            var groupNames = new List<IntPtr>();
             EnumResourceNamesW(hModule, RT_GROUP_ICON, (hMod, type, name, lParam) =>
             {
-                primaryGroupName = name;
-                return false; // Stop at first group icon
+                groupNames.Add(name);
+                return true; // Keep enumerating: collect every group, not just the first.
             }, IntPtr.Zero);
 
-            if (primaryGroupName == IntPtr.Zero)
+            if (groupNames.Count == 0)
             {
                 throw new InvalidOperationException($"No RT_GROUP_ICON resources found in '{exePath}'.");
             }
 
-            IntPtr hResInfo = FindResourceW(hModule, primaryGroupName, RT_GROUP_ICON);
+            var results = new List<(string, Dictionary<(int, int), string>)>();
+            foreach (IntPtr groupName in groupNames)
+            {
+                string label = groupName.ToInt64() is >= 0 and <= ushort.MaxValue
+                    ? $"#{groupName}"
+                    : Marshal.PtrToStringUni(groupName) ?? groupName.ToString();
+                results.Add((label, ReadGroup(hModule, groupName)));
+            }
+
+            return results;
+        }
+        finally
+        {
+            FreeLibrary(hModule);
+        }
+    }
+
+    private static Dictionary<(int Width, int Height), string> ReadGroup(IntPtr hModule, IntPtr groupName)
+    {
+            IntPtr hResInfo = FindResourceW(hModule, groupName, RT_GROUP_ICON);
             if (hResInfo == IntPtr.Zero)
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to find RT_GROUP_ICON resource.");
@@ -159,10 +196,5 @@ public static class PeIconResourceReader
 
             icoStream.Position = 0;
             return IcoReader.ReadFrames(icoStream);
-        }
-        finally
-        {
-            FreeLibrary(hModule);
-        }
     }
 }

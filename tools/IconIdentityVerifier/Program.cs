@@ -35,49 +35,35 @@ public static class Program
             }
 
             var expectedFrames = IcoReader.ReadFrames(expectedIcoPath);
-            Dictionary<(int Width, int Height), string> targetFrames;
+            bool allMatched = true;
 
             switch (command)
             {
                 case "compare-ico":
-                    targetFrames = IcoReader.ReadFrames(targetPath);
+                {
+                    var targetFrames = IcoReader.ReadFrames(targetPath);
+                    allMatched = CompareFrames("target ICO", expectedFrames, targetFrames);
                     break;
+                }
                 case "compare-exe":
-                    targetFrames = PeIconResourceReader.ExtractAndReadFrames(targetPath);
+                {
+                    // CRUU14-012: verify every RT_GROUP_ICON in the executable, not just the
+                    // first one EnumResourceNamesW happens to report.
+                    var groups = PeIconResourceReader.ExtractAndReadAllGroups(targetPath);
+                    Console.WriteLine($"Found {groups.Count} icon group(s) in '{targetPath}'.");
+                    foreach ((string groupName, var targetFrames) in groups)
+                    {
+                        Console.WriteLine($"Verifying icon group '{groupName}':");
+                        if (!CompareFrames(groupName, expectedFrames, targetFrames))
+                        {
+                            allMatched = false;
+                        }
+                    }
                     break;
+                }
                 default:
                     Console.Error.WriteLine($"Unknown command '{command}'.");
                     return 1;
-            }
-
-            bool allMatched = true;
-
-            foreach (int size in IcoReader.MandatorySizes)
-            {
-                var key = (size, size);
-                if (!expectedFrames.TryGetValue(key, out string? expectedHash))
-                {
-                    Console.Error.WriteLine($"Missing mandatory size {size}x{size} in expected ICO.");
-                    allMatched = false;
-                    continue;
-                }
-
-                if (!targetFrames.TryGetValue(key, out string? targetHash))
-                {
-                    Console.Error.WriteLine($"Missing mandatory size {size}x{size} in target.");
-                    allMatched = false;
-                    continue;
-                }
-
-                if (!string.Equals(expectedHash, targetHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    Console.Error.WriteLine($"Mismatch for {size}x{size}: expected {expectedHash}, got {targetHash}");
-                    allMatched = false;
-                }
-                else
-                {
-                    Console.WriteLine($"Matched {size}x{size}: {expectedHash}");
-                }
             }
 
             if (!allMatched)
@@ -94,5 +80,43 @@ public static class Program
             Console.Error.WriteLine($"Error during icon identity verification: {ex.Message}");
             return 1;
         }
+    }
+
+    private static bool CompareFrames(
+        string label,
+        Dictionary<(int Width, int Height), string> expectedFrames,
+        Dictionary<(int Width, int Height), string> targetFrames)
+    {
+        bool allMatched = true;
+
+        foreach (int size in IcoReader.MandatorySizes)
+        {
+            var key = (size, size);
+            if (!expectedFrames.TryGetValue(key, out string? expectedHash))
+            {
+                Console.Error.WriteLine($"[{label}] Missing mandatory size {size}x{size} in expected ICO.");
+                allMatched = false;
+                continue;
+            }
+
+            if (!targetFrames.TryGetValue(key, out string? targetHash))
+            {
+                Console.Error.WriteLine($"[{label}] Missing mandatory size {size}x{size} in target.");
+                allMatched = false;
+                continue;
+            }
+
+            if (!string.Equals(expectedHash, targetHash, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine($"[{label}] Mismatch for {size}x{size}: expected {expectedHash}, got {targetHash}");
+                allMatched = false;
+            }
+            else
+            {
+                Console.WriteLine($"[{label}] Matched {size}x{size}: {expectedHash}");
+            }
+        }
+
+        return allMatched;
     }
 }

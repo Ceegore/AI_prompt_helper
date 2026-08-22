@@ -68,6 +68,45 @@
         'CRUU12_028_Primary_and_backup_commit_use_same_CanonicalLibraryPackage_bytes',
         'CRUU12_029_No_public_constructor_accepts_IAtomicTextWriter_for_persistence',
         'CRUU12_031_Crash_after_metadata_before_journal_retire_finalizes',
-        'CRUU12_032_Evidence_script_rejects_substring_only_TRX'
+        'CRUU12_032_Evidence_script_rejects_substring_only_TRX',
+
+        # CRUU13 (see cruu13.md). CRUU12-005/007/009/010/017/019/022/030/033/034 remain
+        # without a dedicated exact-name sentinel of their own; 019 and 030 are now covered in
+        # substance by the CRUU14 entries below (strict inventory, startup diagnostics) even
+        # though no test carries the literal "CRUU12_0XX" name.
+        'CRUU13_001_Fatal_mutation_exception_requests_shutdown_not_swallowed_as_save_error',
+        'CRUU13_001_Committed_mutation_exception_is_an_IOException_and_must_be_caught_first',
+        'CRUU13_002_Body_only_edit_postcommit_failure_keeps_new_body_not_rolled_back',
+        'CRUU13_002_Body_only_edit_precommit_failure_still_restores_old_body',
+        'CRUU13_003_ExistingTargetCommitLease_denies_concurrent_write_to_leased_metadata',
+        'CRUU13_003_ExistingTargetCommitLease_rejects_content_that_changed_since_inspection',
+        'CRUU13_004_Foreign_content_at_declared_probe_control_path_is_not_deleted',
+        'CRUU13_006_V3_retry_rejects_when_prompt_body_changed_but_library_hash_unchanged',
+        'CRUU13_009_UTF16_encoded_target_metadata_is_not_silently_accepted',
+        'CRUU13_011_Stale_foreign_probe_residue_is_not_wildcard_deleted',
+        'CRUU13_012_SynchronizeBackup_has_no_public_LibraryDocument_overload',
+        'CRUU13_018_Journal_missing_revision_is_rejected_not_defaulted_to_zero',
+        'CRUU13_019_CommitIfPrimaryUnchanged_rejects_stale_precondition',
+        'CRUU13_019_Edit_rejects_body_changed_externally_between_read_and_replace',
+
+        # CRUU14 (see cruu14.md).
+        'CRUU14_001_OwnedDurableStage_promotes_exact_written_content',
+        'CRUU14_001_OwnedDurableStage_DeleteExact_removes_the_exact_staged_object',
+        'CRUU14_001_ReplaceDurable_and_CreateNewDurable_round_trip_via_handle_bound_promotion',
+        'CRUU14_002_ExpectedFileCasReplacer_accepts_matching_content',
+        'CRUU14_002_ExpectedFileCasReplacer_rejects_content_changed_externally',
+        'CRUU14_002_CommitIfPrimaryUnchanged_uses_native_handle_check_not_just_cached_bytes',
+        'CRUU14_002_CreateCategory_external_primary_change_is_rejected_not_overwritten',
+        'CRUU14_002_MovePrompt_external_primary_change_is_rejected_not_overwritten',
+        'CRUU14_005_MutationJournal_DeleteStrict_rejects_when_content_changed_since_capture',
+        'CRUU14_005_MigrationManifest_DeleteStrict_rejects_wrong_attempt_or_phase',
+        'CRUU14_007_Existing_target_UTF16_prompt_body_is_rejected',
+        'CRUU14_008_ExistingTargetCommitLease_rejects_symlinked_metadata_file',
+        'CRUU14_009_SynchronizeBackup_CanonicalLibraryPackage_overload_is_not_public',
+        'CRUU14_012_Canonical_generator_renders_each_size_from_vector_source',
+        'CRUU14_012_Approved_SVG_hash_matches_manifest',
+        'CRUU14_012_Checked_in_ICO_matches_approved_normalized_RGBA_hashes',
+        'CRUU14_012_Each_native_frame_matches_approved_normalized_RGBA_hash',
+        'CRUU14_011_Required_manifest_contains_all_CRUU12_CRUU13_CRUU14_sentinels'
     )
 }

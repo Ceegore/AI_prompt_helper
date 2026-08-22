@@ -552,15 +552,25 @@ public partial class MainWindow : Window
         _fatalMutationShutdownRequested = true;
         try
         {
-            MessageBox.Show(
-                this,
+            string message =
                 "A prompt change was saved, but Prompt Helper could not finish its recovery bookkeeping.\n\n" +
                 "Prompt Helper must close now so it does not continue running with an unresolved recovery journal.\n\n" +
                 "Open Prompt Helper again after it closes.\n\n" +
-                ex.Message,
-                "Restart Required",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+                ex.Message;
+
+            if (_showRestartMessage != null)
+            {
+                _showRestartMessage(message, "Restart Required");
+            }
+            else
+            {
+                MessageBox.Show(
+                    this,
+                    message,
+                    "Restart Required",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
         finally
         {

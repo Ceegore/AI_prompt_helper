@@ -63,14 +63,17 @@ public sealed class Cruu9ComprehensiveVerificationTests
         {
             CreateNoWindow = true,
             UseShellExecute = false,
+            // Only stderr is ever read; leaving stdout unredirected (inherited) avoids any
+            // risk of that unread pipe filling and blocking the child while we wait on it.
             RedirectStandardError = true,
-            RedirectStandardOutput = true
+            RedirectStandardOutput = false
         };
         using var proc = Process.Start(psi)!;
+        string stderr = proc.StandardError.ReadToEndAsync().GetAwaiter().GetResult();
         proc.WaitForExit();
         if (proc.ExitCode != 0)
         {
-            throw new InvalidOperationException($"mklink failed: {proc.StandardError.ReadToEnd()}");
+            throw new InvalidOperationException($"mklink failed: {stderr}");
         }
     }
 
@@ -1181,9 +1184,13 @@ public sealed class Cruu9ComprehensiveVerificationTests
             RedirectStandardError = true
         };
         using var proc = Process.Start(psi)!;
-        string stdout = proc.StandardOutput.ReadToEnd();
-        string stderr = proc.StandardError.ReadToEnd();
+        // Drain both streams concurrently with waiting for exit to avoid a pipe-buffer
+        // deadlock if the script's output grows large enough to fill either OS pipe.
+        System.Threading.Tasks.Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        System.Threading.Tasks.Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
         proc.WaitForExit();
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
         Assert.AreEqual(0, proc.ExitCode, $"Script failed with exit code {proc.ExitCode}.\nStdout: {stdout}\nStderr: {stderr}");
     }
 
@@ -1212,8 +1219,11 @@ public sealed class Cruu9ComprehensiveVerificationTests
         {
             CreateNoWindow = true,
             UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
+            // Output is not inspected here, so it is not redirected at all — redirecting a
+            // pipe and never reading it risks a deadlock if the child fills that pipe's OS
+            // buffer while WaitForExit() blocks waiting for it to exit.
+            RedirectStandardOutput = false,
+            RedirectStandardError = false
         };
         using var proc = Process.Start(psi)!;
         proc.WaitForExit();
