@@ -79,6 +79,42 @@ public sealed class LibraryRepository
         return StrictUtf8Text.Encode(json);
     }
 
+    /// <summary>
+    /// Read-only commit precondition: throws if the primary library file no longer
+    /// matches <paramref name="expectedRawSha256Hex"/>. Does not write anything, so it is
+    /// safe to call before a durable journal phase transition that must not be preceded
+    /// by an undetected external change.
+    /// </summary>
+    public void VerifyPrimaryUnchanged(string expectedRawSha256Hex)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedRawSha256Hex);
+
+        byte[] currentRaw;
+        try
+        {
+            currentRaw = File.ReadAllBytes(_paths.LibraryPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new InvalidOperationException(
+                "The library changed outside the current Prompt Helper state. Reload before editing.", ex);
+        }
+
+        string currentHash = Convert.ToHexStringLower(SHA256.HashData(currentRaw));
+        if (!string.Equals(currentHash, expectedRawSha256Hex, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The library changed outside the current Prompt Helper state. Reload before editing.");
+        }
+    }
+
+    public CommitResult CommitIfPrimaryUnchanged(CanonicalLibraryPackage package, string expectedRawSha256Hex)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        VerifyPrimaryUnchanged(expectedRawSha256Hex);
+        return Commit(package);
+    }
+
     public CommitResult Commit(CanonicalLibraryPackage package)
     {
         ArgumentNullException.ThrowIfNull(package);
@@ -159,13 +195,6 @@ public sealed class LibraryRepository
                 "The library was saved, but its safety backup could not be synchronized (safety backup could not be updated). " +
                 $"Current data remains stored in library.json. {ex.Message}");
         }
-    }
-
-    public CommitResult SynchronizeBackup(LibraryDocument document)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        CanonicalLibraryPackage package = CreateCanonicalPackage(document);
-        return SynchronizeBackup(package);
     }
 
     internal CommitResult SynchronizeBackup(HealthyLibraryPackage package)

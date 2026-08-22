@@ -329,6 +329,27 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             throw;
         }
 
+        // 6b. Acquire a commit lease on the existing target's metadata and active prompt
+        // bodies, binding the exact content already verified above through the settings
+        // commit below. Without this, an external process could still edit the target
+        // between revalidation #2 and the settings write; the open FileShare.Read handles
+        // deny concurrent writers for that window, closing the gap.
+        if (lockedInspection.EffectiveDocument is null ||
+            string.IsNullOrWhiteSpace(lockedInspection.EffectiveMetadataPath) ||
+            lockedInspection.Fingerprint is null)
+        {
+            TargetReservationCleanupResult cleanup = reservation.Release();
+            var ex = new InvalidOperationException(
+                "Target library inspection is missing content required to acquire a commit lease. Transition cancelled.");
+            if (!cleanup.Success)
+            {
+                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
+            }
+            throw ex;
+        }
+
+        using var commitLease = AcquireExistingTargetCommitLease(bound, reservation, lockedInspection);
+
         // 7. Atomic Settings Update with Precondition
         var newSettings = new AppSettings
         {
@@ -371,6 +392,30 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             Warning: warning);
     }
 
+    private static ExistingTargetCommitLease AcquireExistingTargetCommitLease(
+        BoundTargetRoot bound,
+        TargetRootReservation reservation,
+        DataFolderMigrationService.TargetInspection lockedInspection)
+    {
+        try
+        {
+            return ExistingTargetCommitLease.Acquire(
+                bound.PhysicalRoot,
+                lockedInspection.EffectiveMetadataPath!,
+                lockedInspection.EffectiveDocument!,
+                lockedInspection.Fingerprint!);
+        }
+        catch (Exception ex)
+        {
+            TargetReservationCleanupResult cleanup = reservation.Release();
+            if (!cleanup.Success)
+            {
+                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
+            }
+            throw;
+        }
+    }
+
     private DataFolderTransitionResult HandleEmptyTargetTransition(
         DataRootRuntimeContext runtime,
         BoundTargetRoot bound,
@@ -388,220 +433,280 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                 $"The selected target folder is currently in use by another instance: '{bound.PhysicalRoot}'. Close other instances and retry.");
         }
 
-        // 3. PHYSICAL REVALIDATION #1 after directory creation under lock
+        // 2b. Acquire a root-only operation lease immediately, so the target root's identity
+        // is protected for the rest of this operation, including retry cleanup below. Only
+        // the root is leased here (not yet "prompts"/"recovery") because a deny-delete lease
+        // on a directory blocks its own deletion, and retry cleanup may need to delete
+        // "prompts"/"recovery" left behind by an interrupted attempt. Once cleanup and copying
+        // have settled their final state, they are bound into this same lease.
+        var targetOpLease = ManagedTargetOperationLease.AcquireRootOnly(bound.PhysicalRoot);
+
         try
         {
-            AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
-        }
-        catch (Exception ex)
-        {
-            TargetReservationCleanupResult cleanup = reservation.Release();
-            if (!cleanup.Success)
+            // 3. PHYSICAL REVALIDATION #1 after directory creation under lock
+            try
             {
-                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
+                AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
             }
-            throw;
-        }
-
-        // 4. Resolve interrupted state if needed, then target must be empty
-        if (isInterruptedRecovery)
-        {
-            var primaryFile = snapshot.Files.FirstOrDefault(f => f.Role == MigrationPayloadRole.PrimaryMetadata);
-            var recoveryContext = new MigrationRecoveryContext(
-                bound.PhysicalRoot,
-                runtime.BootstrapPhysicalRoot,
-                ExpectedSourcePhysicalRoot: runtime.ActivePhysicalRoot,
-                ExpectedSourcePayloadFingerprint: MigrationPayloadFingerprint.Compute(snapshot.Files),
-                ExpectedSourceLibrarySha256: primaryFile != null ? Convert.ToHexStringLower(primaryFile.Sha256) : null);
-
-            RecoveryResult recoveryResult = _recoveryService.RecoverForRetry(recoveryContext);
-            if (!recoveryResult.Success)
+            catch (Exception ex)
             {
                 TargetReservationCleanupResult cleanup = reservation.Release();
-                var ex = recoveryResult.Error ?? new InvalidDataException(recoveryResult.ErrorMessage ?? "Failed to recover interrupted migration target.");
                 if (!cleanup.Success)
                 {
                     throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
                 }
+                throw;
+            }
+
+            // 4. Resolve interrupted state if needed, then target must be empty
+            if (isInterruptedRecovery)
+            {
+                var primaryFile = snapshot.Files.FirstOrDefault(f => f.Role == MigrationPayloadRole.PrimaryMetadata);
+                var recoveryContext = new MigrationRecoveryContext(
+                    bound.PhysicalRoot,
+                    runtime.BootstrapPhysicalRoot,
+                    ExpectedSourcePhysicalRoot: runtime.ActivePhysicalRoot,
+                    ExpectedSourcePayloadFingerprint: MigrationPayloadFingerprint.Compute(snapshot.Files),
+                    ExpectedSourceLibrarySha256: primaryFile != null ? Convert.ToHexStringLower(primaryFile.Sha256) : null);
+
+                RecoveryResult recoveryResult = _recoveryService.RecoverForRetry(recoveryContext);
+                if (!recoveryResult.Success)
+                {
+                    TargetReservationCleanupResult cleanup = reservation.Release();
+                    var ex = recoveryResult.Error ?? new InvalidDataException(recoveryResult.ErrorMessage ?? "Failed to recover interrupted migration target.");
+                    if (!cleanup.Success)
+                    {
+                        throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
+                    }
+                    throw ex;
+                }
+            }
+
+            _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
+
+            var targetInspection = _migrationService.InspectTarget(bound.PhysicalRoot, isReservationActive: true);
+            if (targetInspection.Kind != DataFolderMigrationService.TargetLibraryKind.Empty)
+            {
+                TargetReservationCleanupResult precommitCleanup = reservation.Release();
+                var ex = new InvalidOperationException(
+                    $"The target folder '{bound.PhysicalRoot}' is not empty (found state: {targetInspection.Kind}). Transition aborted.");
+                if (!precommitCleanup.Success)
+                {
+                    throw new MigrationRollbackException(ex, bound.PhysicalRoot, precommitCleanup.Failures);
+                }
                 throw ex;
             }
-        }
 
-        _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
+            // 5. Capture target baseline from reservation authority and allocate AttemptId
+            Guid attemptId = Guid.NewGuid();
+            var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
+            var targetBaseline = new MigrationTargetBaseline(
+                targetRootExistedBefore: reservation.Baseline.RootExistedBefore,
+                promptsDirectoryExistedBefore: reservation.Baseline.RootExistedBefore && Directory.Exists(Path.Combine(bound.PhysicalRoot, "prompts")),
+                recoveryDirectoryExistedBefore: reservation.Baseline.RootExistedBefore && Directory.Exists(Path.Combine(bound.PhysicalRoot, "recovery")));
 
-        var targetInspection = _migrationService.InspectTarget(bound.PhysicalRoot, isReservationActive: true);
-        if (targetInspection.Kind != DataFolderMigrationService.TargetLibraryKind.Empty)
-        {
-            TargetReservationCleanupResult precommitCleanup = reservation.Release();
-            var ex = new InvalidOperationException(
-                $"The target folder '{bound.PhysicalRoot}' is not empty (found state: {targetInspection.Kind}). Transition aborted.");
-            if (!precommitCleanup.Success)
-            {
-                throw new MigrationRollbackException(ex, bound.PhysicalRoot, precommitCleanup.Failures);
-            }
-            throw ex;
-        }
-
-        // 5. Capture target baseline from reservation authority and allocate AttemptId
-        Guid attemptId = Guid.NewGuid();
-        var probePlan = MigrationCapabilityProbePlan.Create(attemptId);
-        var targetBaseline = new MigrationTargetBaseline(
-            targetRootExistedBefore: reservation.Baseline.RootExistedBefore,
-            promptsDirectoryExistedBefore: reservation.Baseline.RootExistedBefore && Directory.Exists(Path.Combine(bound.PhysicalRoot, "prompts")),
-            recoveryDirectoryExistedBefore: reservation.Baseline.RootExistedBefore && Directory.Exists(Path.Combine(bound.PhysicalRoot, "recovery")));
-
-        var manifest = MigrationManifestBuilder.BuildCopying(
-            runtime.ActivePhysicalRoot,
-            bound.PhysicalRoot,
-            snapshot,
-            attemptId,
-            probePlan,
-            targetBaseline);
-
-        // 6. Create durable Copying manifest directly at final path
-        string markerPath = Path.Combine(bound.PhysicalRoot, ".prompthelper-migration.json");
-
-        try
-        {
-            _manifestRepo.CreateInitialCopyingManifestDurable(markerPath, manifest);
-        }
-        catch (Exception ex)
-        {
-            TargetReservationCleanupResult cleanup = reservation.Release();
-            if (!cleanup.Success)
-            {
-                throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
-            }
-            throw;
-        }
-
-        // 7. Perform migration under target operation lease and target transaction
-        using var targetOpLease = ManagedTargetOperationLease.Acquire(
-            bound.PhysicalRoot,
-            promptsMayBeMissing: true,
-            recoveryMayBeMissing: true);
-
-        using var tx = new DataFolderMigrationService.MigrationTargetTransaction(bound.PhysicalRoot);
-        bool settingsCommitted = false;
-        CapabilityValidationResult? capResult = null;
-        SettingsSaveResult? saveResult = null;
-
-        try
-        {
-            _migrationService.CopySnapshotToTarget(
+            var manifest = MigrationManifestBuilder.BuildCopying(
                 runtime.ActivePhysicalRoot,
                 bound.PhysicalRoot,
                 snapshot,
-                manifest,
-                tx);
+                attemptId,
+                probePlan,
+                targetBaseline);
 
-            capResult = _capabilityValidator.ValidateWritable(
-                bound.PhysicalRoot,
-                tx,
-                null,
-                probePlan);
-
-            // Assert ready gate before phase change
-            _readyGate.AssertReady(
-                runtime.ActivePhysicalRoot,
-                bound.PhysicalRoot,
-                manifest,
-                snapshot);
-
-            // Update manifest to ReadyToCommit via write-through staging
-            manifest.Phase = MigrationManifestPhase.ReadyToCommit;
-            _manifestRepo.WriteReadyManifestDurable(markerPath, manifest);
-
-            // 8. PHYSICAL REVALIDATION #2 immediately before settings commit
-            AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
-            _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
-
-            // 9. Acquire commit lease on payload files from ReadyGate through settings save
-            using var commitLease = MigrationPayloadCommitLease.Acquire(
-                runtime.ActivePhysicalRoot,
-                bound.PhysicalRoot,
-                manifest);
-
-            // 10. Commit settings with precondition token
-            var newSettings = new AppSettings
+            // If "prompts"/"recovery" already existed before this attempt (e.g. from a prior
+            // successful partial state the baseline captured), bind them into the lease now;
+            // otherwise they will be bound after copying creates them, below.
+            if (targetBaseline.PromptsDirectoryExistedBefore)
             {
-                SchemaVersion = AppSettings.CurrentSchemaVersion,
-                DataRootPath = bound.LexicalRoot
-            };
+                targetOpLease.BindManagedChild(Path.Combine(bound.PhysicalRoot, "prompts"));
+            }
 
-            saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
-            settingsCommitted = true;
-            tx.Commit();
-        }
-        catch (Exception original)
-        {
-            if (!settingsCommitted)
+            if (targetBaseline.RecoveryDirectoryExistedBefore)
             {
-                // Rollback transaction payload WHILE manifest is still on disk
-                MigrationRollbackResult rollback = tx.Rollback();
-                var allFailures = new List<MigrationRollbackFailure>(rollback.Failures);
+                targetOpLease.BindManagedChild(Path.Combine(bound.PhysicalRoot, "recovery"));
+            }
 
-                MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(bound.PhysicalRoot, manifest);
-                bool cleanRollback = !inventory.HasUnknownEntries &&
-                                     inventory.PayloadTemps.Count == 0 &&
-                                     inventory.FinalArtifacts.Count == 0 &&
-                                     allFailures.Count == 0;
+            // 6. Create durable Copying manifest directly at final path
+            string markerPath = Path.Combine(bound.PhysicalRoot, ".prompthelper-migration.json");
 
-                if (cleanRollback)
+            try
+            {
+                _manifestRepo.CreateInitialCopyingManifestDurable(markerPath, manifest);
+            }
+            catch (Exception ex)
+            {
+                TargetReservationCleanupResult cleanup = reservation.Release();
+                if (!cleanup.Success)
                 {
-                    try
-                    {
-                        _manifestRepo.DeleteStrict(markerPath);
-                    }
-                    catch (Exception markerEx)
-                    {
-                        allFailures.Add(new MigrationRollbackFailure(markerPath, "DeleteManifestMarker", markerEx.Message));
-                        cleanRollback = false;
-                    }
+                    throw new MigrationRollbackException(ex, bound.PhysicalRoot, cleanup.Failures);
                 }
-
-                targetOpLease.Dispose();
-
-                TargetReservationCleanupResult resCleanup = reservation.Release();
-                allFailures.AddRange(resCleanup.Failures);
-
-                if (allFailures.Count > 0 || !cleanRollback)
-                {
-                    throw new MigrationRollbackException(original, bound.PhysicalRoot, allFailures);
-                }
-
                 throw;
             }
+
+            // 7. Perform migration under target transaction
+            using var tx = new DataFolderMigrationService.MigrationTargetTransaction(bound.PhysicalRoot);
+            bool settingsCommitted = false;
+            CapabilityValidationResult? capResult = null;
+            SettingsSaveResult? saveResult = null;
+
+            try
+            {
+                _migrationService.CopySnapshotToTarget(
+                    runtime.ActivePhysicalRoot,
+                    bound.PhysicalRoot,
+                    snapshot,
+                    manifest,
+                    tx);
+
+                // Copying may have just created "prompts"/"recovery" for the first time in
+                // this attempt; bind whichever now exist and are not already bound so the
+                // lease covers them for the remaining commit-critical steps below.
+                if (!targetBaseline.PromptsDirectoryExistedBefore)
+                {
+                    targetOpLease.BindManagedChildIfPresent(Path.Combine(bound.PhysicalRoot, "prompts"));
+                }
+
+                if (!targetBaseline.RecoveryDirectoryExistedBefore)
+                {
+                    targetOpLease.BindManagedChildIfPresent(Path.Combine(bound.PhysicalRoot, "recovery"));
+                }
+
+                capResult = _capabilityValidator.ValidateWritable(
+                    bound.PhysicalRoot,
+                    tx,
+                    null,
+                    probePlan);
+
+                // Assert ready gate before phase change
+                _readyGate.AssertReady(
+                    runtime.ActivePhysicalRoot,
+                    bound.PhysicalRoot,
+                    manifest,
+                    snapshot,
+                    runtime.BootstrapPhysicalRoot);
+
+                // Update manifest to ReadyToCommit via write-through staging
+                manifest.Phase = MigrationManifestPhase.ReadyToCommit;
+                _manifestRepo.WriteReadyManifestDurable(markerPath, manifest);
+
+                // 8. PHYSICAL REVALIDATION #2 immediately before settings commit
+                AssertLocatorStillMapsToBoundTarget(runtime.ActivePhysicalRoot, bound, runtime.BootstrapLexicalRoot);
+                _treeValidator.ValidateManagedTree(bound.PhysicalRoot, ManagedTreeValidationMode.PreCreation);
+
+                // 9. Acquire commit lease on payload files from ReadyGate through settings save
+                using var commitLease = MigrationPayloadCommitLease.Acquire(
+                    runtime.ActivePhysicalRoot,
+                    bound.PhysicalRoot,
+                    manifest);
+
+                // 10. Commit settings with precondition token
+                var newSettings = new AppSettings
+                {
+                    SchemaVersion = AppSettings.CurrentSchemaVersion,
+                    DataRootPath = bound.LexicalRoot
+                };
+
+                saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
+                settingsCommitted = true;
+                tx.Commit();
+            }
+            catch (Exception original)
+            {
+                if (!settingsCommitted)
+                {
+                    // Release the operation lease before rolling back: it holds "prompts"/
+                    // "recovery" open without FILE_SHARE_DELETE (that is the whole point of a
+                    // deny-delete lease), which would otherwise block Rollback()'s own removal
+                    // of those same directories with a sharing violation. The reservation
+                    // (released further below) remains the primary exclusion mechanism during
+                    // cleanup.
+                    targetOpLease.Dispose();
+
+                    // Rollback transaction payload WHILE manifest is still on disk
+                    MigrationRollbackResult rollback = tx.Rollback();
+                    var allFailures = new List<MigrationRollbackFailure>(rollback.Failures);
+
+                    bool isBootstrapRoot = PathIdentity.Equals(bound.PhysicalRoot, runtime.BootstrapPhysicalRoot);
+                    MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(bound.PhysicalRoot, manifest, isBootstrapRoot);
+
+                    // The marker itself and the reservation's own ".app.lock" are still on
+                    // disk at this point in the rollback (the marker is deleted right after,
+                    // and the reservation is still held) so they are expected, not residue.
+                    // Any OTHER declared control (a probe file, a staging file) still present
+                    // means cleanup did not finish, and the marker must not be retired while
+                    // that residue remains, even though it is a "recognized" (manifest-owned)
+                    // path rather than an unknown one.
+                    string appLockPath = PathIdentity.NormalizeForComparison(Path.Combine(bound.PhysicalRoot, ".app.lock"));
+                    string normalizedMarkerPath = PathIdentity.NormalizeForComparison(markerPath);
+                    bool hasResidualControls = inventory.DeclaredControls.Any(control =>
+                        !PathIdentity.Equals(control, normalizedMarkerPath) &&
+                        !PathIdentity.Equals(control, appLockPath));
+
+                    bool cleanRollback = !inventory.HasUnknownEntries &&
+                                         inventory.PayloadTemps.Count == 0 &&
+                                         inventory.FinalArtifacts.Count == 0 &&
+                                         !hasResidualControls &&
+                                         inventory.AttemptCreatedDirectories.Count == 0 &&
+                                         allFailures.Count == 0;
+
+                    if (cleanRollback)
+                    {
+                        try
+                        {
+                            _manifestRepo.DeleteStrict(markerPath);
+                        }
+                        catch (Exception markerEx)
+                        {
+                            allFailures.Add(new MigrationRollbackFailure(markerPath, "DeleteManifestMarker", markerEx.Message));
+                            cleanRollback = false;
+                        }
+                    }
+
+                    TargetReservationCleanupResult resCleanup = reservation.Release();
+                    allFailures.AddRange(resCleanup.Failures);
+
+                    if (allFailures.Count > 0 || !cleanRollback)
+                    {
+                        throw new MigrationRollbackException(original, bound.PhysicalRoot, allFailures);
+                    }
+
+                    throw;
+                }
+            }
+
+            // POINT OF NO RETURN
+            reservation.CommitRootOwnership();
+
+            string? manifestCleanupWarning = null;
+            try
+            {
+                _manifestRepo.DeleteStrict(markerPath);
+            }
+            catch (Exception ex)
+            {
+                manifestCleanupWarning = $"Could not delete migration marker: {ex.Message}";
+            }
+
+            TargetReservationCleanupResult postcommitCleanup = reservation.Release();
+
+            string? warning = WarningCombiner.Combine(
+                settingsSnapshot.Warning,
+                capResult?.Warning,
+                saveResult?.Warning,
+                manifestCleanupWarning,
+                postcommitCleanup.ToWarning());
+
+            return new DataFolderTransitionResult(
+                Changed: true,
+                RestartRequired: true,
+                ExistingLibrarySelected: false,
+                NormalizedTargetRoot: bound.LexicalRoot,
+                Warning: warning);
         }
-
-        // POINT OF NO RETURN
-        reservation.CommitRootOwnership();
-
-        string? manifestCleanupWarning = null;
-        try
+        finally
         {
-            _manifestRepo.DeleteStrict(markerPath);
+            targetOpLease.Dispose();
         }
-        catch (Exception ex)
-        {
-            manifestCleanupWarning = $"Could not delete migration marker: {ex.Message}";
-        }
-
-        TargetReservationCleanupResult postcommitCleanup = reservation.Release();
-
-        string? warning = WarningCombiner.Combine(
-            settingsSnapshot.Warning,
-            capResult?.Warning,
-            saveResult?.Warning,
-            manifestCleanupWarning,
-            postcommitCleanup.ToWarning());
-
-        return new DataFolderTransitionResult(
-            Changed: true,
-            RestartRequired: true,
-            ExistingLibrarySelected: false,
-            NormalizedTargetRoot: bound.LexicalRoot,
-            Warning: warning);
     }
 
     private static bool FingerprintsEqual(byte[]? a, byte[]? b)

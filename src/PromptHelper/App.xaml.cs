@@ -19,6 +19,8 @@ public partial class App : Application
 
         DispatcherUnhandledException += App_DispatcherUnhandledException;
 
+        var diagnostics = new StartupDiagnosticCollector();
+
         try
         {
             var durableWriter = new WindowsDurableAtomicFileWriter();
@@ -93,9 +95,19 @@ public partial class App : Application
 
             _managedTreeLease = ManagedDataRootSessionLease.Acquire(paths.RootDirectory);
 
-            DataRootTempReconciler.Reconcile(
+            TempReconciliationResult dataRootTempResult = DataRootTempReconciler.Reconcile(
                 paths,
                 isBootstrapRoot: PathIdentity.Equals(runtime.ActivePhysicalRoot, runtime.BootstrapPhysicalRoot));
+
+            if (!dataRootTempResult.Success)
+            {
+                foreach (TempCleanupFailure failure in dataRootTempResult.Failures)
+                {
+                    diagnostics.Warning(
+                        "DataRootTempCleanupFailed",
+                        $"Could not remove leftover temporary file '{failure.Path}': {failure.ErrorMessage}");
+                }
+            }
 
             var journalRepo = new LibraryMutationJournalRepository(paths, durableWriter);
             var mutationRecovery = new LibraryMutationRecoveryService(paths, journalRepo, durableWriter, verifiedDeleter);
@@ -109,6 +121,11 @@ public partial class App : Application
                     MessageBoxImage.Error);
                 Shutdown();
                 return;
+            }
+
+            if (!string.IsNullOrEmpty(mutResult.Warning))
+            {
+                diagnostics.Warning("MutationRecoveryWarning", mutResult.Warning);
             }
 
             var deleter = new FileDeleter();
@@ -132,16 +149,32 @@ public partial class App : Application
                 return;
             }
 
-            // Reconcile unreferenced prompt body orphans if backup authority is current
+            // Reconcile unreferenced prompt body orphans if backup authority is current.
+            // Only defer cleanup for expected "backup not usable as authority" conditions
+            // (missing/unreadable/corrupt/future-schema backup, or an orphan the reconciler
+            // itself refused as unsafe); any other exception is a programmer error and must
+            // not be swallowed.
             try
             {
                 var backupDoc = libraryRepo.ReadBackup();
                 var orphanReconciler = new PromptOrphanReconciler(paths, promptRepo, journalRepo);
-                orphanReconciler.Reconcile(new OrphanReconciliationAuthority(startupResult.Document, backupDoc));
+                OrphanReconciliationResult orphanResult = orphanReconciler.Reconcile(
+                    new OrphanReconciliationAuthority(startupResult.Document, backupDoc));
+
+                if (!string.IsNullOrEmpty(orphanResult.Warning))
+                {
+                    diagnostics.Warning("OrphanReconciliationWarning", orphanResult.Warning);
+                }
             }
-            catch
+            catch (Exception ex) when (
+                ex is IOException or
+                UnauthorizedAccessException or
+                InvalidDataException or
+                UnsupportedLibrarySchemaException)
             {
-                // Defer orphan cleanup if backup is missing, corrupt, or future schema
+                diagnostics.Information(
+                    "OrphanReconciliationDeferred",
+                    $"Deferred unreferenced prompt-body cleanup: safety backup is not usable as authority ({ex.Message}).");
             }
 
             var inspector = new LibraryPackageInspector(paths);
@@ -166,20 +199,26 @@ public partial class App : Application
 
             if (!string.IsNullOrEmpty(settingsResult.Warning))
             {
-                MessageBox.Show(
-                    settingsResult.Warning,
-                    settingsResult.RecoveredFromBackup
-                        ? "Settings Recovery Notice"
-                        : "Settings Backup Warning",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                diagnostics.Warning(
+                    settingsResult.RecoveredFromBackup ? "SettingsRecovery" : "SettingsBackupWarning",
+                    settingsResult.Warning);
             }
 
             if (!string.IsNullOrEmpty(startupResult.Warning))
             {
+                diagnostics.Warning("LibraryStartupWarning", startupResult.Warning);
+            }
+
+            // All nonfatal startup warnings are aggregated through one collector and shown
+            // once, instead of one MessageBox per source: a reconciliation failure or a
+            // recovery warning must be visible, not silently dropped alongside whichever
+            // warning happened to already have a MessageBox call.
+            string? aggregatedWarning = diagnostics.BuildAggregatedWarning();
+            if (!string.IsNullOrEmpty(aggregatedWarning))
+            {
                 MessageBox.Show(
-                    startupResult.Warning,
-                    "Prompt Helper Recovery Notice",
+                    aggregatedWarning,
+                    "Prompt Helper Startup Notices",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }

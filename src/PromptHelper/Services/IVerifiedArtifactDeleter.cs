@@ -10,6 +10,15 @@ namespace PromptHelper.Services;
 public interface IVerifiedArtifactDeleter
 {
     void VerifyAndDelete(string physicalRoot, string path, long expectedLength, string expectedSha256Hex);
+
+    /// <summary>
+    /// Deletes a manifest-owned file using the same reparse-point and strict-descendant-path
+    /// identity checks as <see cref="VerifyAndDelete"/>, but without requiring the content to
+    /// match an expected hash/length. Use only for artifacts whose content is legitimately
+    /// allowed to be incomplete or partially written (e.g. an in-progress payload temp file
+    /// interrupted mid-copy), where identity (not content) is the safety property that matters.
+    /// </summary>
+    void VerifyIdentityAndDelete(string physicalRoot, string path);
 }
 
 public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
@@ -67,11 +76,56 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
 
     public void VerifyAndDelete(string physicalRoot, string path, long expectedLength, string expectedSha256Hex)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
 
-        using SafeFileHandle handle = CreateFileW(
+        OpenForVerifiedDelete(physicalRoot, path, out SafeFileHandle? handle);
+        if (handle is null)
+        {
+            return;
+        }
+
+        using (handle)
+        {
+            using var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: false);
+            long currentLength = stream.Length;
+            if (currentLength != expectedLength)
+            {
+                throw new InvalidDataException(
+                    $"Artifact '{path}' length mismatch before deletion. Expected {expectedLength} bytes, found {currentLength} bytes.");
+            }
+
+            byte[] currentHash = SHA256.HashData(stream);
+            string currentHex = Convert.ToHexStringLower(currentHash);
+            if (!string.Equals(currentHex, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Artifact '{path}' SHA-256 hash mismatch before deletion. Expected {expectedSha256Hex}, found {currentHex}.");
+            }
+
+            MarkForDeletion(handle, path);
+        }
+    }
+
+    public void VerifyIdentityAndDelete(string physicalRoot, string path)
+    {
+        OpenForVerifiedDelete(physicalRoot, path, out SafeFileHandle? handle);
+        if (handle is null)
+        {
+            return;
+        }
+
+        using (handle)
+        {
+            MarkForDeletion(handle, path);
+        }
+    }
+
+    private static void OpenForVerifiedDelete(string physicalRoot, string path, out SafeFileHandle? handle)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        SafeFileHandle opened = CreateFileW(
             path,
             GENERIC_READ | DELETE,
             FILE_SHARE_NONE,
@@ -80,12 +134,14 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
             FILE_FLAG_OPEN_REPARSE_POINT,
             IntPtr.Zero);
 
-        if (handle.IsInvalid)
+        if (opened.IsInvalid)
         {
             int error = Marshal.GetLastWin32Error();
+            opened.Dispose();
             if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
             {
                 // Truly missing
+                handle = null;
                 return;
             }
 
@@ -95,41 +151,41 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
         }
 
         if (!GetFileInformationByHandleEx(
-                handle,
+                opened,
                 FileAttributeTagInfo,
                 out FILE_ATTRIBUTE_TAG_INFO tagInfo,
                 (uint)Marshal.SizeOf<FILE_ATTRIBUTE_TAG_INFO>()))
         {
+            int error = Marshal.GetLastWin32Error();
+            opened.Dispose();
             throw new IOException(
                 $"Unable to inspect opened artifact attributes for '{path}'.",
-                new Win32Exception(Marshal.GetLastWin32Error()));
+                new Win32Exception(error));
         }
 
         if ((tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
         {
+            opened.Dispose();
             throw new InvalidDataException(
                 $"Recovery refuses to delete reparse artifact '{path}'.");
         }
 
-        string finalPath = WindowsFinalPathHelper.GetNormalizedDosPath(handle);
-        WindowsFinalPathHelper.AssertStrictDescendantFile(physicalRoot, finalPath);
-
-        using var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: false);
-        long currentLength = stream.Length;
-        if (currentLength != expectedLength)
+        string finalPath = WindowsFinalPathHelper.GetNormalizedDosPath(opened);
+        try
         {
-            throw new InvalidDataException(
-                $"Artifact '{path}' length mismatch before deletion. Expected {expectedLength} bytes, found {currentLength} bytes.");
+            WindowsFinalPathHelper.AssertStrictDescendantFile(physicalRoot, finalPath);
+        }
+        catch
+        {
+            opened.Dispose();
+            throw;
         }
 
-        byte[] currentHash = SHA256.HashData(stream);
-        string currentHex = Convert.ToHexStringLower(currentHash);
-        if (!string.Equals(currentHex, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException(
-                $"Artifact '{path}' SHA-256 hash mismatch before deletion. Expected {expectedSha256Hex}, found {currentHex}.");
-        }
+        handle = opened;
+    }
 
+    private static void MarkForDeletion(SafeFileHandle handle, string path)
+    {
         var dispInfo = new FILE_DISPOSITION_INFO { DeleteFile = true };
         if (!SetFileInformationByHandle(
             handle,

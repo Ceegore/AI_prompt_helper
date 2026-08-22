@@ -846,9 +846,12 @@ public sealed class Cruu9ComprehensiveVerificationTests
         var repo = new MigrationManifestRepository();
         repo.CreateInitialCopyingManifestDurable(markerPath, manifest);
 
-        // Inject probe file residue
+        // Inject probe file residue matching what a real crashed attempt would have left:
+        // the manifest records the probe's exact expected content ("create"), and recovery
+        // now verifies that hash/length before deleting a declared control, so the fixture
+        // must match it to simulate a real crash rather than a foreign-file substitution.
         string probeFile = Path.Combine(target.Root, probePlan.RootProbe.CurrentRelativePath);
-        File.WriteAllText(probeFile, "probe");
+        File.WriteAllText(probeFile, "create");
 
         var recovery = new MigrationRecoveryService();
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);

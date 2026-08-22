@@ -86,7 +86,7 @@ internal sealed class PromptMutationCoordinator
                 journal,
                 LibraryMutationPhase.BodyDurable);
 
-            CommitResult result = _libraryRepo.Commit(newPackage);
+            CommitResult result = _libraryRepo.CommitIfPrimaryUnchanged(newPackage, disk.RawSha256Hex);
 
             try
             {
@@ -165,6 +165,27 @@ internal sealed class PromptMutationCoordinator
                 journal,
                 LibraryMutationPhase.RecoveryBodyDurable);
 
+            // Narrow the TOCTOU window on the prompt body: re-verify the active body still
+            // matches what was read at the start of this operation immediately before the
+            // destructive replace, instead of trusting a read that may be stale by the time
+            // an interactive edit dialog was closed.
+            byte[] currentBodyBeforeReplace;
+            try
+            {
+                currentBodyBeforeReplace = _promptRepo.ReadBytesStrict(promptId);
+            }
+            catch (FileNotFoundException ex)
+            {
+                throw new InvalidOperationException(
+                    "The prompt file was removed outside the current Prompt Helper state. Reload before editing.", ex);
+            }
+
+            if (!currentBodyBeforeReplace.AsSpan().SequenceEqual(oldBody))
+            {
+                throw new InvalidOperationException(
+                    "The prompt file changed outside the current Prompt Helper state. Reload before editing.");
+            }
+
             _writer.ReplaceDurable(
                 bodyPath,
                 newBodyBytes,
@@ -174,13 +195,48 @@ internal sealed class PromptMutationCoordinator
                 journal,
                 LibraryMutationPhase.BodyDurable);
 
-            CommitResult result = _libraryRepo.Commit(newPackage);
+            // For a body-only edit, OldLibrarySha256Hex == NewLibrarySha256Hex, so the
+            // primary commit below is content-neutral: library.json is byte-identical
+            // whether or not it actually runs. That means library.json content can never
+            // be used, on restart, to distinguish "commit happened" from "commit did not
+            // happen". Advance the journal to MetadataDurable *before* invoking the
+            // content-neutral commit so the durable journal phase alone is the unambiguous
+            // commit authority: once this write lands, recovery must treat the mutation as
+            // committed (keep the new body) even if the commit call below throws or the
+            // process dies before it runs, because there is nothing left for it to change.
+            bool bodyOnlyEdit = string.Equals(
+                journal.OldLibrarySha256Hex,
+                journal.NewLibrarySha256Hex,
+                StringComparison.OrdinalIgnoreCase);
 
-            try
+            CommitResult result;
+            if (bodyOnlyEdit)
             {
+                // Re-verify freshness before durably committing to MetadataDurable: once
+                // that phase is written, recovery treats the mutation as committed even if
+                // the commit call below never runs, so an external change must be detected
+                // here, before the phase advance, not after.
+                _libraryRepo.VerifyPrimaryUnchanged(disk.RawSha256Hex);
+
                 _journalRepo.AdvanceDurable(
                     journal,
                     LibraryMutationPhase.MetadataDurable);
+
+                result = _libraryRepo.Commit(newPackage);
+            }
+            else
+            {
+                result = _libraryRepo.CommitIfPrimaryUnchanged(newPackage, disk.RawSha256Hex);
+            }
+
+            try
+            {
+                if (!bodyOnlyEdit)
+                {
+                    _journalRepo.AdvanceDurable(
+                        journal,
+                        LibraryMutationPhase.MetadataDurable);
+                }
 
                 _verifiedDeleter.VerifyAndDelete(
                     _paths.RootDirectory,
@@ -242,7 +298,7 @@ internal sealed class PromptMutationCoordinator
 
         return ExecuteJournaledMutation(journal, () =>
         {
-            CommitResult result = _libraryRepo.Commit(newPackage);
+            CommitResult result = _libraryRepo.CommitIfPrimaryUnchanged(newPackage, disk.RawSha256Hex);
 
             try
             {

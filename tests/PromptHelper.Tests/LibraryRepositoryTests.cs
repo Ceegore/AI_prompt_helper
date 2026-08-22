@@ -422,7 +422,7 @@ public sealed class LibraryRepositoryTests
         var repo = new LibraryRepository(paths, new AtomicTextWriter());
         var doc = new LibraryDocument();
 
-        var result = repo.SynchronizeBackup(doc);
+        var result = repo.SynchronizeBackup(repo.CreateCanonicalPackage(doc));
 
         Assert.IsFalse(result.BackupSynchronized);
         Assert.IsNotNull(result.Warning);

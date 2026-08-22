@@ -17,10 +17,12 @@ internal sealed record ExistingLibraryCapabilityContext(
 public sealed class DataRootCapabilityValidator
 {
     private readonly ICapabilityFileOps _fileOps;
+    private readonly IVerifiedArtifactDeleter _verifiedDeleter;
 
-    internal DataRootCapabilityValidator(ICapabilityFileOps? fileOps = null)
+    internal DataRootCapabilityValidator(ICapabilityFileOps? fileOps = null, IVerifiedArtifactDeleter? verifiedDeleter = null)
     {
         _fileOps = fileOps ?? new DefaultCapabilityFileOps();
+        _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
     }
 
     public DataRootCapabilityValidator()
@@ -258,14 +260,16 @@ public sealed class DataRootCapabilityValidator
         {
             var cleanupFailures = new List<MigrationRollbackFailure>();
 
+            // Identity-verified cleanup (reparse-point rejection + strict-descendant-path
+            // binding under root), not raw path deletion: a foreign file swapped in at the
+            // declared probe path during the failure window is refused, not destroyed.
+            // Content cannot be required to match, because the write that created the file
+            // may not have completed before the failure occurred.
             if (currentCreated)
             {
                 try
                 {
-                    if (_fileOps.FileExists(currentFile))
-                    {
-                        _fileOps.DeleteFile(currentFile);
-                    }
+                    _verifiedDeleter.VerifyIdentityAndDelete(root, currentFile);
                 }
                 catch (Exception deleteEx)
                 {
@@ -277,10 +281,7 @@ public sealed class DataRootCapabilityValidator
             {
                 try
                 {
-                    if (_fileOps.FileExists(replacementFile))
-                    {
-                        _fileOps.DeleteFile(replacementFile);
-                    }
+                    _verifiedDeleter.VerifyIdentityAndDelete(root, replacementFile);
                 }
                 catch (Exception deleteEx)
                 {
@@ -302,24 +303,6 @@ public sealed class DataRootCapabilityValidator
 
     private void ProbeLocation(string directory, ICreatedPathJournal? journal)
     {
-        // Clean stale probe files first
-        try
-        {
-            foreach (string file in _fileOps.EnumerateFiles(directory, ".prompthelper-capability-*.tmp"))
-            {
-                try
-                {
-                    _fileOps.DeleteFile(file);
-                }
-                catch
-                {
-                }
-            }
-        }
-        catch
-        {
-        }
-
         string nonce = Guid.NewGuid().ToString("N");
         string currentFile = Path.Combine(directory, $".prompthelper-capability-{nonce}-current.tmp");
         string replacementFile = Path.Combine(directory, $".prompthelper-capability-{nonce}-replacement.tmp");
@@ -357,14 +340,14 @@ public sealed class DataRootCapabilityValidator
         {
             var cleanupFailures = new List<MigrationRollbackFailure>();
 
+            // Identity-verified cleanup, matching ProbeLocationWithPlan: never delete by raw
+            // path authority, and never require content to match (the write may not have
+            // completed before the failure).
             if (currentCreated)
             {
                 try
                 {
-                    if (_fileOps.FileExists(currentFile))
-                    {
-                        _fileOps.DeleteFile(currentFile);
-                    }
+                    _verifiedDeleter.VerifyIdentityAndDelete(directory, currentFile);
                 }
                 catch (Exception deleteEx)
                 {
@@ -376,10 +359,7 @@ public sealed class DataRootCapabilityValidator
             {
                 try
                 {
-                    if (_fileOps.FileExists(replacementFile))
-                    {
-                        _fileOps.DeleteFile(replacementFile);
-                    }
+                    _verifiedDeleter.VerifyIdentityAndDelete(directory, replacementFile);
                 }
                 catch (Exception deleteEx)
                 {

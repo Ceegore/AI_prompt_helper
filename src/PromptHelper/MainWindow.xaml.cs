@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly DataFolderMigrationService _migrationService;
     private readonly IApplicationLifetime _applicationLifetime;
     private readonly Action<string, string>? _showRestartMessage;
+    private bool _fatalMutationShutdownRequested;
 
     public MainWindow(
         MainViewModel viewModel,
@@ -262,6 +263,11 @@ public partial class MainWindow : Window
 
     private void AddPromptButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         string promptText = string.Empty;
         string headlineText = string.Empty;
         bool headlineAutomatic = true;
@@ -286,6 +292,11 @@ public partial class MainWindow : Window
                 ShowWarningIfPresent(result.Warning);
                 break;
             }
+            catch (CommittedMutationRequiresRestartException ex)
+            {
+                HandleFatalMutationException(ex);
+                break;
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
             {
                 MessageBox.Show(
@@ -301,6 +312,11 @@ public partial class MainWindow : Window
 
     private void EditPromptButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         if (sender is FrameworkElement fe && fe.DataContext is PromptCardViewModel card)
         {
             string promptText;
@@ -343,6 +359,11 @@ public partial class MainWindow : Window
                     ShowWarningIfPresent(result.Warning);
                     break;
                 }
+                catch (CommittedMutationRequiresRestartException ex)
+                {
+                    HandleFatalMutationException(ex);
+                    break;
+                }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
@@ -359,6 +380,11 @@ public partial class MainWindow : Window
 
     private void DeletePromptButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         if (sender is FrameworkElement fe && fe.DataContext is PromptCardViewModel card)
         {
             var confirmDialog = new ConfirmDeleteDialog(
@@ -376,6 +402,10 @@ public partial class MainWindow : Window
                     var result = _viewModel.DeletePrompt(card.Id);
                     ShowWarningIfPresent(result.Warning);
                 }
+                catch (CommittedMutationRequiresRestartException ex)
+                {
+                    HandleFatalMutationException(ex);
+                }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
                     MessageBox.Show(
@@ -391,6 +421,11 @@ public partial class MainWindow : Window
 
     private void MovePromptButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         if (sender is FrameworkElement fe && fe.DataContext is PromptCardViewModel card)
         {
             var destinations = _viewModel.GetDestinations();
@@ -417,6 +452,10 @@ public partial class MainWindow : Window
                         var result = _viewModel.MovePrompt(card.Id, dialog.DestinationCategoryId);
                         ShowWarningIfPresent(result.Warning);
                     }
+                }
+                catch (CommittedMutationRequiresRestartException ex)
+                {
+                    HandleFatalMutationException(ex);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
                 {
@@ -503,6 +542,29 @@ public partial class MainWindow : Window
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
+        }
+    }
+
+    internal bool FatalMutationShutdownRequested => _fatalMutationShutdownRequested;
+
+    internal void HandleFatalMutationException(CommittedMutationRequiresRestartException ex)
+    {
+        _fatalMutationShutdownRequested = true;
+        try
+        {
+            MessageBox.Show(
+                this,
+                "A prompt change was saved, but Prompt Helper could not finish its recovery bookkeeping.\n\n" +
+                "Prompt Helper must close now so it does not continue running with an unresolved recovery journal.\n\n" +
+                "Open Prompt Helper again after it closes.\n\n" +
+                ex.Message,
+                "Restart Required",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            _applicationLifetime.RequestShutdown();
         }
     }
 

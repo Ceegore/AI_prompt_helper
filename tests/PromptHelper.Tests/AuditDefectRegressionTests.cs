@@ -27,7 +27,7 @@ public sealed class AuditDefectRegressionTests
         {
             Categories = [new CategoryRecord { Id = Guid.NewGuid(), Name = "BackupCat", SortOrder = 10 }]
         };
-        libRepo.SynchronizeBackup(validDoc);
+        libRepo.SynchronizeBackup(libRepo.CreateCanonicalPackage(validDoc));
 
         // Empty 0-byte primary
         File.WriteAllText(paths.LibraryPath, "");
@@ -56,7 +56,7 @@ public sealed class AuditDefectRegressionTests
         {
             Categories = [new CategoryRecord { Id = Guid.NewGuid(), Name = "BackupCat2", SortOrder = 10 }]
         };
-        libRepo.SynchronizeBackup(validDoc);
+        libRepo.SynchronizeBackup(libRepo.CreateCanonicalPackage(validDoc));
 
         // Whitespace primary
         File.WriteAllText(paths.LibraryPath, "   \r\n\t  ");

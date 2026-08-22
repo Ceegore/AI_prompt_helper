@@ -25,12 +25,16 @@ internal sealed class MigrationReadyGate
         string sourcePhysicalRoot,
         string physicalTargetRoot,
         MigrationAttemptManifest manifest,
-        MigrationPayloadSnapshot originalSnapshot)
+        MigrationPayloadSnapshot originalSnapshot,
+        string? bootstrapPhysicalRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePhysicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalTargetRoot);
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(originalSnapshot);
+
+        bool isBootstrapRoot = !string.IsNullOrWhiteSpace(bootstrapPhysicalRoot) &&
+            PathIdentity.Equals(physicalTargetRoot, bootstrapPhysicalRoot);
 
         _tree.ValidateManagedTree(physicalTargetRoot, ManagedTreeValidationMode.PreCreation);
 
@@ -44,7 +48,7 @@ internal sealed class MigrationReadyGate
         }
 
         // Terminal target inventory inspection
-        MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(physicalTargetRoot, manifest);
+        MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(physicalTargetRoot, manifest, isBootstrapRoot);
 
         if (inventory.HasUnknownEntries)
         {

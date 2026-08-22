@@ -30,4 +30,14 @@ public sealed class FaultInjectingFileDeleter : IFileDeleter, IVerifiedArtifactD
 
         _inner.VerifyAndDelete(physicalRoot, path, expectedLength, expectedSha256Hex);
     }
+
+    public void VerifyIdentityAndDelete(string physicalRoot, string path)
+    {
+        if (Fail)
+        {
+            throw new IOException("Injected delete failure.");
+        }
+
+        _inner.VerifyIdentityAndDelete(physicalRoot, path);
+    }
 }

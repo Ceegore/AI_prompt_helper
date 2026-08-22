@@ -183,6 +183,36 @@ internal sealed class LibraryMutationJournalRepository
         using (JsonDocument document = JsonDocument.Parse(json))
         {
             JsonElement root = document.RootElement;
+            int schemaVersion = ReadSchemaVersion(root);
+
+            // Schema v2 requires an explicit "revision" so CAS state can never silently
+            // default to zero on a truncated or malformed journal. Schema v1 journals
+            // (written before revision existed) are still accepted for compatibility with
+            // a journal left on disk by an older build; they are transparently upgraded to
+            // the current schema the next time AdvanceDurable writes them.
+            string[] requiredMembers = schemaVersion >= 2
+                ? [
+                    "schemaVersion",
+                    "revision",
+                    "operationId",
+                    "kind",
+                    "phase",
+                    "promptId",
+                    "bodyRelativePath",
+                    "oldLibrarySha256Hex",
+                    "newLibrarySha256Hex"
+                ]
+                : [
+                    "schemaVersion",
+                    "operationId",
+                    "kind",
+                    "phase",
+                    "promptId",
+                    "bodyRelativePath",
+                    "oldLibrarySha256Hex",
+                    "newLibrarySha256Hex"
+                ];
+
             StrictJsonObjectAuthority.ValidateExactObject(
                 root,
                 allowedMembers: [
@@ -201,16 +231,7 @@ internal sealed class LibraryMutationJournalRepository
                     "newBodySha256Hex",
                     "recoveryBodyRelativePath"
                 ],
-                requiredMembers: [
-                    "schemaVersion",
-                    "operationId",
-                    "kind",
-                    "phase",
-                    "promptId",
-                    "bodyRelativePath",
-                    "oldLibrarySha256Hex",
-                    "newLibrarySha256Hex"
-                ],
+                requiredMembers: requiredMembers,
                 description: "library mutation journal root");
         }
 
@@ -224,9 +245,23 @@ internal sealed class LibraryMutationJournalRepository
         return journal;
     }
 
+    private static int ReadSchemaVersion(JsonElement root)
+    {
+        if (!StrictJsonObjectAuthority.TryGetPropertyIgnoreCase(root, "schemaVersion", out JsonProperty prop) ||
+            prop.Value.ValueKind != JsonValueKind.Number ||
+            !prop.Value.TryGetInt32(out int schemaVersion))
+        {
+            throw new InvalidDataException("Property 'schemaVersion' must be an integer.");
+        }
+
+        return schemaVersion;
+    }
+
     private static LibraryMutationJournal Clone(LibraryMutationJournal j) => new()
     {
-        SchemaVersion = j.SchemaVersion,
+        // Every durable write upgrades the journal to the current schema so a legacy
+        // schema-v1 journal (no required revision) never round-trips unchanged.
+        SchemaVersion = LibraryMutationJournal.CurrentSchemaVersion,
         Revision = j.Revision,
         OperationId = j.OperationId,
         Kind = j.Kind,
@@ -260,7 +295,8 @@ internal sealed class LibraryMutationJournalRepository
 
     private static void ValidateJournalInvariants(LibraryMutationJournal journal)
     {
-        if (journal.SchemaVersion != LibraryMutationJournal.CurrentSchemaVersion)
+        if (journal.SchemaVersion < LibraryMutationJournal.MinSupportedSchemaVersion ||
+            journal.SchemaVersion > LibraryMutationJournal.CurrentSchemaVersion)
         {
             throw new InvalidDataException($"Unsupported mutation journal schema version: {journal.SchemaVersion}.");
         }

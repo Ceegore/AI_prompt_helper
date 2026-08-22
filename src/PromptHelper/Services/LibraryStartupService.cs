@@ -19,6 +19,7 @@ public sealed class LibraryStartupService
     private readonly PromptRepository _promptRepo;
     private readonly IFileDeleter _deleter;
     private readonly IDurableAtomicFileWriter _writer;
+    private readonly LibraryInitializationJournalRepository _initJournalRepo;
 
     internal LibraryStartupService(
         AppPaths paths,
@@ -32,6 +33,7 @@ public sealed class LibraryStartupService
         _promptRepo = promptRepo;
         _deleter = deleter;
         _writer = writer;
+        _initJournalRepo = new LibraryInitializationJournalRepository(paths, writer);
     }
 
     public LibraryStartupService(
@@ -181,11 +183,11 @@ public sealed class LibraryStartupService
 
     private StartupResult HandleFirstRunOrInterruptedInit()
     {
-        bool markerExists = IsMarkerPresent();
+        LibraryInitializationJournal? journal = _initJournalRepo.TryReadStrict();
         IReadOnlyList<string> existingPromptFiles = _promptRepo.EnumeratePromptFilesStrict();
         DefaultLibraryPackage defaultPkg = DefaultLibraryFactory.CreateDefaults();
 
-        if (!markerExists)
+        if (journal is null)
         {
             if (existingPromptFiles.Count > 0)
             {
@@ -194,8 +196,12 @@ public sealed class LibraryStartupService
             }
 
             // Clean first run
-            byte[] initMarkerBytes = StrictUtf8Text.Encode("initializing");
-            _writer.ReplaceDurable(_paths.InitializationMarkerPath, initMarkerBytes, DurableFileClass.InitializationControl);
+            journal = new LibraryInitializationJournal
+            {
+                InitializationId = Guid.NewGuid(),
+                Phase = LibraryInitializationPhase.CreatingDefaults
+            };
+            _initJournalRepo.CreatePreparedDurable(journal);
 
             foreach (var kvp in defaultPkg.PromptContents)
             {
@@ -203,7 +209,7 @@ public sealed class LibraryStartupService
             }
 
             var commitResult = _libraryRepo.Commit(defaultPkg.Document);
-            TryRemoveStaleMarker();
+            FinalizeInitJournal(journal);
 
             return new StartupResult(defaultPkg.Document, false, commitResult.Warning);
         }
@@ -238,26 +244,28 @@ public sealed class LibraryStartupService
             }
 
             var commitResult = _libraryRepo.Commit(defaultPkg.Document);
-            TryRemoveStaleMarker();
+            FinalizeInitJournal(journal);
 
             return new StartupResult(defaultPkg.Document, false, commitResult.Warning);
         }
     }
 
-    private bool IsMarkerPresent()
+    private void FinalizeInitJournal(LibraryInitializationJournal journal)
     {
         try
         {
-            using var fs = new FileStream(_paths.InitializationMarkerPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            return true;
+            if (journal.Phase != LibraryInitializationPhase.MetadataDurable)
+            {
+                _initJournalRepo.AdvanceDurable(journal, LibraryInitializationPhase.MetadataDurable);
+            }
+
+            _initJournalRepo.DeleteStrict(journal.InitializationId, journal.Revision);
         }
-        catch (FileNotFoundException)
+        catch
         {
-            return false;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return false;
+            // Best effort: the journal, once at MetadataDurable, is restart-finalizable — a
+            // future launch (including a retry of this one) will see that phase and retire
+            // it without redoing default-library creation.
         }
     }
 

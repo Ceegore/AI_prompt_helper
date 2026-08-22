@@ -937,14 +937,9 @@ public sealed class DataFolderMigrationService
 
     private static string DecodeUtf8Text(byte[] bytes)
     {
-        using var stream = new MemoryStream(bytes, writable: false);
-        using var reader = new StreamReader(
-            stream,
-            new UTF8Encoding(
-                encoderShouldEmitUTF8Identifier: false,
-                throwOnInvalidBytes: true),
-            detectEncodingFromByteOrderMarks: true);
-
-        return reader.ReadToEnd();
+        // Route through the same strict decoder used elsewhere: it only strips a UTF-8 BOM
+        // and otherwise requires valid UTF-8, so a UTF-16/UTF-32 BOM can no longer switch
+        // .NET's auto-detection into decoding the bytes as something other than UTF-8.
+        return StrictUtf8Text.Decode(bytes, "migration text content");
     }
 }

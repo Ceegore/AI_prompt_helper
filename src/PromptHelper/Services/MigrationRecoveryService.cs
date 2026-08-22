@@ -80,47 +80,113 @@ public sealed class MigrationRecoveryService
                         "Prompt Helper will not delete old attempt artifacts automatically.");
                 }
             }
-            else if (!string.IsNullOrWhiteSpace(context.ExpectedSourceLibrarySha256) &&
-                     !string.IsNullOrWhiteSpace(manifest.SourceLibrarySha256Hex))
+            else
             {
-                if (!string.Equals(context.ExpectedSourceLibrarySha256, manifest.SourceLibrarySha256Hex, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(context.ExpectedSourceLibrarySha256) &&
+                    !string.IsNullOrWhiteSpace(manifest.SourceLibrarySha256Hex) &&
+                    !string.Equals(context.ExpectedSourceLibrarySha256, manifest.SourceLibrarySha256Hex, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException(
                         "Source library hash changed since the migration attempt was created. " +
                         "Prompt Helper will not delete old attempt artifacts automatically.");
                 }
+
+                // A pre-v4 manifest has no recorded full-payload fingerprint, but the same
+                // fingerprint algorithm can be derived from its own declared artifacts and
+                // compared against the caller's current full-payload fingerprint. Checking
+                // only the primary library hash (above) would miss a source prompt body
+                // that changed without the library metadata changing; fail closed before any
+                // deletion if the full payload no longer matches what this attempt captured.
+                if (!string.IsNullOrWhiteSpace(context.ExpectedSourcePayloadFingerprint))
+                {
+                    string derivedManifestFingerprint =
+                        MigrationPayloadFingerprint.ComputeFromManifestArtifacts(manifest.Artifacts);
+
+                    if (!string.Equals(context.ExpectedSourcePayloadFingerprint, derivedManifestFingerprint, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException(
+                            "Source payload fingerprint changed since the migration attempt was created. " +
+                            "Prompt Helper will not delete old attempt artifacts automatically.");
+                    }
+                }
             }
 
             _treeValidator.ValidateManagedTree(context.TargetPhysicalRoot, ManagedTreeValidationMode.PreCreation);
 
-            MigrationTargetInventory before = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest);
+            MigrationTargetInventory before = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest, context.IsExactBootstrapRoot);
             if (before.HasUnknownEntries)
             {
                 throw new InvalidDataException(
                     $"Unrecognized or foreign files in migration target '{context.TargetPhysicalRoot}': {string.Join(", ", before.UnknownEntries)}. Recovery aborted to protect data.");
             }
 
-            // 1. Delete declared control artifacts (probe files and directories, staging files)
+            // 1. Delete declared control artifacts (probe files and directories, staging files).
+            // Auto-deletion is manifest-owned authority, not path authority.
+            // - CapabilityProbeFile controls are written with fixed, known content (the literal
+            //   bytes "create"/"replace"), so their exact expected hash/length is verified
+            //   before deletion: a foreign file dropped at the same declared path is refused.
+            // - ManifestPhaseStaging holds a serialized copy of the manifest itself, so its
+            //   own hash cannot be embedded inside the manifest without circularity; identity
+            //   (reparse-point rejection + strict-descendant-path binding), not content, is
+            //   what is verified instead.
+            // - A directory-kind control has no content to hash at all, so it is required to
+            //   be a genuine, empty, non-reparse directory (StrictPathAuthority already
+            //   refuses to treat a reparse point as StrictPathKind.Directory).
             foreach (MigrationControlArtifact control in manifest.ControlArtifacts)
             {
                 string controlPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, control.RelativePath);
-                if (_fileOps.FileExists(controlPath))
+
+                if (control.Kind == MigrationControlArtifactKind.CapabilityProbeFile)
                 {
-                    _fileOps.DeleteFile(controlPath);
+                    if (_fileOps.FileExists(controlPath))
+                    {
+                        if (control.ExpectedLength is null || control.ExpectedSha256Hex is null)
+                        {
+                            throw new InvalidDataException(
+                                $"Declared control artifact '{control.RelativePath}' has no expected hash/length recorded. Recovery aborted to protect data.");
+                        }
+
+                        _verifiedDeleter.VerifyAndDelete(
+                            context.TargetPhysicalRoot,
+                            controlPath,
+                            control.ExpectedLength.Value,
+                            control.ExpectedSha256Hex);
+                    }
                 }
-                else if (_fileOps.DirectoryExists(controlPath))
+                else if (control.Kind == MigrationControlArtifactKind.ManifestPhaseStaging)
                 {
-                    _fileOps.DeleteDirectory(controlPath);
+                    if (_fileOps.FileExists(controlPath))
+                    {
+                        _verifiedDeleter.VerifyIdentityAndDelete(context.TargetPhysicalRoot, controlPath);
+                    }
+                }
+                else if (control.Kind == MigrationControlArtifactKind.CapabilityProbeDirectory)
+                {
+                    if (_fileOps.DirectoryExists(controlPath))
+                    {
+                        if (_fileOps.EnumerateEntries(controlPath).Count > 0)
+                        {
+                            throw new InvalidDataException(
+                                $"Declared control directory '{control.RelativePath}' is not empty. Recovery aborted to protect data.");
+                        }
+
+                        _fileOps.DeleteDirectory(controlPath);
+                    }
                 }
             }
 
-            // 2. Delete declared payload temps
+            // 2. Delete declared payload temps. A temp being cleaned up during retry may
+            // legitimately be partially written (the attempt was interrupted mid-copy), so
+            // its content cannot be required to match the final artifact's hash/length.
+            // Identity (reparse-point rejection + strict-descendant-path binding under the
+            // target root), not content, is the safety property that matters here: it still
+            // refuses to delete a foreign file that happens to sit at the declared temp path.
             foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
             {
                 string tempFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.TempRelativePath);
                 if (_fileOps.FileExists(tempFullPath))
                 {
-                    _fileOps.DeleteFile(tempFullPath);
+                    _verifiedDeleter.VerifyIdentityAndDelete(context.TargetPhysicalRoot, tempFullPath);
                 }
             }
 
@@ -147,7 +213,7 @@ public sealed class MigrationRecoveryService
             }
 
             // 5. Re-inspect inventory and assert all attempt-created directories and temps are gone
-            MigrationTargetInventory after = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest);
+            MigrationTargetInventory after = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest, context.IsExactBootstrapRoot);
             if (after.HasUnknownEntries)
             {
                 throw new InvalidDataException(
@@ -281,7 +347,7 @@ public sealed class MigrationRecoveryService
             }
 
             // Verify no foreign files
-            MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest);
+            MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(context.TargetPhysicalRoot, manifest, context.IsExactBootstrapRoot);
             if (inventory.HasUnknownEntries)
             {
                 throw new InvalidDataException(

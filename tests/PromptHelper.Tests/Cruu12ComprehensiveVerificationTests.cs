@@ -518,8 +518,10 @@ public class Cruu12ComprehensiveVerificationTests
         };
 
         // Inventory inspector at bootstrap target must treat settings files as valid persistent files, not foreign residue
-        var inventory = MigrationTargetInventoryInspector.Inspect(bootstrapTarget.Root, manifest);
+        var inventory = MigrationTargetInventoryInspector.Inspect(bootstrapTarget.Root, manifest, isBootstrapRoot: true);
         Assert.IsFalse(inventory.HasUnknownEntries, "Bootstrap settings files must not be treated as unknown entries.");
+        Assert.AreEqual(1, inventory.PersistentBootstrapControls.Count, "Bootstrap settings.json must be classified as a persistent bootstrap control.");
+        Assert.AreEqual(0, inventory.DeclaredControls.Count, "Persistent bootstrap settings must not be classified as an ephemeral declared control.");
     }
 
     // ==========================================
@@ -752,13 +754,28 @@ public class Cruu12ComprehensiveVerificationTests
         var paths = new AppPaths(temp.Root);
         paths.EnsureDataDirectories();
 
-        // Interrupted init marker left behind with valid defaults
-        File.WriteAllText(paths.InitializationMarkerPath, "initializing");
-
         var writer = new WindowsDurableAtomicFileWriter();
         var deleter = new FileDeleter();
         var libRepo = new LibraryRepository(paths, writer);
         var promptRepo = new PromptRepository(paths, writer, deleter);
+
+        // Construct the exact named cut: default library metadata was already committed
+        // durably, but the process died before the initialization journal was advanced to
+        // MetadataDurable and retired, so a real journal is left behind at CreatingDefaults.
+        var defaultPkg = DefaultLibraryFactory.CreateDefaults();
+        foreach (var kvp in defaultPkg.PromptContents)
+        {
+            promptRepo.Create(kvp.Key, kvp.Value);
+        }
+        libRepo.Commit(defaultPkg.Document);
+
+        var journalRepo = new LibraryInitializationJournalRepository(paths, writer);
+        var journal = new LibraryInitializationJournal
+        {
+            InitializationId = Guid.NewGuid(),
+            Phase = LibraryInitializationPhase.CreatingDefaults
+        };
+        journalRepo.CreatePreparedDurable(journal);
 
         var startup = new LibraryStartupService(paths, libRepo, promptRepo, deleter, writer);
         var result = startup.LoadOrInitialize();

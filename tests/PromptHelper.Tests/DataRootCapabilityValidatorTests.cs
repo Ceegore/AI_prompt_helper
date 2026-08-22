@@ -46,11 +46,18 @@ public sealed class DataRootCapabilityValidatorTests
         using var temp = new TestDirectory();
         var ops = new FakeCapabilityFileOps
         {
-            OnReplace = (src, dst, bak) => throw new IOException("Simulated replace failure"),
-            OnDeleteFile = path => throw new IOException("Simulated delete failure")
+            OnReplace = (src, dst, bak) => throw new IOException("Simulated replace failure")
         };
 
-        var validator = new DataRootCapabilityValidator(ops);
+        // Cleanup after a probe failure now deletes via identity-verified deletion (not raw
+        // path deletion), so fault injection for cleanup failure goes through the verified
+        // deleter, not ICapabilityFileOps.DeleteFile.
+        var deleter = new FakeVerifiedArtifactDeleter
+        {
+            OnVerifyIdentityAndDelete = (root, path) => throw new IOException("Simulated delete failure")
+        };
+
+        var validator = new DataRootCapabilityValidator(ops, deleter);
 
         var ex = Assert.Throws<DataRootCapabilityProbeException>(() => validator.ValidateWritable(temp.Root));
         Assert.IsTrue(ex.CleanupFailures.Count > 0);

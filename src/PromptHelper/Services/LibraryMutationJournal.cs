@@ -21,7 +21,8 @@ public enum LibraryMutationPhase
 
 public sealed class LibraryMutationJournal
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+    public const int MinSupportedSchemaVersion = 1;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public long Revision { get; set; } = 0;

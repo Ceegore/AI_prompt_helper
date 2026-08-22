@@ -21,6 +21,16 @@ public sealed class LibraryStartupServiceTests
         return (service, paths, libRepo, promptRepo);
     }
 
+    private static void WriteInterruptedInitMarker(AppPaths paths)
+    {
+        var journalRepo = new LibraryInitializationJournalRepository(paths, new AtomicTextWriter());
+        journalRepo.CreatePreparedDurable(new LibraryInitializationJournal
+        {
+            InitializationId = System.Guid.NewGuid(),
+            Phase = LibraryInitializationPhase.CreatingDefaults
+        });
+    }
+
     [TestMethod]
     public void Fresh_start_creates_defaults()
     {
@@ -249,7 +259,7 @@ public sealed class LibraryStartupServiceTests
         using var testDir = new TestDirectory();
         var (service, paths, _, promptRepo) = CreateTestContext(testDir.Root);
         paths.EnsureDataDirectories();
-        File.WriteAllText(paths.InitializationMarkerPath, "initializing");
+        WriteInterruptedInitMarker(paths);
 
         var result = service.LoadOrInitialize();
 
@@ -265,7 +275,7 @@ public sealed class LibraryStartupServiceTests
         using var testDir = new TestDirectory();
         var (service, paths, _, promptRepo) = CreateTestContext(testDir.Root);
         paths.EnsureDataDirectories();
-        File.WriteAllText(paths.InitializationMarkerPath, "initializing");
+        WriteInterruptedInitMarker(paths);
         promptRepo.Create(DefaultLibraryFactory.DefaultPrompt1Id, DefaultLibraryFactory.DefaultPrompt1Content);
 
         var result = service.LoadOrInitialize();
@@ -282,7 +292,7 @@ public sealed class LibraryStartupServiceTests
         using var testDir = new TestDirectory();
         var (service, paths, _, promptRepo) = CreateTestContext(testDir.Root);
         paths.EnsureDataDirectories();
-        File.WriteAllText(paths.InitializationMarkerPath, "initializing");
+        WriteInterruptedInitMarker(paths);
         promptRepo.Create(DefaultLibraryFactory.DefaultPrompt1Id, "Modified user content");
 
         Assert.Throws<InvalidOperationException>(() => service.LoadOrInitialize());
@@ -294,7 +304,7 @@ public sealed class LibraryStartupServiceTests
         using var testDir = new TestDirectory();
         var (service, paths, _, promptRepo) = CreateTestContext(testDir.Root);
         paths.EnsureDataDirectories();
-        File.WriteAllText(paths.InitializationMarkerPath, "initializing");
+        WriteInterruptedInitMarker(paths);
         promptRepo.Create(Guid.NewGuid(), "Some random prompt");
 
         Assert.Throws<InvalidOperationException>(() => service.LoadOrInitialize());

@@ -9,6 +9,7 @@ internal sealed record MigrationTargetInventory(
     IReadOnlyList<string> FinalArtifacts,
     IReadOnlyList<string> PayloadTemps,
     IReadOnlyList<string> DeclaredControls,
+    IReadOnlyList<string> PersistentBootstrapControls,
     IReadOnlyList<string> AttemptCreatedDirectories,
     IReadOnlyList<string> PreExistingDirectories,
     IReadOnlyList<string> UnknownEntries)
@@ -21,7 +22,8 @@ internal static class MigrationTargetInventoryInspector
 {
     public static MigrationTargetInventory Inspect(
         string targetPhysicalRoot,
-        MigrationAttemptManifest manifest)
+        MigrationAttemptManifest manifest,
+        bool isBootstrapRoot = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPhysicalRoot);
         ArgumentNullException.ThrowIfNull(manifest);
@@ -101,6 +103,7 @@ internal static class MigrationTargetInventoryInspector
         var foundFinals = new List<string>();
         var foundTemps = new List<string>();
         var foundControls = new List<string>();
+        var foundPersistentBootstrapControls = new List<string>();
         var unknownEntries = new List<string>();
 
         if (!Directory.Exists(root))
@@ -109,6 +112,7 @@ internal static class MigrationTargetInventoryInspector
                 foundFinals,
                 foundTemps,
                 foundControls,
+                foundPersistentBootstrapControls,
                 attemptCreatedDirs.Where(Directory.Exists).ToList(),
                 preExistingDirs.Where(Directory.Exists).ToList(),
                 unknownEntries);
@@ -124,10 +128,15 @@ internal static class MigrationTargetInventoryInspector
             foreach (string file in Directory.GetFiles(dir))
             {
                 string normFile = PathIdentity.NormalizeForComparison(file);
+                string fileName = Path.GetFileName(file);
 
-                if (isRoot && ManagedControlPathPolicy.IsReservedRootControl(Path.GetFileName(file), targetIsBootstrapRoot: true))
+                if (isRoot && ManagedControlPathPolicy.IsReservedEphemeralRootControl(fileName))
                 {
                     foundControls.Add(normFile);
+                }
+                else if (isRoot && isBootstrapRoot && ManagedControlPathPolicy.IsPersistentBootstrapControl(fileName))
+                {
+                    foundPersistentBootstrapControls.Add(normFile);
                 }
                 else if (declaredFinals.Contains(normFile))
                 {
@@ -173,6 +182,7 @@ internal static class MigrationTargetInventoryInspector
             foundFinals,
             foundTemps,
             foundControls,
+            foundPersistentBootstrapControls,
             attemptCreatedDirs.Where(Directory.Exists).ToList(),
             preExistingDirs.Where(Directory.Exists).ToList(),
             unknownEntries);
