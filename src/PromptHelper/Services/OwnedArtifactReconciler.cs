@@ -153,6 +153,25 @@ internal static class OwnedArtifactReconciler
 
         if (snapshot.Records.Count == 0)
         {
+            // A first append may be torn by process death. Parsing correctly yields no
+            // authority, but the exact journal object still needs retirement or every later
+            // retry would carry unexplained control residue forever.
+            if (snapshot.Exists)
+            {
+                try
+                {
+                    journal.Rewrite(root, snapshot, []);
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException or StaleExpectedFileException)
+                {
+                    outcomes.Add(new ReconciliationOutcome(
+                        ReconciliationSeverity.Warning,
+                        "EMPTY_OWNERSHIP_JOURNAL_RETIRE_FAILED",
+                        WindowsOwnedArtifactJournal.GetJournalPath(root),
+                        ex.Message));
+                }
+            }
             return new Result(proven, outcomes);
         }
 
@@ -185,10 +204,19 @@ internal static class OwnedArtifactReconciler
                 retireCommittedMigrationArtifacts);
         }
 
+        foreach (IGrouping<Guid, OwnedArtifactRecord> transaction in
+                 snapshot.Records.Where(r => r.Kind == OwnedArtifactKind.CapabilityProbe)
+                                 .GroupBy(r => r.OperationId))
+        {
+            OwnedArtifactRecord record = transaction.OrderByDescending(r => r.Phase).First();
+            ResolveCapabilityProbe(root, record, outcomes, surviving, proven);
+        }
+
         foreach (OwnedArtifactRecord record in
                  snapshot.Records.Where(r =>
-                     r.Kind != OwnedArtifactKind.CasPreimage &&
-                     r.Kind != OwnedArtifactKind.MigrationArtifact))
+                      r.Kind != OwnedArtifactKind.CasPreimage &&
+                      r.Kind != OwnedArtifactKind.MigrationArtifact &&
+                      r.Kind != OwnedArtifactKind.CapabilityProbe))
         {
             ResolveOwnedArtifact(
                 root,
@@ -218,6 +246,84 @@ internal static class OwnedArtifactReconciler
         }
 
         return new Result(proven, outcomes);
+    }
+
+    private static void ResolveCapabilityProbe(
+        string root,
+        OwnedArtifactRecord record,
+        List<ReconciliationOutcome> outcomes,
+        List<OwnedArtifactRecord> surviving,
+        HashSet<string> proven)
+    {
+        string[] candidates = [record.RelativePath, record.RestoreRelativePath ?? string.Empty];
+        foreach (string relative in candidates.Where(path => path.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string path = Path.GetFullPath(Path.Combine(root, relative));
+            SafeFileHandle? handle;
+            try
+            {
+                handle = OpenExactNonReparse(path, root);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                outcomes.Add(new ReconciliationOutcome(
+                    ReconciliationSeverity.Warning,
+                    "CAPABILITY_PROBE_UNREADABLE",
+                    path,
+                    ex.Message));
+                surviving.Add(record);
+                return;
+            }
+
+            if (handle is null)
+            {
+                continue;
+            }
+
+            using (handle)
+            {
+                if (WindowsFileIdentity.FromHandle(handle) != record.Identity)
+                {
+                    continue;
+                }
+
+                proven.Add(path);
+                bool requiresContent = record.Phase >= OwnedArtifactPhase.ProbeContentDurable;
+                if (requiresContent &&
+                    (record.CandidateSha256Hex is null ||
+                     !ProvenanceBoundCleanup.MatchesExpectedContent(
+                         handle,
+                         record.CandidateLength,
+                         record.CandidateSha256Hex)))
+                {
+                    outcomes.Add(new ReconciliationOutcome(
+                        ReconciliationSeverity.Fatal,
+                        "CAPABILITY_PROBE_DURABLE_CONTENT_MISMATCH",
+                        path,
+                        "The exact owned probe survived after its content-durable phase with different bytes."));
+                    surviving.Add(record);
+                    return;
+                }
+
+                try
+                {
+                    WindowsHandleDeletion.MarkForDeletion(handle, path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    outcomes.Add(new ReconciliationOutcome(
+                        ReconciliationSeverity.Warning,
+                        "CAPABILITY_PROBE_CLEANUP_FAILED",
+                        path,
+                        ex.Message));
+                    surviving.Add(record);
+                }
+                return;
+            }
+        }
+
+        // Neither predeclared path contains this identity. Any occupants are foreign and are
+        // preserved; the stale claim can no longer authorize a deletion and is retired.
     }
 
     /// <summary>

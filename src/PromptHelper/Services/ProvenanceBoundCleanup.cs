@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
@@ -191,7 +192,20 @@ internal static class ProvenanceBoundCleanup
         using (handle)
         {
             WindowsFileIdentity actualIdentity = WindowsFileIdentity.FromHandle(handle);
-            OwnedArtifactRecord? authority = journal.Read(fullRoot).Records.FirstOrDefault(record =>
+            IReadOnlyList<OwnedArtifactRecord> records = journal.Read(fullRoot).Records;
+            OwnedArtifactRecord? authority = records
+                .Where(record =>
+                    record.Kind == OwnedArtifactKind.CapabilityProbe &&
+                    record.Identity == actualIdentity &&
+                    (string.Equals(record.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(record.RestoreRelativePath, relativePath, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(record => record.Phase)
+                .FirstOrDefault();
+
+            // Explicit legacy compatibility for the CRUU19-era generic Stage records. v5
+            // never writes this shape, but an exact old identity plus exact durable content
+            // remains safe authority when a legacy recovery branch elects to use it.
+            authority ??= records.FirstOrDefault(record =>
                 record.Kind == OwnedArtifactKind.Stage &&
                 record.Identity == actualIdentity &&
                 string.Equals(record.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
@@ -213,11 +227,15 @@ internal static class ProvenanceBoundCleanup
                     alternateExpectedSha256Hex,
                     StringComparison.OrdinalIgnoreCase);
 
+            bool contentIsDurable =
+                authority.Kind != OwnedArtifactKind.CapabilityProbe ||
+                authority.Phase >= OwnedArtifactPhase.ProbeContentDurable;
+
             if ((!primaryAuthority && !alternateAuthority) ||
-                !MatchesExpectedContent(
+                (contentIsDurable && !MatchesExpectedContent(
                     handle,
                     authority.CandidateLength,
-                    authority.CandidateSha256Hex))
+                    authority.CandidateSha256Hex)))
             {
                 return ArtifactCleanupOutcome.PreservedUnproven;
             }

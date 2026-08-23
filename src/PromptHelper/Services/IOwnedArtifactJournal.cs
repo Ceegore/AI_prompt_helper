@@ -40,7 +40,13 @@ internal enum OwnedArtifactKind
     /// A directory created by the current migration attempt. Its NTFS identity, rather than
     /// its pathname or emptiness, is the authority for rollback and retry deletion.
     /// </summary>
-    MigrationDirectory
+    MigrationDirectory,
+
+    /// <summary>
+    /// An ephemeral capability probe whose exact identity may move between two paths that
+    /// were both durably declared before the first rename.
+    /// </summary>
+    CapabilityProbe
 }
 
 /// <summary>How far a durable operation had got when the record was appended.</summary>
@@ -60,7 +66,22 @@ internal enum OwnedArtifactPhase
     PreimageSidelined,
 
     /// <summary>A compare-and-swap has published its candidate under the target name.</summary>
-    CandidatePublished
+    CandidatePublished,
+
+    /// <summary>The probe identity and every legal recovery path are durable; bytes may be partial.</summary>
+    ProbeCreatedClaimed = 10,
+
+    /// <summary>The complete expected probe bytes have crossed a durable flush barrier.</summary>
+    ProbeContentDurable = 11,
+
+    /// <summary>A rename is about to occur; both its source and destination are already declared.</summary>
+    ProbeRenamePrepared = 12,
+
+    /// <summary>The exact probe handle completed its rename.</summary>
+    ProbeRenamed = 13,
+
+    /// <summary>The exact probe handle was marked for deletion.</summary>
+    ProbeRetired = 14
 }
 
 /// <summary>
@@ -147,7 +168,7 @@ internal interface IOwnedArtifactJournal
 internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 {
     internal const string JournalFileName = ".prompthelper-owned.log";
-    private const string RecordVersion = "2";
+    private const string RecordVersion = "3";
 
     private const uint GENERIC_READ = 0x80000000;
     private const uint GENERIC_WRITE = 0x40000000;
@@ -226,6 +247,16 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         AssertNonReparseUnderRoot(handle, journalPath, fullRoot);
 
         long offset = RandomAccess.GetLength(handle);
+        const string tornFirstAppendCut =
+            "WindowsOwnedArtifactJournal.AfterPartialFirstAppend";
+        if (offset == 0 && ProductionCrashCut.IsArmed(tornFirstAppendCut))
+        {
+            int partialLength = Math.Max(1, line.Length / 2);
+            RandomAccess.Write(handle, line.AsSpan(0, partialLength), offset);
+            ProductionCrashCut.Hit(tornFirstAppendCut);
+            throw new IOException("The armed torn-append crash cut returned without process termination.");
+        }
+
         RandomAccess.Write(handle, line, offset);
 
         if (!FlushFileBuffers(handle))
@@ -431,9 +462,15 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 
     private static string Serialize(OwnedArtifactRecord record)
     {
+        // Preserve the deployed v2 wire shape for every legacy artifact kind. Only the new
+        // capability-probe state machine requires v3, so ordinary CAS and migration journals
+        // remain readable by the previous binary.
+        string recordVersion = record.Kind == OwnedArtifactKind.CapabilityProbe
+            ? RecordVersion
+            : "2";
         string body = string.Join(
             '|',
-            RecordVersion,
+            recordVersion,
             record.OperationId.ToString("N"),
             record.Kind switch
             {
@@ -442,6 +479,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactKind.MigrationFinal => "final",
                 OwnedArtifactKind.MigrationArtifact => "migration",
                 OwnedArtifactKind.MigrationDirectory => "directory",
+                OwnedArtifactKind.CapabilityProbe => "probe",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
             record.Phase switch
@@ -450,6 +488,11 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactPhase.Prepared => "prepared",
                 OwnedArtifactPhase.PreimageSidelined => "sidelined",
                 OwnedArtifactPhase.CandidatePublished => "published",
+                OwnedArtifactPhase.ProbeCreatedClaimed => "probe-created",
+                OwnedArtifactPhase.ProbeContentDurable => "probe-durable",
+                OwnedArtifactPhase.ProbeRenamePrepared => "probe-rename-prepared",
+                OwnedArtifactPhase.ProbeRenamed => "probe-renamed",
+                OwnedArtifactPhase.ProbeRetired => "probe-retired",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
             record.Identity.ToToken(),
@@ -483,7 +526,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         }
 
         string[] parts = body.Split('|');
-        if (parts.Length != 9 || parts[0] != RecordVersion)
+        if (parts.Length != 9 || (parts[0] != "2" && parts[0] != RecordVersion))
         {
             return false;
         }
@@ -500,6 +543,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             "final" => OwnedArtifactKind.MigrationFinal,
             "migration" => OwnedArtifactKind.MigrationArtifact,
             "directory" => OwnedArtifactKind.MigrationDirectory,
+            "probe" => OwnedArtifactKind.CapabilityProbe,
             _ => (OwnedArtifactKind)(-1)
         };
 
@@ -509,6 +553,11 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             "prepared" => OwnedArtifactPhase.Prepared,
             "sidelined" => OwnedArtifactPhase.PreimageSidelined,
             "published" => OwnedArtifactPhase.CandidatePublished,
+            "probe-created" => OwnedArtifactPhase.ProbeCreatedClaimed,
+            "probe-durable" => OwnedArtifactPhase.ProbeContentDurable,
+            "probe-rename-prepared" => OwnedArtifactPhase.ProbeRenamePrepared,
+            "probe-renamed" => OwnedArtifactPhase.ProbeRenamed,
+            "probe-retired" => OwnedArtifactPhase.ProbeRetired,
             _ => (OwnedArtifactPhase)(-1)
         };
 

@@ -70,6 +70,9 @@ internal sealed class WindowsRetirableDirectory : IDisposable
 
     public WindowsFileIdentity Identity => WindowsFileIdentity.FromHandle(_handle);
 
+    /// <summary>Native handle for a synchronous relative NtCreateFile operation.</summary>
+    internal IntPtr DangerousHandle => _handle.DangerousGetHandle();
+
     private WindowsRetirableDirectory(string path, string finalPhysicalPath, SafeFileHandle handle)
     {
         Path = path;
@@ -85,7 +88,8 @@ internal sealed class WindowsRetirableDirectory : IDisposable
     public static WindowsRetirableDirectory? OpenExistingOrNull(
         string path,
         string expectedPhysicalRoot,
-        bool requireDeleteAccess = true)
+        bool requireDeleteAccess = true,
+        bool allowRootItself = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedPhysicalRoot);
@@ -139,7 +143,8 @@ internal sealed class WindowsRetirableDirectory : IDisposable
             string finalPath = WindowsFinalPathHelper.GetNormalizedDosPath(handle);
             string root = PathIdentity.NormalizeForComparison(expectedPhysicalRoot);
             string normalized = PathIdentity.NormalizeForComparison(finalPath);
-            if (!PathIdentity.IsStrictDescendant(normalized, root))
+            if (!(allowRootItself && PathIdentity.Equals(normalized, root)) &&
+                !PathIdentity.IsStrictDescendant(normalized, root))
             {
                 throw new InvalidDataException(
                     $"Directory resolved outside the bound data root. Root='{root}', Directory='{normalized}'.");

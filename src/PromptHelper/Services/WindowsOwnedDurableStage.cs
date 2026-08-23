@@ -44,8 +44,10 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
     private const uint CREATE_NEW = 1;
     private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
     private const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
+    private const uint FILE_FLAG_DELETE_ON_CLOSE = 0x04000000;
     private const int FileRenameInfoClass = 3;
     private const int FileDispositionInfoClass = 4;
+    private const int FileDispositionInfoExClass = 21;
     private const int FileAttributeTagInfoClass = 9;
     private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
 
@@ -61,6 +63,12 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
     {
         [MarshalAs(UnmanagedType.U1)]
         public bool DeleteFile;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILE_DISPOSITION_INFO_EX
+    {
+        public uint Flags;
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -101,16 +109,29 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
         ref FILE_DISPOSITION_INFO lpFileInformation,
         uint dwBufferSize);
 
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "SetFileInformationByHandle")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandleDispositionEx(
+        SafeFileHandle hFile,
+        int fileInformationClass,
+        ref FILE_DISPOSITION_INFO_EX lpFileInformation,
+        uint dwBufferSize);
+
     private SafeFileHandle _handle;
+    private bool _bootstrapDeleteOnClose;
     private bool _terminal;
     private bool _disposed;
 
     public string StagingPath { get; }
 
-    private WindowsOwnedDurableStage(string stagingPath, SafeFileHandle handle)
+    private WindowsOwnedDurableStage(
+        string stagingPath,
+        SafeFileHandle handle,
+        bool bootstrapDeleteOnClose = false)
     {
         StagingPath = stagingPath;
         _handle = handle;
+        _bootstrapDeleteOnClose = bootstrapDeleteOnClose;
     }
 
     /// <summary>
@@ -120,6 +141,16 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
     /// (see the type remarks, CRUU15-012).
     /// </summary>
     public static WindowsOwnedDurableStage CreateNew(string stagingPath)
+        => CreateNew(stagingPath, bootstrapDeleteOnClose: false);
+
+    /// <summary>
+    /// Creates a stage with kernel delete-on-close armed in the same CreateFileW call that
+    /// creates the object. A process death before <see cref="PersistAfterDurableClaim"/>
+    /// therefore cannot leave a persistent object without a durable identity claim.
+    /// </summary>
+    private static WindowsOwnedDurableStage CreateNew(
+        string stagingPath,
+        bool bootstrapDeleteOnClose)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(stagingPath);
 
@@ -129,7 +160,8 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
             FILE_SHARE_NONE,
             IntPtr.Zero,
             CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH |
+            (bootstrapDeleteOnClose ? FILE_FLAG_DELETE_ON_CLOSE : 0),
             IntPtr.Zero);
 
         if (handle.IsInvalid)
@@ -141,7 +173,7 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
                 new Win32Exception(error));
         }
 
-        return new WindowsOwnedDurableStage(stagingPath, handle);
+        return new WindowsOwnedDurableStage(stagingPath, handle, bootstrapDeleteOnClose);
     }
 
     /// <summary>
@@ -151,10 +183,26 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
     /// containment proof is systematic instead of optional (CRUU15-012).
     /// </summary>
     public static WindowsOwnedDurableStage CreateNewUnderRoot(string stagingPath, string physicalRoot)
+        => CreateNewUnderRoot(stagingPath, physicalRoot, bootstrapDeleteOnClose: false);
+
+    /// <summary>
+    /// Creates a root-bound stage whose unclaimed lifetime is crash-atomic: until a durable
+    /// ownership record has been flushed and <see cref="PersistAfterDurableClaim"/> succeeds,
+    /// closing the process handle deletes the object in the kernel.
+    /// </summary>
+    public static WindowsOwnedDurableStage CreateCrashAtomicBootstrapUnderRoot(
+        string stagingPath,
+        string physicalRoot) =>
+        CreateNewUnderRoot(stagingPath, physicalRoot, bootstrapDeleteOnClose: true);
+
+    private static WindowsOwnedDurableStage CreateNewUnderRoot(
+        string stagingPath,
+        string physicalRoot,
+        bool bootstrapDeleteOnClose)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
 
-        WindowsOwnedDurableStage stage = CreateNew(stagingPath);
+        WindowsOwnedDurableStage stage = CreateNew(stagingPath, bootstrapDeleteOnClose);
         try
         {
             stage.AssertNonReparseAndUnderRoot(physicalRoot);
@@ -194,6 +242,49 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
 
     /// <summary>The exact on-disk identity of the staged object, for durable provenance records.</summary>
     public WindowsFileIdentity Identity => WindowsFileIdentity.FromHandle(_handle);
+
+    /// <summary>
+    /// Cancels the kernel delete-on-close disposition only after the caller has durably
+    /// recorded this handle's exact identity. The ordering makes the first ownership claim
+    /// process-crash-atomic: either the claim is durable, or the object cannot survive close.
+    /// </summary>
+    public void PersistAfterDurableClaim()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_terminal)
+        {
+            throw new InvalidOperationException("A terminal staging object cannot be persisted.");
+        }
+
+        if (!_bootstrapDeleteOnClose)
+        {
+            throw new InvalidOperationException(
+                "This staging object was not created with crash-atomic bootstrap deletion.");
+        }
+
+        // FILE_DISPOSITION_ON_CLOSE makes this update target the create-time on-close state;
+        // omitting FILE_DISPOSITION_DELETE applies DO_NOT_DELETE to that state.
+        var disposition = new FILE_DISPOSITION_INFO_EX { Flags = 0x00000008 };
+        if (!SetFileInformationByHandleDispositionEx(
+                _handle,
+                FileDispositionInfoExClass,
+                ref disposition,
+                (uint)Marshal.SizeOf<FILE_DISPOSITION_INFO_EX>()))
+        {
+            throw new IOException(
+                $"Failed to persist durably-claimed staging file '{StagingPath}'.",
+                new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+
+        if (!FlushFileBuffers(_handle))
+        {
+            throw new IOException(
+                $"Failed to flush the durable-claim transition for '{StagingPath}'.",
+                new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+
+        _bootstrapDeleteOnClose = false;
+    }
 
     public void Write(ReadOnlySpan<byte> bytes)
     {
@@ -316,10 +407,10 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
 
         var dispInfo = new FILE_DISPOSITION_INFO { DeleteFile = true };
         if (!SetFileInformationByHandleDisposition(
-            _handle,
-            FileDispositionInfoClass,
-            ref dispInfo,
-            (uint)Marshal.SizeOf<FILE_DISPOSITION_INFO>()))
+                _handle,
+                FileDispositionInfoClass,
+                ref dispInfo,
+                (uint)Marshal.SizeOf<FILE_DISPOSITION_INFO>()))
         {
             throw new IOException(
                 $"Failed to mark owned staging file for deletion: '{StagingPath}'.",

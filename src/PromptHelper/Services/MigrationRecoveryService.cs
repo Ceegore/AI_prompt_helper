@@ -1,14 +1,28 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 
 namespace PromptHelper.Services;
 
+public enum MigrationRecoveryDisposition
+{
+    Completed,
+    Failed,
+    LegacyManualCleanupRequired
+}
+
 public sealed record RecoveryResult(
     bool Success,
     string? ErrorMessage = null,
-    Exception? Error = null);
+    Exception? Error = null,
+    MigrationRecoveryDisposition Disposition = MigrationRecoveryDisposition.Completed);
+
+internal sealed class LegacyMigrationRecoveryRequiredException : IOException
+{
+    public LegacyMigrationRecoveryRequiredException(string message) : base(message) { }
+}
 
 public sealed class MigrationRecoveryService
 {
@@ -38,6 +52,7 @@ public sealed class MigrationRecoveryService
 
         string markerPath = Path.Combine(context.TargetPhysicalRoot, ".prompthelper-migration.json");
 
+        var retainedUnclaimedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         MigrationAttemptManifest? manifest;
         try
         {
@@ -46,7 +61,11 @@ public sealed class MigrationRecoveryService
         catch (Exception ex)
         {
             var recEx = new MigrationRecoveryException(context.TargetPhysicalRoot, "ReadManifest", ex);
-            return new RecoveryResult(false, recEx.Message, recEx);
+            return new RecoveryResult(
+                false,
+                recEx.Message,
+                recEx,
+                MigrationRecoveryDisposition.Failed);
         }
 
         if (manifest is null)
@@ -140,6 +159,13 @@ public sealed class MigrationRecoveryService
                 {
                     if (_fileOps.FileExists(controlPath))
                     {
+                        if (manifest.SchemaVersion < 5)
+                        {
+                            throw new LegacyMigrationRecoveryRequiredException(
+                                $"Legacy schema-v{manifest.SchemaVersion} capability-probe residue " +
+                                $"'{control.RelativePath}' was preserved because that protocol did not durably predeclare v5 identity and phase authority.");
+                        }
+
                         if (control.ExpectedLength is null || control.ExpectedSha256Hex is null)
                         {
                             throw new InvalidDataException(
@@ -182,6 +208,13 @@ public sealed class MigrationRecoveryService
                 }
                 else if (control.Kind == MigrationControlArtifactKind.CapabilityProbeDirectory)
                 {
+                    if (manifest.SchemaVersion < 5 && _fileOps.DirectoryExists(controlPath))
+                    {
+                        throw new LegacyMigrationRecoveryRequiredException(
+                            $"Legacy schema-v{manifest.SchemaVersion} capability-probe directory " +
+                            $"'{control.RelativePath}' was preserved for explicit legacy recovery.");
+                    }
+
                     // CRUU15-006: removed through a single retained directory handle, so the
                     // object proven empty and the object removed are the same one. The kernel
                     // re-checks emptiness atomically when the disposition is applied, which is
@@ -255,8 +288,21 @@ public sealed class MigrationRecoveryService
                         promptsDir);
                 if (promptsOutcome == ArtifactCleanupOutcome.PreservedUnproven)
                 {
-                    throw new InvalidDataException(
-                        "The prompts directory is not the exact directory this attempt created. It was preserved.");
+                    if (manifest.SchemaVersion < 5)
+                    {
+                        throw new LegacyMigrationRecoveryRequiredException(
+                            $"Legacy schema-v{manifest.SchemaVersion} attempt-created prompts directory has no v5 identity claim. " +
+                            "It was preserved for explicit legacy recovery.");
+                    }
+                    if (CanRetainUnclaimedEmptyDirectory(promptsDir))
+                    {
+                        retainedUnclaimedDirectories.Add(PathIdentity.NormalizeForComparison(promptsDir));
+                    }
+                    else
+                    {
+                        throw new InvalidDataException(
+                            "The prompts directory is not the exact directory this attempt created. It was preserved.");
+                    }
                 }
             }
 
@@ -269,8 +315,21 @@ public sealed class MigrationRecoveryService
                         recoveryDir);
                 if (recoveryOutcome == ArtifactCleanupOutcome.PreservedUnproven)
                 {
-                    throw new InvalidDataException(
-                        "The recovery directory is not the exact directory this attempt created. It was preserved.");
+                    if (manifest.SchemaVersion < 5)
+                    {
+                        throw new LegacyMigrationRecoveryRequiredException(
+                            $"Legacy schema-v{manifest.SchemaVersion} attempt-created recovery directory has no v5 identity claim. " +
+                            "It was preserved for explicit legacy recovery.");
+                    }
+                    if (CanRetainUnclaimedEmptyDirectory(recoveryDir))
+                    {
+                        retainedUnclaimedDirectories.Add(PathIdentity.NormalizeForComparison(recoveryDir));
+                    }
+                    else
+                    {
+                        throw new InvalidDataException(
+                            "The recovery directory is not the exact directory this attempt created. It was preserved.");
+                    }
                 }
             }
 
@@ -289,10 +348,14 @@ public sealed class MigrationRecoveryService
                 throw new InvalidDataException("Attempt payload artifacts remain after cleanup.");
             }
 
-            if (after.AttemptCreatedDirectories.Count > 0)
+            string[] unexplainedDirectories = after.AttemptCreatedDirectories
+                .Where(path => !retainedUnclaimedDirectories.Contains(
+                    PathIdentity.NormalizeForComparison(path)))
+                .ToArray();
+            if (unexplainedDirectories.Length > 0)
             {
                 throw new InvalidDataException(
-                    $"Attempt-created directories still exist: {string.Join(", ", after.AttemptCreatedDirectories)}.");
+                    $"Attempt-created directories still exist: {string.Join(", ", unexplainedDirectories)}.");
             }
 
             // 6. Delete marker LAST
@@ -305,11 +368,41 @@ public sealed class MigrationRecoveryService
 
             return new RecoveryResult(true);
         }
+        catch (LegacyMigrationRecoveryRequiredException ex)
+        {
+            var recEx = new MigrationRecoveryException(
+                context.TargetPhysicalRoot,
+                "LegacyRecoveryRequired",
+                ex);
+            return new RecoveryResult(
+                false,
+                recEx.Message,
+                recEx,
+                MigrationRecoveryDisposition.LegacyManualCleanupRequired);
+        }
         catch (Exception ex)
         {
             var recEx = ex as MigrationRecoveryException ?? new MigrationRecoveryException(context.TargetPhysicalRoot, "RecoverForRetry", ex);
-            return new RecoveryResult(false, recEx.Message, recEx);
+            return new RecoveryResult(
+                false,
+                recEx.Message,
+                recEx,
+                MigrationRecoveryDisposition.Failed);
         }
+    }
+
+    private static bool CanRetainUnclaimedEmptyDirectory(string path)
+    {
+        if (new StrictPathAuthority().Probe(path).Kind != StrictPathKind.Directory)
+        {
+            return false;
+        }
+
+        // No destructive authority is inferred. If another process adds content after this
+        // observation, the directory is still preserved; later inventory will either classify
+        // that content or fail closed. The check exists only to decide whether empty structure
+        // can be adopted for retry liveness.
+        return !Directory.EnumerateFileSystemEntries(path).Any();
     }
 
     public RecoveryResult FinalizeCommittedStartup(MigrationRecoveryContext context)
@@ -330,7 +423,11 @@ public sealed class MigrationRecoveryService
             catch (Exception ex)
             {
                 var recEx = new MigrationRecoveryException(context.TargetPhysicalRoot, "ReadManifest", ex);
-                return new RecoveryResult(false, recEx.Message, recEx);
+                return new RecoveryResult(
+                    false,
+                    recEx.Message,
+                    recEx,
+                    MigrationRecoveryDisposition.Failed);
             }
 
             if (manifest is null)
@@ -449,7 +546,11 @@ public sealed class MigrationRecoveryService
         catch (Exception ex)
         {
             var recEx = ex as MigrationRecoveryException ?? new MigrationRecoveryException(context.TargetPhysicalRoot, "FinalizeCommittedStartup", ex);
-            return new RecoveryResult(false, recEx.Message, recEx);
+            return new RecoveryResult(
+                false,
+                recEx.Message,
+                recEx,
+                MigrationRecoveryDisposition.Failed);
         }
     }
 }

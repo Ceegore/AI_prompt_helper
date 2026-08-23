@@ -122,7 +122,10 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
             directory,
             $".prompthelper-tmp-{WindowsDurableAtomicFileWriter.GetClassTag(fileClass)}-{Guid.NewGuid():N}.tmp");
 
-        using var stage = WindowsOwnedDurableStage.CreateNewUnderRoot(stagePath, physicalRoot);
+        using var stage = WindowsOwnedDurableStage.CreateCrashAtomicBootstrapUnderRoot(
+            stagePath,
+            physicalRoot);
+        ProductionCrashCut.Hit("WindowsAtomicExpectedFileReplacer.AfterCreateBeforeFirstClaim");
 
         try
         {
@@ -132,6 +135,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
                 OwnedArtifactPhase.Claimed,
                 Relative(physicalRoot, stagePath),
                 stage.Identity));
+            stage.PersistAfterDurableClaim();
         }
         catch (Exception recordFailure)
         {
@@ -211,7 +215,10 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
             directory,
             $".prompthelper-preimage-{targetFileName}-{Guid.NewGuid():N}.tmp");
 
-        using var stage = WindowsOwnedDurableStage.CreateNewUnderRoot(stagePath, physicalRoot);
+        using var stage = WindowsOwnedDurableStage.CreateCrashAtomicBootstrapUnderRoot(
+            stagePath,
+            physicalRoot);
+        ProductionCrashCut.Hit("WindowsAtomicExpectedFileReplacer.AfterCreateBeforeFirstClaim");
 
         try
         {
@@ -221,6 +228,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
                 OwnedArtifactPhase.Claimed,
                 Relative(physicalRoot, stagePath),
                 stage.Identity));
+            stage.PersistAfterDurableClaim();
         }
         catch (Exception recordFailure)
         {

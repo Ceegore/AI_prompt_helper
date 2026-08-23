@@ -59,11 +59,14 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
         ProductionRuntimeEvidence.Hit("DefaultMigrationManifestFileOps.CreateOwnedStage");
-        var stage = new OwnedManifestStage(
-            WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot));
+        WindowsOwnedDurableStage durableStage =
+            WindowsOwnedDurableStage.CreateCrashAtomicBootstrapUnderRoot(path, physicalRoot);
+        var stage = new OwnedManifestStage(durableStage);
+        ProductionCrashCut.Hit("DefaultMigrationManifestFileOps.AfterCreateBeforeFirstClaim");
         try
         {
             DefaultMigrationFileOps.RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);
+            durableStage.PersistAfterDurableClaim();
             return stage;
         }
         catch (Exception recordFailure)

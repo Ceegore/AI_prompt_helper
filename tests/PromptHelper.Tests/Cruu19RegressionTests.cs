@@ -12,7 +12,7 @@ using PromptHelper.Services;
 
 namespace PromptHelper.Tests;
 
-[TestClass]
+[ProductionEvidenceTestClass]
 [DoNotParallelize]
 public sealed class Cruu19RegressionTests
 {
@@ -197,7 +197,11 @@ public sealed class Cruu19RegressionTests
         byte[] content = Utf8("create");
         var capabilityOps = new DefaultCapabilityFileOps();
         using (IOwnedCapabilityProbe probe = capabilityOps.CreateOwnedProbe(
-                   fixture.Target.Root, probePath, content, recordDurableOwnership: true))
+                   fixture.Target.Root,
+                   probePath,
+                   Path.Combine(fixture.Target.Root, fixture.Plan.RootProbe.DisplacedRelativePath),
+                   content,
+                   recordDurableOwnership: true))
         {
             probe.Write(content);
             probe.FlushDurable();
@@ -221,7 +225,11 @@ public sealed class Cruu19RegressionTests
         byte[] content = Utf8("create");
         var capabilityOps = new DefaultCapabilityFileOps();
         using (IOwnedCapabilityProbe probe = capabilityOps.CreateOwnedProbe(
-                   fixture.Target.Root, probePath, content, recordDurableOwnership: true))
+                   fixture.Target.Root,
+                   probePath,
+                   Path.Combine(fixture.Target.Root, fixture.Plan.RootProbe.DisplacedRelativePath),
+                   content,
+                   recordDurableOwnership: true))
         {
             probe.Write(content);
             probe.FlushDurable();

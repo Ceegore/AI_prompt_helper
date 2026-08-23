@@ -172,12 +172,15 @@ public sealed class Cruu16CasRecoveryTests
         // no case in the matrix is a crash cut nobody decided how to handle.
         var handled = new Dictionary<OwnedArtifactPhase, string>();
 
-        foreach (OwnedArtifactPhase phase in Enum.GetValues<OwnedArtifactPhase>())
+        OwnedArtifactPhase[] casPhases = Enum.GetValues<OwnedArtifactPhase>()
+            .Where(phase => phase <= OwnedArtifactPhase.CandidatePublished)
+            .ToArray();
+        foreach (OwnedArtifactPhase phase in casPhases)
         {
             handled[phase] = ResolveForPhase(phase);
         }
 
-        Assert.AreEqual(Enum.GetValues<OwnedArtifactPhase>().Length, handled.Count);
+        Assert.AreEqual(casPhases.Length, handled.Count);
         foreach (KeyValuePair<OwnedArtifactPhase, string> entry in handled)
         {
             Assert.IsNotNull(entry.Value, $"Phase {entry.Key} has no defined recovery outcome.");

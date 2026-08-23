@@ -22,6 +22,7 @@ internal interface ICapabilityFileOps
     IOwnedCapabilityProbe CreateOwnedProbe(
         string physicalRoot,
         string path,
+        string allowedRecoveryPath,
         ReadOnlySpan<byte> expectedContent,
         bool recordDurableOwnership);
 
@@ -43,16 +44,33 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
     public IOwnedCapabilityProbe CreateOwnedProbe(
         string physicalRoot,
         string path,
+        string allowedRecoveryPath,
         ReadOnlySpan<byte> expectedContent,
         bool recordDurableOwnership)
     {
         ProductionRuntimeEvidence.Hit("DefaultCapabilityFileOps.CreateOwnedProbe");
 
+        string fullRoot = PathIdentity.NormalizeForComparison(physicalRoot);
+        string fullAllowedRecoveryPath = PathIdentity.NormalizeForComparison(allowedRecoveryPath);
+        if (!PathIdentity.IsStrictDescendant(fullAllowedRecoveryPath, fullRoot))
+        {
+            throw new InvalidDataException(
+                $"Capability-probe recovery path must remain inside its physical root. " +
+                $"Root='{fullRoot}', RecoveryPath='{fullAllowedRecoveryPath}'.");
+        }
+
+        WindowsOwnedDurableStage stage =
+            WindowsOwnedDurableStage.CreateCrashAtomicBootstrapUnderRoot(path, physicalRoot);
         var probe = new OwnedCapabilityProbe(
-            WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot),
+            stage,
             physicalRoot,
             path,
+            fullAllowedRecoveryPath,
+            expectedContent.Length,
+            Convert.ToHexStringLower(SHA256.HashData(expectedContent)),
             recordDurableOwnership ? _ownedArtifacts : null);
+
+        ProductionCrashCut.Hit("DefaultCapabilityFileOps.AfterCreateBeforeFirstClaim");
 
         if (!recordDurableOwnership)
         {
@@ -61,10 +79,8 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
 
         try
         {
-            probe.RecordLocation(
-                path,
-                expectedContent.Length,
-                Convert.ToHexStringLower(SHA256.HashData(expectedContent)));
+            probe.RecordPhase(OwnedArtifactPhase.ProbeCreatedClaimed);
+            stage.PersistAfterDurableClaim();
             return probe;
         }
         catch (Exception recordFailure)
@@ -107,18 +123,29 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
         private readonly string _physicalRoot;
         private readonly IOwnedArtifactJournal? _journal;
         private readonly Guid _operationId = Guid.NewGuid();
-        private long _expectedLength;
-        private string? _expectedSha256Hex;
+        private readonly string _initialRelativePath;
+        private readonly string _allowedRecoveryRelativePath;
+        private readonly long _expectedLength;
+        private readonly string _expectedSha256Hex;
 
         public OwnedCapabilityProbe(
             WindowsOwnedDurableStage stage,
             string physicalRoot,
             string initialPath,
+            string allowedRecoveryPath,
+            long expectedLength,
+            string expectedSha256Hex,
             IOwnedArtifactJournal? journal)
         {
             _stage = stage;
             _physicalRoot = Path.GetFullPath(physicalRoot);
             CurrentPath = Path.GetFullPath(initialPath);
+            _initialRelativePath = Path.GetRelativePath(_physicalRoot, CurrentPath);
+            _allowedRecoveryRelativePath = Path.GetRelativePath(
+                _physicalRoot,
+                Path.GetFullPath(allowedRecoveryPath));
+            _expectedLength = expectedLength;
+            _expectedSha256Hex = expectedSha256Hex;
             _journal = journal;
         }
 
@@ -126,35 +153,50 @@ internal sealed class DefaultCapabilityFileOps : ICapabilityFileOps
         public string IdentityToken => _stage.Identity.ToToken();
 
         public void Write(ReadOnlySpan<byte> bytes) => _stage.Write(bytes);
-        public void FlushDurable() => _stage.FlushDurable();
+        public void FlushDurable()
+        {
+            _stage.FlushDurable();
+            RecordPhase(OwnedArtifactPhase.ProbeContentDurable);
+        }
 
         public void RenameNoOverwriteRetainingOwnership(string targetPath)
         {
-            _stage.RenameNoOverwriteRetainingOwnership(targetPath);
-            CurrentPath = Path.GetFullPath(targetPath);
-            if (_journal is not null)
+            string fullTarget = Path.GetFullPath(targetPath);
+            if (!string.Equals(
+                    Path.GetRelativePath(_physicalRoot, fullTarget),
+                    _allowedRecoveryRelativePath,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                RecordLocation(CurrentPath, _expectedLength, _expectedSha256Hex!);
+                throw new InvalidOperationException(
+                    $"Probe rename target '{targetPath}' was not durably predeclared.");
             }
+
+            RecordPhase(OwnedArtifactPhase.ProbeRenamePrepared);
+            _stage.RenameNoOverwriteRetainingOwnership(targetPath);
+            CurrentPath = fullTarget;
+            string cut = Path.GetFileName(fullTarget).Contains("displaced", StringComparison.OrdinalIgnoreCase)
+                ? "DefaultCapabilityFileOps.AfterRenameToDisplacedBeforeRecord"
+                : "DefaultCapabilityFileOps.AfterRenameToCurrentBeforeRecord";
+            ProductionCrashCut.Hit(cut);
+            RecordPhase(OwnedArtifactPhase.ProbeRenamed);
         }
 
         public void DeleteExact() => _stage.DeleteExact();
         public void Dispose() => _stage.Dispose();
 
-        public void RecordLocation(string path, long expectedLength, string expectedSha256Hex)
+        public void RecordPhase(OwnedArtifactPhase phase)
         {
-            _expectedLength = expectedLength;
-            _expectedSha256Hex = expectedSha256Hex;
             _journal?.Record(
                 _physicalRoot,
                 new OwnedArtifactRecord(
                     _operationId,
-                    OwnedArtifactKind.Stage,
-                    OwnedArtifactPhase.Claimed,
-                    Path.GetRelativePath(_physicalRoot, Path.GetFullPath(path)),
+                    OwnedArtifactKind.CapabilityProbe,
+                    phase,
+                    _initialRelativePath,
                     _stage.Identity,
-                    CandidateSha256Hex: expectedSha256Hex,
-                    CandidateLength: expectedLength));
+                    RestoreRelativePath: _allowedRecoveryRelativePath,
+                    CandidateSha256Hex: _expectedSha256Hex,
+                    CandidateLength: _expectedLength));
         }
     }
 }

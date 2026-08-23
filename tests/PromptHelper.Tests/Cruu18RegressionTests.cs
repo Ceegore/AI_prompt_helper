@@ -13,13 +13,7 @@ using PromptHelper.ViewModels;
 
 namespace PromptHelper.Tests;
 
-[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
-internal sealed class ProductionSymbolEvidenceAttribute(string symbol) : Attribute
-{
-    public string Symbol { get; } = symbol;
-}
-
-[TestClass]
+[ProductionEvidenceTestClass]
 [DoNotParallelize]
 public sealed class Cruu18RegressionTests
 {
@@ -157,7 +151,11 @@ public sealed class Cruu18RegressionTests
     {
         var hits = new HashSet<string>(StringComparer.Ordinal);
         Action<string>? previous = ProductionRuntimeEvidence.SinkForTests;
-        ProductionRuntimeEvidence.SinkForTests = symbol => hits.Add(symbol);
+        ProductionRuntimeEvidence.SinkForTests = symbol =>
+        {
+            hits.Add(symbol);
+            previous?.Invoke(symbol);
+        };
         try
         {
             T result = action();
@@ -185,7 +183,11 @@ public sealed class Cruu18RegressionTests
     {
         var hits = new HashSet<string>(StringComparer.Ordinal);
         Action<string>? previous = ProductionRuntimeEvidence.SinkForTests;
-        ProductionRuntimeEvidence.SinkForTests = symbol => hits.Add(symbol);
+        ProductionRuntimeEvidence.SinkForTests = symbol =>
+        {
+            hits.Add(symbol);
+            previous?.Invoke(symbol);
+        };
         Exception? observed = null;
         try
         {

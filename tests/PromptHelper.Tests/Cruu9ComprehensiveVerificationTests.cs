@@ -848,6 +848,7 @@ public sealed class Cruu9ComprehensiveVerificationTests
         using (IOwnedCapabilityProbe probe = new DefaultCapabilityFileOps().CreateOwnedProbe(
                    target.Root,
                    probeFile,
+                   Path.Combine(target.Root, probePlan.RootProbe.DisplacedRelativePath),
                    probeBytes,
                    recordDurableOwnership: true))
         {

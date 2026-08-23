@@ -15,12 +15,14 @@ internal sealed class FakeCapabilityFileOps : ICapabilityFileOps
     public IOwnedCapabilityProbe CreateOwnedProbe(
         string physicalRoot,
         string path,
+        string allowedRecoveryPath,
         ReadOnlySpan<byte> expectedContent,
         bool recordDurableOwnership)
     {
         IOwnedCapabilityProbe inner = _inner.CreateOwnedProbe(
             physicalRoot,
             path,
+            allowedRecoveryPath,
             expectedContent,
             recordDurableOwnership);
         return new FakeOwnedProbe(inner, path, OnReplace, OnDeleteOwnedProbe);

@@ -29,24 +29,9 @@ internal sealed class WindowsOwnedDirectoryCreator : IOwnedDirectoryCreator
 
     public OwnedDirectoryCreationResult TryCreateOwned(string path)
     {
-        DirectoryCreateOutcome outcome = _ops.TryCreateDirectoryOwned(path);
-        if (outcome == DirectoryCreateOutcome.AlreadyExists)
-        {
-            return new OwnedDirectoryCreationResult(outcome, null);
-        }
-
         string fullPath = System.IO.Path.GetFullPath(path);
         string parent = System.IO.Path.GetDirectoryName(fullPath)
             ?? throw new InvalidOperationException($"Created directory has no parent: '{path}'.");
-
-        using WindowsRetirableDirectory directory =
-            WindowsRetirableDirectory.OpenExistingOrNull(fullPath, parent)
-            ?? throw new IOException($"Newly-created directory disappeared before it could be claimed: '{path}'.");
-
-        WindowsFileIdentity identity = directory.Identity;
-
-        // Only attempt-owned children of the migration root need restart authority. The root
-        // itself is owned by TargetRootReservation and cannot carry a journal outside itself.
         string name = System.IO.Path.GetFileName(fullPath.TrimEnd(
             System.IO.Path.DirectorySeparatorChar,
             System.IO.Path.AltDirectorySeparatorChar));
@@ -56,36 +41,66 @@ internal sealed class WindowsOwnedDirectoryCreator : IOwnedDirectoryCreator
 
         if (requiresDurableClaim)
         {
-            string root = parent;
-            try
-            {
-                ProductionRuntimeEvidence.Hit("WindowsOwnedDirectoryCreator.RecordCreationIdentity");
-                _ownedArtifacts.Record(root, new OwnedArtifactRecord(
-                    Guid.NewGuid(),
-                    OwnedArtifactKind.MigrationDirectory,
-                    OwnedArtifactPhase.Claimed,
-                    System.IO.Path.GetRelativePath(root, fullPath),
-                    identity));
-            }
-            catch (Exception recordFailure)
-            {
-                try
-                {
-                    directory.DeleteExact();
-                }
-                catch (Exception cleanupFailure)
-                {
-                    throw new IOException(
-                        $"Directory ownership could not be recorded and exact cleanup failed for '{path}'.",
-                        new AggregateException(recordFailure, cleanupFailure));
-                }
-
-                throw;
-            }
+            return TryCreateCrashAtomicClaim(fullPath, parent);
         }
+
+        DirectoryCreateOutcome outcome = _ops.TryCreateDirectoryOwned(path);
+        if (outcome == DirectoryCreateOutcome.AlreadyExists)
+        {
+            return new OwnedDirectoryCreationResult(outcome, null);
+        }
+
+        using WindowsRetirableDirectory directory =
+            WindowsRetirableDirectory.OpenExistingOrNull(fullPath, parent)
+            ?? throw new IOException($"Newly-created directory disappeared before it could be claimed: '{path}'.");
+
+        WindowsFileIdentity identity = directory.Identity;
 
         return new OwnedDirectoryCreationResult(
             outcome,
+            new OwnedDirectoryClaim(fullPath, identity));
+    }
+
+    private OwnedDirectoryCreationResult TryCreateCrashAtomicClaim(string fullPath, string parent)
+    {
+        using WindowsCrashAtomicDirectoryBootstrap? directory =
+            WindowsCrashAtomicDirectoryBootstrap.CreateNewOrNull(fullPath, parent);
+        if (directory is null)
+        {
+            return new OwnedDirectoryCreationResult(DirectoryCreateOutcome.AlreadyExists, null);
+        }
+
+        ProductionCrashCut.Hit("WindowsOwnedDirectoryCreator.AfterCreateBeforeFirstClaim");
+        WindowsFileIdentity identity = directory.Identity;
+        try
+        {
+            ProductionRuntimeEvidence.Hit("WindowsOwnedDirectoryCreator.RecordCreationIdentity");
+            _ownedArtifacts.Record(parent, new OwnedArtifactRecord(
+                Guid.NewGuid(),
+                OwnedArtifactKind.MigrationDirectory,
+                OwnedArtifactPhase.Claimed,
+                System.IO.Path.GetRelativePath(parent, fullPath),
+                identity));
+            directory.PersistAfterDurableClaim();
+        }
+        catch (Exception recordFailure)
+        {
+            try
+            {
+                directory.DeleteExact();
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new IOException(
+                    $"Directory ownership could not be recorded and exact cleanup failed for '{fullPath}'.",
+                    new AggregateException(recordFailure, cleanupFailure));
+            }
+
+            throw;
+        }
+
+        return new OwnedDirectoryCreationResult(
+            DirectoryCreateOutcome.CreatedByCaller,
             new OwnedDirectoryClaim(fullPath, identity));
     }
 }

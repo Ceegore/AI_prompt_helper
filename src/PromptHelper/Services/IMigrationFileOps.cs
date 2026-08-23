@@ -173,13 +173,16 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
         ProductionRuntimeEvidence.Hit("DefaultMigrationFileOps.CreateOwnedStage");
-        var stage = new OwnedMigrationStage(
-            WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot));
+        WindowsOwnedDurableStage durableStage =
+            WindowsOwnedDurableStage.CreateCrashAtomicBootstrapUnderRoot(path, physicalRoot);
+        var stage = new OwnedMigrationStage(durableStage);
+        ProductionCrashCut.Hit("DefaultMigrationFileOps.AfterCreateBeforeFirstClaim");
         try
         {
             // Claim it durably while the handle is still held, so a crash before promotion
             // leaves behind an artifact whose provenance a later process can actually prove.
             RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);
+            durableStage.PersistAfterDurableClaim();
             return stage;
         }
         catch (Exception recordFailure)

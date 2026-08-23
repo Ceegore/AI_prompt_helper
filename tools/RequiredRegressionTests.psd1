@@ -501,6 +501,43 @@
         # CRUU2-005
         'CRUU2_005_Automatic_headline_prefill_untouched_remains_null_after_edit',
         'CRUU2_005_User_edited_headline_becomes_custom_title_after_edit',
+        # CRUU20-001
+        'CRUU20_001_Crash_after_probe_claim_before_full_write_is_recoverable',
+        'CRUU20_001_Crash_during_probe_write_partial_content_is_recoverable',
+        'CRUU20_001_Crash_after_probe_data_write_before_flush_is_recoverable',
+        'CRUU20_001_Crash_after_current_probe_rename_before_new_location_record_is_recoverable',
+        'CRUU20_001_Crash_after_replacement_probe_rename_before_new_location_record_is_recoverable',
+        'CRUU20_001_Probe_claim_predeclares_all_recovery_locations_before_first_rename',
+        'CRUU20_001_Probe_recovery_matrix_covers_every_durable_phase_and_location',
+        'CRUU20_001_Partial_exact_owned_probe_does_not_become_PreservedUnproven',
+        'CRUU20_001_Foreign_partial_probe_same_path_is_still_preserved',
+        'CRUU20_001_Foreign_same_content_different_identity_is_still_preserved',
+        # CRUU20-002
+        'CRUU20_002_Hard_crash_between_CAS_stage_create_and_first_claim_leaves_no_unproven_stage',
+        'CRUU20_002_Hard_crash_between_payload_stage_create_and_first_claim_leaves_no_unproven_temp',
+        'CRUU20_002_Hard_crash_between_manifest_stage_create_and_first_claim_does_not_wedge_retry',
+        'CRUU20_002_Hard_crash_between_probe_create_and_first_claim_does_not_wedge_retry',
+        'CRUU20_002_Hard_crash_between_directory_create_and_identity_claim_does_not_wedge_retry',
+        'CRUU20_002_Torn_first_ownership_append_cannot_leave_live_unproven_artifact',
+        'CRUU20_002_First_claim_protocol_is_crash_atomic_not_only_exception_safe',
+        # CRUU20-003
+        'CRUU20_003_Current_schema_version_bumps_when_ownership_protocol_changes',
+        'CRUU20_003_Parent_v4_interrupted_attempt_is_not_treated_as_v5_identity_protocol',
+        'CRUU20_003_Parent_v4_attempt_created_dirs_have_explicit_legacy_recovery_outcome',
+        'CRUU20_003_Parent_v4_probe_residue_has_explicit_legacy_recovery_outcome',
+        'CRUU20_003_Legacy_v4_clean_attempt_can_retire_when_no_destructive_inference_is_needed',
+        'CRUU20_003_New_protocol_marker_roundtrips_as_v5',
+        'CRUU20_003_v5_requires_displaced_probe_control',
+        'CRUU20_003_v5_requires_consistent_alternate_probe_content_authority',
+        'CRUU20_003_Old_v4_reader_rejects_v5_by_schema_not_same_version_unknown_member',
+        # CRUU20-004
+        'CRUU20_004_Attributed_test_without_runtime_hit_fails_automatically',
+        'CRUU20_004_Attributed_expected_exception_test_without_hit_fails_automatically',
+        'CRUU20_004_Attributed_test_with_required_hit_passes_automatically',
+        'CRUU20_004_Multi_symbol_attribute_requires_every_symbol_hit',
+        'CRUU20_004_Evidence_enforcement_does_not_depend_on_AssertProductionHit_helper',
+        'CRUU20_004_All_ProductionSymbolEvidence_tests_use_automatic_runtime_harness',
+        'CRUU20_004_Nested_evidence_capture_restores_previous_sink',
         # CRUU3-001
         'CRUU3_001_MainWindow_Requests_Shutdown_On_RestartRequired',
         # CRUU3-002

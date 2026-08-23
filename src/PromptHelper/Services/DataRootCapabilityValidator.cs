@@ -277,6 +277,7 @@ public sealed class DataRootCapabilityValidator
             current = _fileOps.CreateOwnedProbe(
                 physicalRoot,
                 currentFile,
+                displacedFile,
                 currentBytes,
                 recordDurableOwnership);
             journal?.TrackCreatedFile(currentFile);
@@ -286,6 +287,7 @@ public sealed class DataRootCapabilityValidator
             replacement = _fileOps.CreateOwnedProbe(
                 physicalRoot,
                 replacementFile,
+                currentFile,
                 replacementBytes,
                 recordDurableOwnership);
             journal?.TrackCreatedFile(replacementFile);

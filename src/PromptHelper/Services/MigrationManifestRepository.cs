@@ -612,6 +612,11 @@ public sealed class MigrationManifestRepository
 
             ValidateControlGrammar(manifest.SchemaVersion, manifest.AttemptId, control);
         }
+
+        if (manifest.SchemaVersion >= 5)
+        {
+            ValidateV5ControlSet(manifest);
+        }
     }
 
     private static void ValidateTempPath(Guid attemptId, string finalRelative, string tempRelative)
@@ -646,7 +651,38 @@ public sealed class MigrationManifestRepository
     {
         string rel = control.RelativePath.Replace('/', '\\').TrimStart('\\');
 
-        if (schemaVersion >= 4)
+        if (schemaVersion >= 5)
+        {
+            if (control.Kind == MigrationControlArtifactKind.ManifestPhaseStaging)
+            {
+                if (!string.Equals(rel, $".prompthelper-migration.stage-{attemptId:N}.tmp", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"Invalid manifest phase stage name: '{control.RelativePath}'.");
+                }
+                return;
+            }
+
+            if (control.Kind == MigrationControlArtifactKind.CapabilityProbeFile)
+            {
+                string[] allowed =
+                [
+                    $".prompthelper-probe-{attemptId:N}-root-current.tmp",
+                    $".prompthelper-probe-{attemptId:N}-root-replacement.tmp",
+                    $".prompthelper-probe-{attemptId:N}-root-displaced.tmp",
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-current.tmp"),
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-replacement.tmp"),
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-displaced.tmp")
+                ];
+
+                if (allowed.Any(x => string.Equals(x, rel, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+            }
+
+            throw new InvalidDataException($"Invalid schema-v5 control: '{control.RelativePath}'.");
+        }
+        else if (schemaVersion == 4)
         {
             if (control.Kind == MigrationControlArtifactKind.ManifestPhaseStaging)
             {
@@ -720,6 +756,90 @@ public sealed class MigrationManifestRepository
                     }
 
                     throw new InvalidDataException($"Invalid capability probe file name: '{control.RelativePath}'.");
+            }
+        }
+    }
+
+    private static void ValidateV5ControlSet(MigrationAttemptManifest manifest)
+    {
+        ValidateV5ProbeTriplet(manifest, prefix: "root", directory: string.Empty);
+        ValidateV5ProbeTriplet(manifest, prefix: "prompts", directory: "prompts");
+    }
+
+    private static void ValidateV5ProbeTriplet(
+        MigrationAttemptManifest manifest,
+        string prefix,
+        string directory)
+    {
+        string Name(string phase)
+        {
+            string file = $".prompthelper-probe-{manifest.AttemptId:N}-{prefix}-{phase}.tmp";
+            return directory.Length == 0 ? file : Path.Combine(directory, file);
+        }
+
+        MigrationControlArtifact? current = Find(Name("current"));
+        MigrationControlArtifact? replacement = Find(Name("replacement"));
+        MigrationControlArtifact? displaced = Find(Name("displaced"));
+        int present = (current is null ? 0 : 1) +
+                      (replacement is null ? 0 : 1) +
+                      (displaced is null ? 0 : 1);
+
+        if (present == 0)
+        {
+            return;
+        }
+        if (present != 3)
+        {
+            throw new InvalidDataException(
+                $"Schema-v5 {prefix} capability probe must declare current, replacement and displaced recovery paths.");
+        }
+
+        RequireExpected(current!, $"{prefix} current");
+        RequireExpected(replacement!, $"{prefix} replacement");
+        RequireExpected(displaced!, $"{prefix} displaced");
+
+        if (current!.AlternateExpectedLength is null ||
+            string.IsNullOrWhiteSpace(current.AlternateExpectedSha256Hex))
+        {
+            throw new InvalidDataException(
+                $"Schema-v5 {prefix} current probe must declare alternate replacement content authority.");
+        }
+        if (replacement!.AlternateExpectedLength is not null ||
+            replacement.AlternateExpectedSha256Hex is not null ||
+            displaced!.AlternateExpectedLength is not null ||
+            displaced.AlternateExpectedSha256Hex is not null)
+        {
+            throw new InvalidDataException(
+                $"Schema-v5 {prefix} alternate content authority is valid only on the current path.");
+        }
+
+        if (current.ExpectedLength != displaced.ExpectedLength ||
+            !string.Equals(current.ExpectedSha256Hex, displaced.ExpectedSha256Hex, StringComparison.OrdinalIgnoreCase) ||
+            current.AlternateExpectedLength != replacement.ExpectedLength ||
+            !string.Equals(current.AlternateExpectedSha256Hex, replacement.ExpectedSha256Hex, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Schema-v5 {prefix} probe content authority is inconsistent across its predeclared locations.");
+        }
+
+        MigrationControlArtifact? Find(string relative) =>
+            manifest.ControlArtifacts.SingleOrDefault(control =>
+                control.Kind == MigrationControlArtifactKind.CapabilityProbeFile &&
+                string.Equals(
+                    control.RelativePath.Replace('/', '\\'),
+                    relative.Replace('/', '\\'),
+                    StringComparison.OrdinalIgnoreCase));
+
+        static void RequireExpected(MigrationControlArtifact control, string description)
+        {
+            if (control.ExpectedLength is null ||
+                control.ExpectedLength < 0 ||
+                string.IsNullOrWhiteSpace(control.ExpectedSha256Hex) ||
+                control.ExpectedSha256Hex.Length != 64 ||
+                !IsHex(control.ExpectedSha256Hex))
+            {
+                throw new InvalidDataException(
+                    $"Schema-v5 {description} probe has invalid expected content authority.");
             }
         }
     }

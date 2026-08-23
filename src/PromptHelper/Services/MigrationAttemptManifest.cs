@@ -11,7 +11,7 @@ public enum MigrationManifestPhase
 
 public sealed class MigrationAttemptManifest
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Guid AttemptId { get; set; }
