@@ -237,10 +237,15 @@ public sealed class Cruu15IconChainTests
             return;
         }
 
-        var psi = new ProcessStartInfo("npm.cmd")
+        // Through cmd.exe deliberately: npm is a batch shim, and launching it directly with
+        // UseShellExecute=false makes it resolve its own bootstrap scripts against the working
+        // directory instead of its install location, which fails with a MODULE_NOT_FOUND for
+        // npm-prefix.js on any checkout that has no node_modules yet — precisely the fresh
+        // checkout this test exists to exercise.
+        var psi = new ProcessStartInfo("cmd.exe")
         {
             WorkingDirectory = GeneratorPackageDir,
-            ArgumentList = { "ci", "--no-audit", "--no-fund" }
+            ArgumentList = { "/c", "npm", "ci", "--no-audit", "--no-fund" }
         };
 
         ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 420_000);
