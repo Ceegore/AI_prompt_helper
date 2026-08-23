@@ -78,7 +78,7 @@ internal static class ProvenanceBoundCleanup
             WindowsFileIdentity actual = WindowsFileIdentity.FromHandle(handle);
 
             bool proven = false;
-            foreach (OwnedArtifactRecord record in journal.Read(physicalRoot))
+            foreach (OwnedArtifactRecord record in journal.Read(physicalRoot).Records)
             {
                 if (string.Equals(record.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase) &&
                     record.Identity == actual)

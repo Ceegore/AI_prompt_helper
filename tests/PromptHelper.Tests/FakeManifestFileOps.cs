@@ -36,11 +36,11 @@ internal sealed class FakeManifestFileOps : IMigrationManifestFileOps
         _inner.FlushToDisk(stream);
     }
 
-    public IOwnedFileStage CreateOwnedStage(string path)
+    public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
         Trace.Add($"CreateOwnedStage:{Path.GetFileName(path)}");
 
-        var stage = new FakeOwnedFileStage(_inner.CreateOwnedStage(path));
+        var stage = new FakeOwnedFileStage(_inner.CreateOwnedStage(physicalRoot, path));
 
         if (OnMoveNoOverwriteWriteThrough != null)
         {

@@ -36,7 +36,7 @@ internal static class DataRootTempReconciler
 
         if (!Directory.Exists(dataRoot))
         {
-            return new TempReconciliationResult(failures, preserved);
+            return new TempReconciliationResult(failures, preserved, []);
         }
 
         IOwnedArtifactJournal journal = ownedArtifacts ?? new WindowsOwnedArtifactJournal();
@@ -47,8 +47,24 @@ internal static class DataRootTempReconciler
 
         // Restore interrupted atomic replacements and destroy proven-owned leftovers before
         // classifying whatever remains.
-        IReadOnlySet<string> proven =
-            OwnedArtifactReconciler.Reconcile(dataRoot, journal, failures);
+        OwnedArtifactReconciler.Result result = OwnedArtifactReconciler.Reconcile(dataRoot, journal);
+        IReadOnlySet<string> proven = result.ProvenOwnedPaths;
+
+        foreach (ReconciliationOutcome outcome in result.Outcomes)
+        {
+            if (outcome.Severity != ReconciliationSeverity.Notice)
+            {
+                failures.Add(new TempCleanupFailure(outcome.Path, outcome.Message));
+            }
+        }
+
+        // An unresolved compare-and-swap means committed content is sitting in a pre-image
+        // that nothing has put back. Classifying stale temps on top of that would be beside
+        // the point (CRUU16-004).
+        if (result.HasFatal)
+        {
+            return new TempReconciliationResult(failures, preserved, result.Outcomes);
+        }
 
         // 1. Root directory
         foreach (string file in Directory.GetFiles(dataRoot))
@@ -117,7 +133,7 @@ internal static class DataRootTempReconciler
             }
         }
 
-        return new TempReconciliationResult(failures, preserved);
+        return new TempReconciliationResult(failures, preserved, result.Outcomes);
     }
 
     /// <summary>

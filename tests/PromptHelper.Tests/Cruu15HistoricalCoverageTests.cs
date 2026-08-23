@@ -21,6 +21,26 @@ namespace PromptHelper.Tests;
 [TestClass]
 public sealed class Cruu15HistoricalCoverageTests
 {
+    /// <summary>Writes a minimal valid library so a real transition has something to migrate.</summary>
+    private static void SeedValidLibrary(string root)
+    {
+        Guid promptId = Guid.NewGuid();
+        var paths = new AppPaths(root);
+        paths.EnsureDataDirectories();
+
+        File.WriteAllText(paths.GetPromptPath(promptId), "Prompt body content");
+
+        var document = new LibraryDocument
+        {
+            SchemaVersion = 1,
+            Categories = [],
+            Prompts = [new PromptRecord { Id = promptId, Title = "Seeded", CategoryId = null }]
+        };
+
+        new LibraryRepository(paths, new WindowsDurableAtomicFileWriter())
+            .Commit(CanonicalLibraryPackage.Create(document));
+    }
+
     private static LibraryDocument CreateDoc(params PromptRecord[] prompts) =>
         new()
         {
@@ -151,49 +171,55 @@ public sealed class Cruu15HistoricalCoverageTests
     [TestMethod]
     public void CRUU12_017_Target_baseline_records_absence_before_reservation_creates_the_root()
     {
-        using var temp = new TestDirectory();
+        // CRUU16-008: this executes the real transition. Constructing a baseline by hand proved
+        // only that the record type has the fields it has; the question is whether the
+        // transition captures absence *before* its own reservation creates the directory, and
+        // the only way to see that is to run one and watch what rollback does.
+        using var source = new TestDirectory();
+        using var targetParent = new TestDirectory();
+        using var settingsDir = new TestDirectory();
 
-        string neverExisted = Path.Combine(temp.Root, "NewTarget");
-        var absent = new MigrationTargetBaseline(
-            targetRootExistedBefore: false,
-            promptsDirectoryExistedBefore: false,
-            recoveryDirectoryExistedBefore: false);
+        SeedValidLibrary(source.Root);
 
-        Assert.IsFalse(absent.TargetRootExistedBefore);
-        Assert.IsFalse(Directory.Exists(neverExisted));
+        string target = Path.Combine(targetParent.Root, "NeverExisted");
+        Assert.IsFalse(Directory.Exists(target));
 
-        // The baseline is what tells rollback whether a directory is the attempt's to remove.
-        // A root the attempt created is attempt-owned; one that predates it is not.
-        var manifest = new MigrationAttemptManifest
+        string settingsPath = Path.Combine(settingsDir.Root, "settings.json");
+        File.WriteAllText(
+            settingsPath,
+            $"{{\"schemaVersion\":1,\"dataRootPath\":\"{source.Root.Replace("\\", "\\\\")}\"}}");
+
+        // Fail at the settings commit so the attempt has to roll back everything it created.
+        var faultWriter = new FakeDurableSettingsFileWriter
         {
-            SchemaVersion = MigrationAttemptManifest.CurrentSchemaVersion,
-            AttemptId = Guid.NewGuid(),
-            SourcePhysicalRoot = @"C:\Source",
-            TargetPhysicalRoot = temp.Root,
-            SourceLibrarySha256Hex = new string('0', 64),
-            SourcePayloadFingerprintSha256Hex = new string('0', 64),
-            Phase = MigrationManifestPhase.Copying,
-            TargetBaseline = absent,
-            Artifacts =
-            [
-                new MigrationManifestArtifact
-                {
-                    RelativePath = "library.json",
-                    TempRelativePath = $".library.json.migration-{Guid.NewGuid():N}-{new string('a', 32)}.tmp",
-                    Length = 10,
-                    Sha256Hex = new string('0', 64),
-                    Role = MigrationPayloadRole.PrimaryMetadata
-                }
-            ]
+            OnWriteDurable = (_, _) => throw new IOException("Injected settings failure")
         };
 
-        Directory.CreateDirectory(Path.Combine(temp.Root, "prompts"));
-        MigrationTargetInventory inventory = MigrationTargetInventoryInspector.Inspect(temp.Root, manifest);
+        var coordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath, durableWriter: faultWriter),
+            new DataFolderMigrationService(),
+            new FakeUserConfirmationService());
 
-        Assert.IsTrue(
-            inventory.AttemptCreatedDirectories.Any(d => d.EndsWith("prompts", StringComparison.OrdinalIgnoreCase)),
-            "A directory absent from the baseline must be classified as attempt-created.");
-        Assert.AreEqual(0, inventory.PreExistingDirectories.Count);
+        Assert.ThrowsExactly<IOException>(() => coordinator.RequestTransition(target));
+
+        // The baseline said the root did not exist beforehand, so rollback owns it and removes
+        // it. A baseline captured after the reservation created the directory would have said
+        // "pre-existing" and left it behind.
+        Assert.IsFalse(Directory.Exists(target),
+            "A root the attempt created must be removed when the attempt rolls back.");
+
+        // And a target that genuinely predates the attempt is preserved by the same mechanism.
+        using var preexisting = new TestDirectory();
+        var secondCoordinator = new DataFolderTransitionCoordinator(
+            source.Root,
+            new AppSettingsRepository(settingsPathOverride: settingsPath, durableWriter: faultWriter),
+            new DataFolderMigrationService(),
+            new FakeUserConfirmationService());
+
+        Assert.ThrowsExactly<IOException>(() => secondCoordinator.RequestTransition(preexisting.Root));
+        Assert.IsTrue(Directory.Exists(preexisting.Root),
+            "A root that existed before the attempt is not the attempt's to remove.");
     }
 
     // ==========================================
@@ -335,21 +361,41 @@ public sealed class Cruu15HistoricalCoverageTests
     }
 
     [TestMethod]
+    [TestCategory("WindowsFilesystemIntegration")]
     public void CRUU13_016_All_executable_icon_groups_are_compared_not_just_the_first()
     {
-        string readerSource = File.ReadAllText(RepositoryTestPaths.RequireFile(
-            "tools", "IconIdentityVerifier", "PeIconResourceReader.cs"));
+        // CRUU16-008: executes the real verifier. Searching its source for "EnumResourceNamesW"
+        // proved the symbol appears, not that every group is compared.
+        string exePath = RepositoryTestPaths.RequireBuiltApplicationExe();
+        string icoPath = RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Assets", "PromptHelper.ico");
 
-        // A reader that returns after the first RT_GROUP_ICON cannot prove anything about the
-        // remaining groups, which is exactly how an unapproved icon could ship.
-        StringAssert.Contains(readerSource, "EnumResourceNamesW");
-        Assert.IsTrue(
-            readerSource.Contains("groups", StringComparison.OrdinalIgnoreCase),
-            "The PE reader must enumerate every icon group.");
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = RepositoryTestPaths.Root,
+            ArgumentList =
+            {
+                "run",
+                "--project",
+                Path.Combine(RepositoryTestPaths.Root, "tools", "IconIdentityVerifier", "IconIdentityVerifier.csproj"),
+                "--",
+                "compare-exe",
+                icoPath,
+                exePath
+            }
+        };
 
-        string verifierSource = File.ReadAllText(RepositoryTestPaths.RequireFile(
-            "tools", "VerifyReleaseAssets.ps1"));
-        StringAssert.Contains(verifierSource, "RequireIcon");
+        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 300_000);
+
+        Assert.IsTrue(run.Exited, "The icon identity verifier timed out.");
+        Assert.AreEqual(0, run.ExitCode,
+            "Every icon group in the executable must match the approved frames. " + run.CombinedOutput);
+
+        // It reports how many groups it found and verifies each one; a first-group-only reader
+        // could not produce this output.
+        StringAssert.Contains(run.StandardOutput, "icon group");
+        Assert.IsFalse(run.StandardOutput.Contains("Found 0 icon group(s)", StringComparison.Ordinal));
+        StringAssert.Contains(run.StandardOutput, "Matched 256x256");
     }
 
     // ==========================================

@@ -40,11 +40,17 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
         _inner.FlushToDisk(stream);
     }
 
-    public IOwnedFileStage CreateOwnedStage(string path)
+    public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
         Trace.Add($"CreateNewFile:{Path.GetFileName(path)}");
-        return new TracingStage(_inner.CreateOwnedStage(path), path, Trace);
+        return new TracingStage(_inner.CreateOwnedStage(physicalRoot, path), path, Trace);
     }
+
+    public void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken)
+        => _inner.RecordPromotedFinal(physicalRoot, finalPath, identityToken);
+
+    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path)
+        => _inner.DeleteOwnedFinalIfProven(physicalRoot, path);
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {
@@ -67,8 +73,6 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
         return _inner.ProbePath(path);
     }
 
-    public void DeleteFile(string path) => _inner.DeleteFile(path);
-    public void DeleteDirectory(string path) => _inner.DeleteDirectory(path);
 
     public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
         => _inner.DeleteOwnedFileIfProven(physicalRoot, path);

@@ -199,7 +199,9 @@ public sealed class MigrationManifestRepository
         // object. If something already occupies the stage pathname the creation fails and the
         // pre-existing object is left untouched — the old implementation would have deleted
         // it in its cleanup block purely because it sat at the declared stage name.
-        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(stagePath);
+        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(
+            string.IsNullOrEmpty(dir) ? Directory.GetCurrentDirectory() : dir,
+            stagePath);
 
         try
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -72,5 +73,18 @@ public sealed class RequiredRegressionTestsManifestTests
         Assert.IsTrue(missing.Count == 0,
             "The required-sentinel manifest names a test method that no longer exists in the " +
             "compiled test assembly (renamed, deleted, or typo'd): " + string.Join(", ", missing));
+
+        // CRUU16-008: and the gate CI actually runs is executed here, not merely reasoned
+        // about. Checking the manifest in-process proves this test's own logic; running
+        // VerifyFindingCoverage.ps1 proves the thing that gates the build.
+        ProcessStartInfo psi = PowerShellHost.CreateStartInfo(
+            "-File",
+            RepositoryTestPaths.RequireFile("tools", "VerifyFindingCoverage.ps1"));
+
+        ProcessRunResult gate = ProcessTestRunner.Run(psi, timeoutMilliseconds: 120_000);
+
+        Assert.IsTrue(gate.Exited, "VerifyFindingCoverage.ps1 timed out.");
+        Assert.AreEqual(0, gate.ExitCode,
+            "The generated sentinel manifest must still agree with the coverage authority.\n" + gate.CombinedOutput);
     }
 }

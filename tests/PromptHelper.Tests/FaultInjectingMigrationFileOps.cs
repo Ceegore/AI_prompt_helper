@@ -74,9 +74,9 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         _inner.FlushToDisk(stream);
     }
 
-    public IOwnedFileStage CreateOwnedStage(string path)
+    public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
-        IOwnedFileStage inner = _inner.CreateOwnedStage(path);
+        IOwnedFileStage inner = _inner.CreateOwnedStage(physicalRoot, path);
         var stage = new FakeOwnedFileStage(inner);
 
         if (OnFlushToDisk != null)
@@ -95,6 +95,20 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         }
 
         return stage;
+    }
+
+    public void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken)
+        => _inner.RecordPromotedFinal(physicalRoot, finalPath, identityToken);
+
+    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path)
+    {
+        if (OnDeleteFile != null)
+        {
+            OnDeleteFile(path);
+            return ArtifactCleanupOutcome.DeletedProvenOwned;
+        }
+
+        return _inner.DeleteOwnedFinalIfProven(physicalRoot, path);
     }
 
     public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
@@ -161,28 +175,6 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         }
 
         return _inner.ProbePath(path);
-    }
-
-    public void DeleteFile(string path)
-    {
-        if (OnDeleteFile != null)
-        {
-            OnDeleteFile(path);
-            return;
-        }
-
-        _inner.DeleteFile(path);
-    }
-
-    public void DeleteDirectory(string path)
-    {
-        if (OnDeleteDirectory != null)
-        {
-            OnDeleteDirectory(path);
-            return;
-        }
-
-        _inner.DeleteDirectory(path);
     }
 
     public IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*")

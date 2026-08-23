@@ -11,11 +11,12 @@ public interface IMigrationManifestFileOps
     void FlushToDisk(Stream stream);
 
     /// <summary>
-    /// Creates an owned stage at <paramref name="path"/>. Fails if anything already occupies
-    /// that pathname — and a pre-existing object there is <b>preserved</b>, never adopted and
-    /// never deleted, because this invocation did not create it.
+    /// Creates an owned stage at <paramref name="path"/>, proven from its retained handle to be
+    /// physically inside <paramref name="physicalRoot"/> (CRUU16-007). Fails if anything already
+    /// occupies that pathname — and a pre-existing object there is <b>preserved</b>, never
+    /// adopted and never deleted, because this invocation did not create it.
     /// </summary>
-    IOwnedFileStage CreateOwnedStage(string path);
+    IOwnedFileStage CreateOwnedStage(string physicalRoot, string path);
 
     bool FileExists(string path);
     byte[] ReadAllBytes(string path);
@@ -44,9 +45,10 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
 
     private readonly IOwnedArtifactJournal _ownedArtifacts = new WindowsOwnedArtifactJournal();
 
-    public IOwnedFileStage CreateOwnedStage(string path)
+    public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
-        var stage = new OwnedManifestStage(WindowsOwnedDurableStage.CreateNew(path));
+        var stage = new OwnedManifestStage(
+            WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot));
         try
         {
             DefaultMigrationFileOps.RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);

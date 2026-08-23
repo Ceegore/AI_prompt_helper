@@ -309,6 +309,11 @@ public sealed class Cruu7ComprehensiveVerificationTests
             ]
         };
 
+        // The interrupted attempt would have claimed each payload it promoted; without those
+        // records the finals are indistinguishable from foreign files (CRUU16-005).
+        OwnedArtifactTestSupport.ClaimPromotedFinal(target.Root, targetLib);
+        OwnedArtifactTestSupport.ClaimPromotedFinal(target.Root, targetPrompt);
+
         var manifestRepo = new MigrationManifestRepository();
         manifestRepo.WriteDurable(Path.Combine(target.Root, ".prompthelper-migration.json"), manifest);
 

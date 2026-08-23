@@ -28,7 +28,7 @@ public sealed class AtomicTextWriter : IAtomicTextWriter, IDurableAtomicFileWrit
         // cleanup - so it promoted whatever object occupied that name at rename time and
         // deleted whatever occupied it at cleanup time, neither of which is necessarily the
         // object it wrote. There is no pathname-addressed promotion left in this codebase.
-        using var stage = WindowsOwnedDurableStage.CreateNew(tempPath);
+        using var stage = WindowsOwnedDurableStage.CreateNewInResolvedParent(tempPath);
         try
         {
             stage.Write(new UTF8Encoding(false, true).GetBytes(content));

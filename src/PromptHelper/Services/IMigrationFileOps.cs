@@ -32,10 +32,25 @@ internal interface IMigrationFileOps
 
     /// <summary>
     /// Creates an owned stage at <paramref name="path"/> whose handle is retained through
-    /// promotion or deletion (CRUU15-002). Fails if anything already occupies that pathname,
-    /// and leaves such an object untouched.
+    /// promotion or deletion, proven from that handle to be physically inside
+    /// <paramref name="physicalRoot"/> before anything is written (CRUU15-002/CRUU16-007).
+    /// Fails if anything already occupies the pathname, and leaves such an object untouched.
     /// </summary>
-    IOwnedFileStage CreateOwnedStage(string path);
+    IOwnedFileStage CreateOwnedStage(string physicalRoot, string path);
+
+    /// <summary>
+    /// Records that a promoted payload object is this attempt's, under its final name and with
+    /// the identity it was created with. Without this the object loses its provenance at
+    /// promotion and later deletion falls back to content matching, which cannot tell our file
+    /// from a foreign replacement carrying identical bytes (CRUU16-005).
+    /// </summary>
+    void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken);
+
+    /// <summary>
+    /// Deletes a promoted payload object only if a durable record proves this attempt created
+    /// the exact object now at that pathname.
+    /// </summary>
+    ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path);
 
     /// <summary>
     /// Deletes the object at <paramref name="path"/> only if a durable ownership record proves
@@ -63,8 +78,6 @@ internal interface IMigrationFileOps
     bool FileExists(string path);
     bool DirectoryExists(string path);
     StrictPathProbe ProbePath(string path);
-    void DeleteFile(string path);
-    void DeleteDirectory(string path);
     IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*");
     IReadOnlyList<string> EnumerateEntries(string directory);
 }
@@ -105,9 +118,10 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     private readonly IOwnedArtifactJournal _ownedArtifacts = new WindowsOwnedArtifactJournal();
 
-    public IOwnedFileStage CreateOwnedStage(string path)
+    public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
-        var stage = new OwnedMigrationStage(WindowsOwnedDurableStage.CreateNew(path));
+        var stage = new OwnedMigrationStage(
+            WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot));
         try
         {
             // Claim it durably while the handle is still held, so a crash before promotion
@@ -121,6 +135,28 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             throw;
         }
     }
+
+    public void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken)
+    {
+        string root = Path.GetFullPath(physicalRoot);
+        string full = Path.GetFullPath(finalPath);
+
+        if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
+        {
+            throw new InvalidOperationException(
+                $"Promoted payload produced an unparsable identity token for '{finalPath}'.");
+        }
+
+        _ownedArtifacts.Record(root, new OwnedArtifactRecord(
+            Guid.NewGuid(),
+            OwnedArtifactKind.MigrationFinal,
+            OwnedArtifactPhase.CandidatePublished,
+            Path.GetRelativePath(root, full),
+            identity));
+    }
+
+    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path) =>
+        ProvenanceBoundCleanup.DeleteFileIfProven(physicalRoot, path, _ownedArtifacts);
 
     /// <summary>
     /// Records a stage in the ownership journal of the data root it lives in. The root is
@@ -142,10 +178,11 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
         }
 
         journal.Record(root, new OwnedArtifactRecord(
+            Guid.NewGuid(),
             OwnedArtifactKind.Stage,
+            OwnedArtifactPhase.Claimed,
             Path.GetRelativePath(root, full),
-            identity,
-            RestoreRelativePath: null));
+            identity));
     }
 
     internal static string ResolveJournalRoot(string directory)
@@ -172,14 +209,17 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     public void RetireOwnedArtifacts(string physicalRoot)
     {
-        var failures = new List<TempCleanupFailure>();
-        OwnedArtifactReconciler.Reconcile(physicalRoot, _ownedArtifacts, failures);
+        OwnedArtifactReconciler.Result result =
+            OwnedArtifactReconciler.Reconcile(physicalRoot, _ownedArtifacts);
 
-        if (failures.Count > 0)
+        ReconciliationOutcome[] problems =
+            [.. result.Outcomes.Where(o => o.Severity != ReconciliationSeverity.Notice)];
+
+        if (problems.Length > 0)
         {
             throw new IOException(
                 "Transient ownership records could not be settled for " +
-                $"'{physicalRoot}': {string.Join("; ", failures.Select(f => $"{f.Path}: {f.ErrorMessage}"))}");
+                $"'{physicalRoot}': {string.Join("; ", problems.Select(o => $"{o.Path}: {o.Message}"))}");
         }
     }
 
@@ -201,32 +241,6 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
     public StrictPathProbe ProbePath(string path)
     {
         return _strictPathAuthority.Probe(path);
-    }
-
-    public void DeleteFile(string path)
-    {
-        StrictPathProbe probe = ProbePath(path);
-        if (probe.Kind == StrictPathKind.File)
-        {
-            File.Delete(path);
-        }
-        else if (probe.Kind == StrictPathKind.Directory)
-        {
-            throw new InvalidOperationException($"Expected a file but found a directory at '{path}'.");
-        }
-    }
-
-    public void DeleteDirectory(string path)
-    {
-        StrictPathProbe probe = ProbePath(path);
-        if (probe.Kind == StrictPathKind.Directory)
-        {
-            Directory.Delete(path);
-        }
-        else if (probe.Kind == StrictPathKind.File)
-        {
-            throw new InvalidOperationException($"Expected a directory but found a file at '{path}'.");
-        }
     }
 
     public IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*")

@@ -10,7 +10,26 @@ internal static class ManagedControlPathPolicy
         bool targetIsBootstrapRoot)
     {
         return IsReservedEphemeralRootControl(relativePath) ||
+               IsPersistentManagedControl(relativePath) ||
                (targetIsBootstrapRoot && IsPersistentBootstrapControl(relativePath));
+    }
+
+    /// <summary>
+    /// Managed state that legitimately persists in <i>any</i> data root, not just the bootstrap
+    /// one. The ownership ledger belongs here: since CRUU16-005 it carries the identity of
+    /// migrated payload objects for as long as those objects exist, so it outlives the
+    /// migration that created them and must not be mistaken for in-flight control state.
+    /// </summary>
+    public static bool IsPersistentManagedControl(string relativePath)
+    {
+        string p = NormalizeRelative(relativePath);
+
+        if (p.Contains(Path.DirectorySeparatorChar) || p.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return false;
+        }
+
+        return EqualsName(p, WindowsOwnedArtifactJournal.JournalFileName);
     }
 
     /// <summary>
@@ -30,7 +49,6 @@ internal static class ManagedControlPathPolicy
         return EqualsName(p, ".app.lock") ||
                EqualsName(p, ".prompthelper-migration.json") ||
                EqualsName(p, ".prompthelper-library-mutation.json") ||
-               EqualsName(p, WindowsOwnedArtifactJournal.JournalFileName) ||
                EqualsName(p, "initializing.marker");
     }
 

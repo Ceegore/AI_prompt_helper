@@ -962,17 +962,26 @@ public sealed class Cruu9ComprehensiveVerificationTests
         var repo = new MigrationManifestRepository();
         repo.CreateInitialCopyingManifestDurable(markerPath, manifest);
 
-        // Inject foreign file during recovery
-        var fakeDeleter = new FakeVerifiedArtifactDeleter
+        // Seed the payload finals this attempt would have promoted, with the ownership
+        // records that authorize removing them again (CRUU16-005).
+        foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
         {
-            OnVerifyAndDelete = (root, path, length, sha) =>
+            string finalPath = Path.Combine(target.Root, artifact.RelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+            File.Copy(Path.Combine(source.Root, artifact.RelativePath), finalPath, overwrite: true);
+            OwnedArtifactTestSupport.ClaimPromotedFinal(target.Root, finalPath);
+        }
+
+        // A foreign entry appears while recovery is clearing the target.
+        var fileOps = new FaultInjectingMigrationFileOps
+        {
+            OnDeleteFile = path =>
             {
                 File.WriteAllText(Path.Combine(target.Root, "foreign.txt"), "foreign data");
-                File.Delete(path);
             }
         };
 
-        var recovery = new MigrationRecoveryService(verifiedDeleter: fakeDeleter);
+        var recovery = new MigrationRecoveryService(fileOps: fileOps);
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);
         var result = recovery.RecoverForRetry(context);
 

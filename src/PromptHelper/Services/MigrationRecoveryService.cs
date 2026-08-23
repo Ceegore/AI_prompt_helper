@@ -201,11 +201,23 @@ public sealed class MigrationRecoveryService
                 }
             }
 
-            // 3. Verify and delete finals using verified deleter
+            // 3. Remove the attempt's published finals. CRUU16-005: content and location are
+            // not ownership - a foreign object carrying identical bytes satisfies a hash check
+            // just as well - so deletion requires the identity recorded when the object was
+            // promoted. An unproven object is preserved and recovery fails closed.
             foreach (MigrationManifestArtifact artifact in manifest.Artifacts)
             {
                 string finalFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.RelativePath);
-                _verifiedDeleter.VerifyAndDelete(context.TargetPhysicalRoot, finalFullPath, artifact.Length, artifact.Sha256Hex);
+
+                ArtifactCleanupOutcome finalOutcome =
+                    _fileOps.DeleteOwnedFinalIfProven(context.TargetPhysicalRoot, finalFullPath);
+
+                if (finalOutcome == ArtifactCleanupOutcome.PreservedUnproven)
+                {
+                    throw new InvalidDataException(
+                        $"A file occupies the migrated payload path '{artifact.RelativePath}', but nothing proves " +
+                        "this attempt created it. It was preserved and recovery was aborted to protect data.");
+                }
             }
 
             // 4. Remove attempt-created directories before retiring marker (throwing if deletion fails)

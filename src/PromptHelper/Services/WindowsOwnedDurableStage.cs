@@ -176,6 +176,22 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
         }
     }
 
+    /// <summary>
+    /// Creates an owned stage bound to the physical directory it is supposed to live in
+    /// (CRUU16-007). Production writers use this rather than bare <see cref="CreateNew"/> so
+    /// root binding is a property of every managed stage, not of the one call site that
+    /// remembered to ask for it.
+    /// </summary>
+    public static WindowsOwnedDurableStage CreateNewInResolvedParent(string stagingPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stagingPath);
+
+        string parent = Path.GetDirectoryName(Path.GetFullPath(stagingPath))
+            ?? throw new ArgumentException($"Stage path has no directory: '{stagingPath}'.", nameof(stagingPath));
+
+        return CreateNewUnderRoot(stagingPath, WindowsFinalPathHelper.ResolveDirectoryPhysicalPath(parent));
+    }
+
     /// <summary>The exact on-disk identity of the staged object, for durable provenance records.</summary>
     public WindowsFileIdentity Identity => WindowsFileIdentity.FromHandle(_handle);
 

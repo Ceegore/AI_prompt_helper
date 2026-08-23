@@ -22,7 +22,7 @@ internal sealed class WindowsDurableSettingsFileWriter : IDurableSettingsFileWri
 
         // CRUU14-001: retain the staging handle from creation through promotion; never
         // close it and re-open the temp path by name for the rename or for cleanup.
-        using var stage = WindowsOwnedDurableStage.CreateNew(tempPath);
+        using var stage = WindowsOwnedDurableStage.CreateNewInResolvedParent(tempPath);
         try
         {
             stage.Write(bytes);

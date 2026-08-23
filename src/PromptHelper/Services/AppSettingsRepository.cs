@@ -165,9 +165,13 @@ public sealed class AppSettingsRepository
     {
         using var lease = AcquireMutationLease();
 
+        // CRUU16-004: the result is consumed, not discarded. An unresolved compare-and-swap
+        // means committed settings may be sitting in a pre-image; reading on would interpret
+        // that crash window as ordinary state (a momentarily absent settings.json looks
+        // exactly like "no settings yet").
         SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath);
+            _backupPath).ThrowIfUnresolved();
 
         SettingsLoadResult loadResult = LoadOrRecoverInternal();
         SettingsWritePrecondition precondition = CapturePrecondition();
@@ -182,9 +186,13 @@ public sealed class AppSettingsRepository
     {
         using var lease = AcquireMutationLease();
 
+        // CRUU16-004: the result is consumed, not discarded. An unresolved compare-and-swap
+        // means committed settings may be sitting in a pre-image; reading on would interpret
+        // that crash window as ordinary state (a momentarily absent settings.json looks
+        // exactly like "no settings yet").
         SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath);
+            _backupPath).ThrowIfUnresolved();
 
         return LoadOrRecoverInternal();
     }
@@ -269,9 +277,13 @@ public sealed class AppSettingsRepository
 
         using var lease = AcquireMutationLease();
 
+        // CRUU16-004: the result is consumed, not discarded. An unresolved compare-and-swap
+        // means committed settings may be sitting in a pre-image; reading on would interpret
+        // that crash window as ordinary state (a momentarily absent settings.json looks
+        // exactly like "no settings yet").
         SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath);
+            _backupPath).ThrowIfUnresolved();
 
         return SaveCore(settings);
     }
@@ -289,9 +301,13 @@ public sealed class AppSettingsRepository
 
         using var lease = AcquireMutationLease();
 
+        // CRUU16-004: the result is consumed, not discarded. An unresolved compare-and-swap
+        // means committed settings may be sitting in a pre-image; reading on would interpret
+        // that crash window as ordinary state (a momentarily absent settings.json looks
+        // exactly like "no settings yet").
         SettingsTempReconciler.Reconcile(
             _settingsPath,
-            _backupPath);
+            _backupPath).ThrowIfUnresolved();
 
         SettingsWritePrecondition current = CapturePrecondition();
         if (!PreconditionsMatch(precondition, current))

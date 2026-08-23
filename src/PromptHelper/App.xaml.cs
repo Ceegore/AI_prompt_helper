@@ -99,6 +99,24 @@ public partial class App : Application
                 paths,
                 isBootstrapRoot: PathIdentity.Equals(runtime.ActivePhysicalRoot, runtime.BootstrapPhysicalRoot));
 
+            // CRUU16-004: an unresolved interrupted update is not a stale-temp warning. Stop
+            // before loading any state, so nothing is read - or rebuilt from defaults - over
+            // committed content that is still sitting in a pre-image.
+            try
+            {
+                dataRootTempResult.ThrowIfUnresolved();
+            }
+            catch (UnresolvedRecoveryStateException ex)
+            {
+                MessageBox.Show(
+                    ex.Message,
+                    "Prompt Helper cannot start safely",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                Shutdown();
+                return;
+            }
+
             if (!dataRootTempResult.Success)
             {
                 foreach (TempCleanupFailure failure in dataRootTempResult.Failures)

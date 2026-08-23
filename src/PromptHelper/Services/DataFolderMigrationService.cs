@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
+using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
 
@@ -99,9 +100,13 @@ public sealed class DataFolderMigrationService
             State = MigrationOwnedFileState.TempOwned;
         }
 
-        public void MarkFinalOwnedAfterMove()
+        /// <summary>The identity of the promoted object, so rollback can prove it before deleting.</summary>
+        public string? FinalIdentityToken { get; private set; }
+
+        public void MarkFinalOwnedAfterMove(string? identityToken = null)
         {
             State = MigrationOwnedFileState.FinalOwned;
+            FinalIdentityToken = identityToken;
         }
 
         public void MarkTempAbandoned()
@@ -148,6 +153,54 @@ public sealed class DataFolderMigrationService
 
         public void PromoteCreatedFile(string oldOwnedPath, string newOwnedPath) { }
 
+        /// <summary>
+        /// Deletes a promoted payload object only when the identity recorded at creation still
+        /// matches what is there. An object with the right bytes but a different identity is
+        /// somebody else's file that happens to look like ours (CRUU16-005).
+        /// </summary>
+        private void RemoveOwnedFinal(
+            MigrationOwnedFile file,
+            string path,
+            string operation,
+            List<MigrationRollbackFailure> failures)
+        {
+            try
+            {
+                if (file.FinalIdentityToken is null)
+                {
+                    // Nothing was promoted under this claim, so there is nothing of ours here.
+                    return;
+                }
+
+                if (new StrictPathAuthority().Probe(path).Kind != StrictPathKind.File)
+                {
+                    return;
+                }
+
+                // Identity, content and deletion all through one retained handle: a second open
+                // would both reintroduce a substitution window and collide with the exclusive
+                // share mode the deletion itself needs.
+                bool deleted = _verifiedDeleter.TryVerifyIdentityContentAndDelete(
+                    _targetPhysicalRoot,
+                    path,
+                    file.ExpectedLength,
+                    file.ExpectedSha256Hex,
+                    file.FinalIdentityToken);
+
+                if (!deleted)
+                {
+                    failures.Add(new MigrationRollbackFailure(
+                        path,
+                        operation,
+                        "The object here is not the one this attempt created, so it was preserved."));
+                }
+            }
+            catch (Exception ex)
+            {
+                failures.Add(new MigrationRollbackFailure(path, operation, ex.Message));
+            }
+        }
+
         public MigrationRollbackResult Rollback()
         {
             if (_committed || _rolledBack)
@@ -159,25 +212,14 @@ public sealed class DataFolderMigrationService
             var failures = new List<MigrationRollbackFailure>();
             var authority = new StrictPathAuthority();
 
+            // CRUU16-005: a promoted final is removed only when the recorded creation identity
+            // still matches the object at that pathname. Expected length and hash prove content
+            // and location, which a foreign replacement carrying identical bytes also satisfies.
             foreach (MigrationOwnedFile file in _ownedFiles.AsEnumerable().Reverse())
             {
                 if (file.State == MigrationOwnedFileState.FinalOwned)
                 {
-                    try
-                    {
-                        if (authority.Probe(file.FinalPath).Kind == StrictPathKind.File)
-                        {
-                            _verifiedDeleter.VerifyAndDelete(
-                                _targetPhysicalRoot,
-                                file.FinalPath,
-                                file.ExpectedLength,
-                                file.ExpectedSha256Hex);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        failures.Add(new MigrationRollbackFailure(file.FinalPath, "DeleteFinal", ex.Message));
-                    }
+                    RemoveOwnedFinal(file, file.FinalPath, "DeleteFinal", failures);
                 }
                 else if (file.State == MigrationOwnedFileState.TempOwned)
                 {
@@ -197,32 +239,34 @@ public sealed class DataFolderMigrationService
                         failures.Add(new MigrationRollbackFailure(file.TempPath, "DeleteTemp", ex.Message));
                     }
 
-                    try
-                    {
-                        if (authority.Probe(file.FinalPath).Kind == StrictPathKind.File)
-                        {
-                            _verifiedDeleter.VerifyAndDelete(
-                                _targetPhysicalRoot,
-                                file.FinalPath,
-                                file.ExpectedLength,
-                                file.ExpectedSha256Hex);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        failures.Add(new MigrationRollbackFailure(file.FinalPath, "DeleteUnexpectedFinal", ex.Message));
-                    }
+                    RemoveOwnedFinal(file, file.FinalPath, "DeleteUnexpectedFinal", failures);
                 }
             }
 
+            // Every claim this attempt made is now dead, so the ledger itself has nothing left
+            // to protect. Retiring it here is what lets an attempt-created root actually become
+            // empty again; leaving it behind would make rollback unable to remove the very
+            // directory it created.
+            try
+            {
+                OwnedArtifactReconciler.Reconcile(_targetPhysicalRoot, new WindowsOwnedArtifactJournal());
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failures.Add(new MigrationRollbackFailure(
+                    _targetPhysicalRoot, "RetireOwnershipLedger", ex.Message));
+            }
+
+            // CRUU16-006: removed through a single retained directory handle, so the directory
+            // proven empty and the directory removed are the same object. The kernel re-checks
+            // emptiness atomically when the disposition is applied.
             foreach (string dir in _createdDirectories.OrderByDescending(x => x.Length))
             {
                 try
                 {
-                    if (authority.Probe(dir).Kind == StrictPathKind.Directory && !Directory.EnumerateFileSystemEntries(dir).Any())
-                    {
-                        Directory.Delete(dir);
-                    }
+                    using WindowsRetirableDirectory? handle =
+                        WindowsRetirableDirectory.OpenExistingOrNull(dir, _targetPhysicalRoot);
+                    handle?.DeleteExact();
                 }
                 catch (Exception ex)
                 {
@@ -911,7 +955,11 @@ public sealed class DataFolderMigrationService
             payload = buffer.ToArray();
         }
 
-        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(tempPath);
+        string targetRoot = Path.GetDirectoryName(Path.GetFullPath(finalPath)) == directory
+            ? ResolvePayloadRoot(directory)
+            : ResolvePayloadRoot(directory);
+
+        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(targetRoot, tempPath);
         owned.MarkTempOwned();
 
         try
@@ -935,7 +983,12 @@ public sealed class DataFolderMigrationService
             throw;
         }
 
-        owned.MarkFinalOwnedAfterMove();
+        // CRUU16-005: the promotion preserved the object, so the ownership claim has to move
+        // with it. Without this the final loses its provenance the moment it is published, and
+        // rollback falls back to deleting whatever matches the expected bytes - which cannot
+        // distinguish this attempt's file from a foreign replacement carrying the same content.
+        _fileOps.RecordPromotedFinal(targetRoot, finalPath, stage.IdentityToken);
+        owned.MarkFinalOwnedAfterMove(stage.IdentityToken);
     }
 
     private static void ValidateDocumentPromptBodies(
@@ -975,6 +1028,13 @@ public sealed class DataFolderMigrationService
             }
         }
     }
+
+    /// <summary>
+    /// The data root a payload artifact belongs to: payload files live either directly in the
+    /// target root or in its <c>prompts</c>/<c>recovery</c> children.
+    /// </summary>
+    private static string ResolvePayloadRoot(string directory)
+        => DefaultMigrationFileOps.ResolveJournalRoot(directory);
 
     private static void EnsureDirectoryTracked(
         string path,

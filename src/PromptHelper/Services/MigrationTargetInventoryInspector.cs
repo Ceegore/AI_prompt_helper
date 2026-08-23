@@ -214,7 +214,11 @@ internal static class MigrationTargetInventoryInspector
                 string normFile = PathIdentity.NormalizeForComparison(file);
                 string fileName = Path.GetFileName(file);
 
-                if (isRoot && ManagedControlPathPolicy.IsReservedEphemeralRootControl(fileName))
+                if (isRoot && ManagedControlPathPolicy.IsPersistentManagedControl(fileName))
+                {
+                    foundPersistentBootstrapControls.Add(normFile);
+                }
+                else if (isRoot && ManagedControlPathPolicy.IsReservedEphemeralRootControl(fileName))
                 {
                     foundControls.Add(normFile);
                 }

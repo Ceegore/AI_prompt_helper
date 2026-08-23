@@ -319,7 +319,7 @@ public sealed class Cruu15AtomicReplacementTests
         byte[] ours = Encoding.UTF8.GetBytes("the bytes this attempt wrote");
 
         IMigrationFileOps ops = new DefaultMigrationFileOps();
-        using (IOwnedFileStage stage = ops.CreateOwnedStage(stagePath))
+        using (IOwnedFileStage stage = ops.CreateOwnedStage(temp.Root, stagePath))
         {
             stage.Write(ours);
             stage.FlushDurable();
@@ -347,7 +347,7 @@ public sealed class Cruu15AtomicReplacementTests
 
         // Ownership is never adopted from a pathname: creating the stage fails outright rather
         // than taking over what is already there.
-        Assert.ThrowsExactly<IOException>(() => ops.CreateOwnedStage(stagePath));
+        Assert.ThrowsExactly<IOException>(() => ops.CreateOwnedStage(temp.Root, stagePath));
 
         // And provenance-bound cleanup refuses to destroy it, identical bytes notwithstanding.
         Assert.AreEqual(
@@ -365,7 +365,7 @@ public sealed class Cruu15AtomicReplacementTests
 
         IMigrationFileOps ops = new DefaultMigrationFileOps();
         string identityAtCreation;
-        using (IOwnedFileStage stage = ops.CreateOwnedStage(stagePath))
+        using (IOwnedFileStage stage = ops.CreateOwnedStage(temp.Root, stagePath))
         {
             identityAtCreation = stage.IdentityToken;
             stage.Write(Encoding.UTF8.GetBytes("payload"));

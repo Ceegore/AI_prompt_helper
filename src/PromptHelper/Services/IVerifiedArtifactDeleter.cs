@@ -19,6 +19,21 @@ public interface IVerifiedArtifactDeleter
     /// interrupted mid-copy), where identity (not content) is the safety property that matters.
     /// </summary>
     void VerifyIdentityAndDelete(string physicalRoot, string path);
+
+    /// <summary>
+    /// Deletes an artifact only when the object at <paramref name="path"/> is the exact one
+    /// recorded by <paramref name="expectedIdentityToken"/> <i>and</i> still carries the
+    /// expected content. Everything is proven through one retained handle, because opening a
+    /// second one would both reintroduce a substitution window and collide with this method's
+    /// own exclusive open. Returns false, without deleting, when the object is not ours
+    /// (CRUU16-005).
+    /// </summary>
+    bool TryVerifyIdentityContentAndDelete(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        string expectedIdentityToken);
 }
 
 public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
@@ -103,6 +118,53 @@ public sealed class WindowsVerifiedArtifactDeleter : IVerifiedArtifactDeleter
             }
 
             MarkForDeletion(handle, path);
+        }
+    }
+
+    public bool TryVerifyIdentityContentAndDelete(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        string expectedIdentityToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
+
+        if (!WindowsFileIdentity.TryParseToken(expectedIdentityToken, out WindowsFileIdentity expectedIdentity))
+        {
+            throw new ArgumentException(
+                $"Unparsable expected identity token for '{path}'.", nameof(expectedIdentityToken));
+        }
+
+        OpenForVerifiedDelete(physicalRoot, path, out SafeFileHandle? handle);
+        if (handle is null)
+        {
+            return false;
+        }
+
+        using (handle)
+        {
+            if (WindowsFileIdentity.FromHandle(handle) != expectedIdentity)
+            {
+                return false;
+            }
+
+            using var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: false);
+            if (stream.Length != expectedLength)
+            {
+                throw new InvalidDataException(
+                    $"Artifact '{path}' length mismatch before deletion. Expected {expectedLength} bytes, found {stream.Length} bytes.");
+            }
+
+            string currentHex = Convert.ToHexStringLower(SHA256.HashData(stream));
+            if (!string.Equals(currentHex, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Artifact '{path}' SHA-256 hash mismatch before deletion. Expected {expectedSha256Hex}, found {currentHex}.");
+            }
+
+            MarkForDeletion(handle, path);
+            return true;
         }
     }
 

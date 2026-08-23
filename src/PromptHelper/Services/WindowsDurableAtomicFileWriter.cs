@@ -18,7 +18,7 @@ internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
         // on failure, through handle-bound deletion). There is no window where "the temp
         // path" is closed and later re-opened by path, so a foreign object substituted at
         // that path in between can never be promoted or destroyed in its place.
-        using var stage = WindowsOwnedDurableStage.CreateNew(temp);
+        using var stage = WindowsOwnedDurableStage.CreateNewInResolvedParent(temp);
         try
         {
             stage.Write(bytes);
@@ -51,7 +51,7 @@ internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
 
         string temp = CreateOwnedTempPath(targetPath, fileClass);
 
-        using var stage = WindowsOwnedDurableStage.CreateNew(temp);
+        using var stage = WindowsOwnedDurableStage.CreateNewInResolvedParent(temp);
         try
         {
             stage.Write(bytes);

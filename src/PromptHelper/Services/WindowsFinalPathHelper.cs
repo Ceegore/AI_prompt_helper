@@ -118,6 +118,50 @@ internal static class WindowsFinalPathHelper
         }
     }
 
+    private const uint GENERIC_READ_ACCESS = 0x80000000;
+    private const uint SHARE_ALL = 0x00000007;
+    private const uint OPEN_EXISTING_DISPOSITION = 3;
+    private const uint FILE_FLAG_BACKUP_SEMANTICS_FLAG = 0x02000000;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        IntPtr lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
+
+    /// <summary>
+    /// The physical path a directory actually resolves to, following any junction or symlink
+    /// on the way. Used to bind a staging file to its real parent: comparing against a lexical
+    /// pathname would reject every legitimate data root that happens to sit behind a junction,
+    /// while comparing against nothing at all would bind the stage to no root whatsoever.
+    /// </summary>
+    public static string ResolveDirectoryPhysicalPath(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        using SafeFileHandle handle = CreateFileW(
+            directory,
+            GENERIC_READ_ACCESS,
+            SHARE_ALL,
+            IntPtr.Zero,
+            OPEN_EXISTING_DISPOSITION,
+            FILE_FLAG_BACKUP_SEMANTICS_FLAG,
+            IntPtr.Zero);
+
+        if (handle.IsInvalid)
+        {
+            throw new IOException(
+                $"Unable to resolve the physical path of '{directory}'.",
+                new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+
+        return GetNormalizedDosPath(handle);
+    }
+
     public static void AssertStrictDescendantFile(
         string physicalRoot,
         string finalFilePath)

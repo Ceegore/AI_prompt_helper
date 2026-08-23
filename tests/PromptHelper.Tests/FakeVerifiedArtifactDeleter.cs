@@ -32,4 +32,17 @@ internal sealed class FakeVerifiedArtifactDeleter : IVerifiedArtifactDeleter
 
         _inner.VerifyIdentityAndDelete(physicalRoot, path);
     }
+
+    public bool TryVerifyIdentityContentAndDelete(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        string expectedIdentityToken)
+    {
+        // The fake's contract is "whatever VerifyAndDelete does", so identity-bound deletion
+        // routes through the same injected behaviour and reports that it acted.
+        VerifyAndDelete(physicalRoot, path, expectedLength, expectedSha256Hex);
+        return true;
+    }
 }
