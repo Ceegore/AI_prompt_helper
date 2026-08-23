@@ -19,6 +19,8 @@ public sealed class DataFolderMigrationService
     private readonly string? _defaultBootstrapRoot;
     private readonly IPhysicalPathResolver _pathResolver;
 
+    internal static Action<MigrationOwnedFile>? PostPublishRecordFailureForTests;
+
     internal sealed record MigrationSnapshot(
         byte[] LibraryBytes,
         byte[] LibraryHash,
@@ -110,12 +112,19 @@ public sealed class DataFolderMigrationService
 
         public void MarkFinalOwnedAfterMove(string? identityToken = null)
         {
+            if (State != MigrationOwnedFileState.TempOwned)
+                throw new InvalidOperationException($"Cannot transition to FinalOwned from {State}.");
+
+            ArgumentException.ThrowIfNullOrWhiteSpace(identityToken);
             State = MigrationOwnedFileState.FinalOwned;
             FinalIdentityToken = identityToken;
         }
 
         public void MarkTempAbandoned()
         {
+            if (State is not (MigrationOwnedFileState.TempPlanned or MigrationOwnedFileState.TempOwned))
+                throw new InvalidOperationException($"Cannot transition to TempAbandoned from {State}.");
+
             State = MigrationOwnedFileState.TempAbandoned;
         }
     }
@@ -818,6 +827,7 @@ public sealed class DataFolderMigrationService
         MigrationAttemptManifest manifest,
         MigrationTargetTransaction tx)
     {
+        ProductionRuntimeEvidence.Hit("DataFolderMigrationService.CopySnapshotToTarget");
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -992,12 +1002,13 @@ public sealed class DataFolderMigrationService
         using IOwnedFileStage stage = _fileOps.CreateOwnedStage(targetRoot, tempPath);
         owned.MarkTempOwned(stage.IdentityToken);
 
+        MigrationArtifactClaim claim;
         try
         {
             stage.Write(payload);
             stage.FlushDurable();
 
-            MigrationArtifactClaim claim = _fileOps.RecordMigrationArtifactPrepared(
+            claim = _fileOps.RecordMigrationArtifactPrepared(
                 targetRoot,
                 tempPath,
                 finalPath,
@@ -1007,10 +1018,6 @@ public sealed class DataFolderMigrationService
 
             stage.PromoteNoOverwriteExact(finalPath);
 
-            // Publication, not the following journal append, advances in-memory rollback
-            // authority. The retained stage identity is unchanged by rename.
-            owned.MarkFinalOwnedAfterMove(stage.IdentityToken);
-            _fileOps.RecordMigrationArtifactPublished(targetRoot, claim);
         }
         catch
         {
@@ -1019,11 +1026,34 @@ public sealed class DataFolderMigrationService
                 stage.DeleteExact();
                 owned.MarkTempAbandoned();
             }
+            catch (InvalidOperationException)
+            {
+                // Promotion can cross its point of no return and then surface a later
+                // failure (for example, a test/runtime observer touching the published
+                // path while the retained handle is still open). A terminal stage must
+                // not mask that original failure, and it must not be relabelled abandoned:
+                // the prepared ownership claim remains the recovery authority for the
+                // possibly published final.
+            }
             catch (Exception cleanupEx) when (cleanupEx is IOException or UnauthorizedAccessException)
             {
                 // Left for rollback/recovery, which can still prove ownership from the manifest.
             }
 
+            throw;
+        }
+
+        // Publication, not the following journal append, advances in-memory rollback
+        // authority. From here on, any bookkeeping failure must leave FinalOwned intact so
+        // the outer transaction can exact-delete the published object (CRUU18-005).
+        owned.MarkFinalOwnedAfterMove(stage.IdentityToken);
+        try
+        {
+            _fileOps.RecordMigrationArtifactPublished(targetRoot, claim);
+        }
+        catch
+        {
+            PostPublishRecordFailureForTests?.Invoke(owned);
             throw;
         }
 

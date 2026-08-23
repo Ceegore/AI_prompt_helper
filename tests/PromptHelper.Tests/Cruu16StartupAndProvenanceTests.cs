@@ -238,7 +238,7 @@ public sealed class Cruu16StartupAndProvenanceTests
 
         Assert.AreEqual(
             ArtifactCleanupOutcome.PreservedUnproven,
-            ops.DeleteOwnedFinalIfProven(temp.Root, finalPath),
+            ops.DeleteOwnedFinalIfProven(temp.Root, finalPath, payload.Length, Hash(payload)),
             "Identical content is not identity.");
         Assert.IsTrue(File.Exists(finalPath));
     }
@@ -249,19 +249,20 @@ public sealed class Cruu16StartupAndProvenanceTests
         using var temp = new TestDirectory();
         string finalPath = Path.Combine(temp.Root, "payload.md");
         IMigrationFileOps ops = new DefaultMigrationFileOps();
+        byte[] content = Encoding.UTF8.GetBytes("content");
 
         // No record at all: nothing authorizes deletion.
-        File.WriteAllText(finalPath, "content");
+        File.WriteAllBytes(finalPath, content);
         Assert.AreEqual(
             ArtifactCleanupOutcome.PreservedUnproven,
-            ops.DeleteOwnedFinalIfProven(temp.Root, finalPath));
+            ops.DeleteOwnedFinalIfProven(temp.Root, finalPath, content.Length, Hash(content)));
         Assert.IsTrue(File.Exists(finalPath));
 
         // With the record, the exact object may be removed.
         OwnedArtifactTestSupport.ClaimPromotedFinal(temp.Root, finalPath);
         Assert.AreEqual(
             ArtifactCleanupOutcome.DeletedProvenOwned,
-            ops.DeleteOwnedFinalIfProven(temp.Root, finalPath));
+            ops.DeleteOwnedFinalIfProven(temp.Root, finalPath, content.Length, Hash(content)));
         Assert.IsFalse(File.Exists(finalPath));
     }
 

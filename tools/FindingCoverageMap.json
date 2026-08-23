@@ -1,6 +1,6 @@
 {
   "$schema": "https://prompthelper.local/schemas/finding-coverage-map/v1",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "description": "Canonical finding -> behavioral regression test map. This file is the coverage authority; tools/RequiredRegressionTests.psd1 is generated from it. Completeness is proved against an authority outside this file: the finding IDs named by the checked-in audit reports themselves (see gatedReports). Adding a finding to a report without adding it here fails the gate, and deleting it from here does not make it stop being required.",
   "gatedReports": {
     "CRUU12": "cruu12_v2.md",
@@ -8,7 +8,17 @@
     "CRUU14": "cruu14.md",
     "CRUU15": "cruu15.md",
     "CRUU16": "cruu16.md",
-    "CRUU17": "cruu17.md"
+    "CRUU17": "cruu17.md",
+    "CRUU18": "cruu18.md"
+  },
+  "requiredProductionSymbols": {
+    "CRUU18-001": ["MigrationRecoveryService.RecoverForRetry"],
+    "CRUU18-002": ["WindowsAtomicExpectedFileReplacer.ReplaceIfExpected"],
+    "CRUU18-003": ["MainWindow.ExecuteLibraryMutation"],
+    "CRUU18-004": ["DataFolderTransitionCoordinator.RequestTransition"],
+    "CRUU18-005": ["DataFolderMigrationService.CopySnapshotToTarget"],
+    "CRUU18-006": ["WindowsAtomicExpectedFileReplacer.ReplaceIfExpected", "DefaultMigrationFileOps.CreateOwnedStage"],
+    "CRUU18-007": ["MigrationRecoveryService.RecoverForRetry", "MainWindow.ExecuteLibraryMutation"]
   },
   "findings": {
     "CRUU10-001": [
@@ -542,6 +552,58 @@
       "CRUU17_008_CRUU16_005_mapped_test_executes_MigrationTargetTransaction_Rollback",
       "CRUU17_008_High_risk_evidence_gate_requires_runtime_hit_on_mapped_production_path",
       "CRUU17_008_Source_or_reflection_only_sentinel_cannot_satisfy_high_risk_acceptance"
+    ],
+    "CRUU18-001": [
+      "CRUU18_001_Real_RecoverForRetry_deletes_current_MigrationArtifact_final",
+      "CRUU18_001_RecoverForRetry_accepts_final_from_RestoreRelativePath_authority",
+      "CRUU18_001_RecoverForRetry_preserves_same_bytes_different_identity_final",
+      "CRUU18_001_RecoverForRetry_preserves_same_identity_tampered_final",
+      "CRUU18_001_Legacy_MigrationFinal_retry_uses_manifest_content_authority",
+      "CRUU18_001_CRUU17_005_retry_sentinel_executes_MigrationRecoveryService_RecoverForRetry"
+    ],
+    "CRUU18-002": [
+      "CRUU18_002_Promotion_failure_after_PreimageSidelined_successful_restore_is_not_fatal_on_restart",
+      "CRUU18_002_PreimageSidelined_plus_exact_old_identity_at_target_is_recognized_as_rolled_back",
+      "CRUU18_002_Restored_old_target_is_never_reported_CAS_AMBIGUOUS",
+      "CRUU18_002_Promotion_failure_restore_failure_still_preserves_preimage_and_fails_closed",
+      "CRUU18_002_CAS_matrix_includes_successful_runtime_rollback_after_sidelined_phase"
+    ],
+    "CRUU18-003": [
+      "CRUU18_003_CreateCategory_postpublish_bookkeeping_failure_requests_shutdown",
+      "CRUU18_003_RenameCategory_postpublish_bookkeeping_failure_requests_shutdown",
+      "CRUU18_003_DeleteCategory_postpublish_bookkeeping_failure_requests_shutdown",
+      "CRUU18_003_Category_committed_exception_is_not_caught_by_generic_IOException_path",
+      "CRUU18_003_Category_committed_exception_does_not_leave_UI_running_with_stale_document",
+      "CRUU18_003_All_library_mutation_UI_paths_share_committed_restart_boundary"
+    ],
+    "CRUU18-004": [
+      "CRUU18_004_Postcommit_ownership_retirement_failure_keeps_Ready_marker",
+      "CRUU18_004_Ready_marker_is_deleted_only_after_committed_ownership_claims_retire",
+      "CRUU18_004_Restart_retries_failed_committed_ownership_retirement",
+      "CRUU18_004_Restart_retry_preserves_payload_then_retires_ledger_then_marker",
+      "CRUU18_004_No_success_path_can_delete_marker_while_migration_rollback_claims_survive"
+    ],
+    "CRUU18-005": [
+      "CRUU18_005_Real_copy_postpublish_record_failure_keeps_MigrationOwnedFile_FinalOwned",
+      "CRUU18_005_Postpublish_record_failure_inprocess_rollback_deletes_exact_final",
+      "CRUU18_005_MarkTempAbandoned_rejects_FinalOwned_transition",
+      "CRUU18_005_DeleteExact_after_promotion_cannot_be_mistaken_for_final_cleanup",
+      "CRUU18_005_DataFolderTransition_postpublish_migration_record_failure_rolls_back_cleanly"
+    ],
+    "CRUU18-006": [
+      "CRUU18_006_CAS_stage_claim_failure_deletes_exact_stage_before_releasing_handle",
+      "CRUU18_006_Migration_CreateOwnedStage_claim_failure_leaves_no_unproven_temp",
+      "CRUU18_006_Ownership_append_flush_failure_cleans_exact_stage_even_if_record_may_exist",
+      "CRUU18_006_Migration_stage_claim_failure_does_not_wedge_RecoverForRetry",
+      "CRUU18_006_No_stage_factory_closes_unclaimed_creation_handle_without_exact_cleanup"
+    ],
+    "CRUU18-007": [
+      "CRUU18_007_Nameof_production_type_plus_fake_instance_call_is_not_ProductionBehavior",
+      "CRUU18_007_Reflection_Invoke_without_mapped_production_hit_is_not_ProductionBehavior",
+      "CRUU18_007_CRUU18_001_sentinel_hits_MigrationRecoveryService_RecoverForRetry",
+      "CRUU18_007_CRUU18_003_sentinel_hits_real_MainWindow_category_committed_exception_path",
+      "CRUU18_007_High_risk_finding_map_requires_explicit_production_symbol",
+      "CRUU18_007_Required_test_name_cannot_substitute_a_different_integration_layer"
     ],
     "CRUU2-003": [
       "CRUU2_003_Configured_custom_root_missing_does_not_create_directory_or_defaults",

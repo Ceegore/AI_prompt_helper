@@ -78,6 +78,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
 
     public DataFolderTransitionResult RequestTransition(string candidateRoot)
     {
+        ProductionRuntimeEvidence.Hit("DataFolderTransitionCoordinator.RequestTransition");
         if (string.IsNullOrWhiteSpace(candidateRoot))
         {
             throw new ArgumentException("Selected data folder path cannot be empty or whitespace.", nameof(candidateRoot));
@@ -708,12 +709,14 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             reservation.CommitRootOwnership();
 
             string? ownershipCleanupWarning = null;
+            bool ownershipRetired = false;
             try
             {
                 // The settings commit made the migrated payload ordinary live data. Its
                 // pre-commit deletion authority must not pin the append-only ownership
                 // ledger forever; retiring the claims never deletes the payload itself.
                 _fileOps.RetireCommittedMigrationArtifacts(bound.PhysicalRoot);
+                ownershipRetired = true;
             }
             catch (Exception ex)
             {
@@ -723,13 +726,16 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             }
 
             string? manifestCleanupWarning = null;
-            try
+            if (ownershipRetired)
             {
-                _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
-            }
-            catch (Exception ex)
-            {
-                manifestCleanupWarning = $"Could not delete migration marker: {ex.Message}";
+                try
+                {
+                    _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
+                }
+                catch (Exception ex)
+                {
+                    manifestCleanupWarning = $"Could not delete migration marker: {ex.Message}";
+                }
             }
 
             TargetReservationCleanupResult postcommitCleanup = reservation.Release();

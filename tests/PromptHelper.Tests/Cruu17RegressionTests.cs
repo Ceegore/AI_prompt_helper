@@ -384,7 +384,11 @@ public sealed class Cruu17RegressionTests
 
         Assert.AreEqual(
             ArtifactCleanupOutcome.DeletedProvenOwned,
-            ops.DeleteOwnedFinalIfProven(temp.Root, final));
+            ops.DeleteOwnedFinalIfProven(
+                temp.Root,
+                final,
+                File.ReadAllBytes(final).Length,
+                Hash(File.ReadAllBytes(final))));
         Assert.IsFalse(File.Exists(final));
     }
 
@@ -532,7 +536,7 @@ public sealed class Cruu17RegressionTests
 
     [TestMethod]
     public void CRUU17_005_Migration_retry_can_prove_final_from_prepublication_identity_record() =>
-        AssertPrepublicationMigrationClaimRecoversFinal(failPublishedRecord: false);
+        Cruu18RegressionTests.AssertRealRetryDeletesCurrentFinal();
 
     [TestMethod]
     public void CRUU17_005_Manifest_or_ownership_state_carries_final_identity_across_the_publish_cut() =>

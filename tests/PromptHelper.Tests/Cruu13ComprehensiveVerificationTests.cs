@@ -383,6 +383,21 @@ public sealed class Cruu13ComprehensiveVerificationTests
 
         Assert.IsFalse(hasIndependentDocumentOverload,
             "Backup content must not be authorable independently from the current primary via a public LibraryDocument overload.");
+
+        // Exercise the legitimate production path as well as checking the forbidden API
+        // shape: a canonical package committed to primary is the authority used for backup.
+        using var temp = new TestDirectory();
+        var paths = new AppPaths(temp.Root);
+        paths.EnsureDataDirectories();
+        var repository = new LibraryRepository(paths, new AtomicTextWriter());
+        LibraryDocument document = CreateDoc();
+
+        CommitResult result = repository.Commit(repository.CreateCanonicalPackage(document));
+
+        Assert.IsTrue(result.BackupSynchronized);
+        CollectionAssert.AreEqual(
+            File.ReadAllBytes(paths.LibraryPath),
+            File.ReadAllBytes(paths.LibraryBackupPath));
     }
 
     // ==========================================

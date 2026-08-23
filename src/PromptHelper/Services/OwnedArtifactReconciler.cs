@@ -298,7 +298,7 @@ internal static class OwnedArtifactReconciler
             // object is still at the target, the swap never started (or was restored after a
             // failed phase advance). A missing/foreign pre-image pathname is irrelevant in
             // that state and is preserved.
-            if (record.Phase == OwnedArtifactPhase.Prepared &&
+            if (record.Phase is OwnedArtifactPhase.Prepared or OwnedArtifactPhase.PreimageSidelined &&
                 target.MatchesRecordedOldIdentity &&
                 !preimageIsOurs)
             {
@@ -640,24 +640,12 @@ internal static class OwnedArtifactReconciler
             return false;
         }
 
-        byte[] bytes = new byte[length];
-        int read = 0;
-        while (read < bytes.Length)
+        if (!ProvenanceBoundCleanup.MatchesExpectedContent(
+                handle,
+                record.CandidateLength,
+                record.CandidateSha256Hex))
         {
-            int count = RandomAccess.Read(handle, bytes.AsSpan(read), read);
-            if (count <= 0)
-            {
-                mismatch = "Unexpected end of data while verifying the migration final. The object was preserved.";
-                return false;
-            }
-
-            read += count;
-        }
-
-        string actual = Convert.ToHexStringLower(SHA256.HashData(bytes));
-        if (!string.Equals(actual, record.CandidateSha256Hex, StringComparison.OrdinalIgnoreCase))
-        {
-            mismatch = $"Expected SHA-256 {record.CandidateSha256Hex}, found {actual}. The object was preserved.";
+            mismatch = $"Expected SHA-256 {record.CandidateSha256Hex}; the current bytes do not match. The object was preserved.";
             return false;
         }
 

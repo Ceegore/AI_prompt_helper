@@ -73,6 +73,9 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
     /// <summary>Fired after the sideline rename and before its phase advance is recorded.</summary>
     internal static Action<string>? AfterSidelineBeforePhaseRecordForTests;
 
+    /// <summary>Injects a real candidate-promotion failure inside the runtime rollback catch.</summary>
+    internal static Action<string>? BeforeCandidatePromotionForTests;
+
     public void ReplaceIfExpected(
         string physicalRoot,
         string targetPath,
@@ -80,6 +83,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
         ReadOnlySpan<byte> candidateBytes,
         DurableFileClass fileClass)
     {
+        ProductionRuntimeEvidence.Hit("WindowsAtomicExpectedFileReplacer.ReplaceIfExpected");
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
         ArgumentNullException.ThrowIfNull(expected);
@@ -120,12 +124,32 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         using var stage = WindowsOwnedDurableStage.CreateNewUnderRoot(stagePath, physicalRoot);
 
-        _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
-            operationId,
-            OwnedArtifactKind.Stage,
-            OwnedArtifactPhase.Claimed,
-            Relative(physicalRoot, stagePath),
-            stage.Identity));
+        try
+        {
+            _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
+                operationId,
+                OwnedArtifactKind.Stage,
+                OwnedArtifactPhase.Claimed,
+                Relative(physicalRoot, stagePath),
+                stage.Identity));
+        }
+        catch (Exception recordFailure)
+        {
+            try
+            {
+                // The retained creation handle is exact authority. Never release it while an
+                // unclaimed current-format stage still exists (CRUU18-006).
+                stage.DeleteExact();
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new IOException(
+                    $"Ownership recording and exact cleanup both failed for CAS stage '{stagePath}'.",
+                    new AggregateException(recordFailure, cleanupFailure));
+            }
+
+            throw;
+        }
 
         try
         {
@@ -189,12 +213,30 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         using var stage = WindowsOwnedDurableStage.CreateNewUnderRoot(stagePath, physicalRoot);
 
-        _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
-            operationId,
-            OwnedArtifactKind.Stage,
-            OwnedArtifactPhase.Claimed,
-            Relative(physicalRoot, stagePath),
-            stage.Identity));
+        try
+        {
+            _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
+                operationId,
+                OwnedArtifactKind.Stage,
+                OwnedArtifactPhase.Claimed,
+                Relative(physicalRoot, stagePath),
+                stage.Identity));
+        }
+        catch (Exception recordFailure)
+        {
+            try
+            {
+                stage.DeleteExact();
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new IOException(
+                    $"Ownership recording and exact cleanup both failed for CAS stage '{stagePath}'.",
+                    new AggregateException(recordFailure, cleanupFailure));
+            }
+
+            throw;
+        }
 
         try
         {
@@ -268,6 +310,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         try
         {
+            BeforeCandidatePromotionForTests?.Invoke(fullTarget);
             stage.PromoteNoOverwriteExact(fullTarget);
         }
         catch (Exception promoteFailure)

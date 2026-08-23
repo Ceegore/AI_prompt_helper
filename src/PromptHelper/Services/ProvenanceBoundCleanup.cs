@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
@@ -96,6 +97,100 @@ internal static class ProvenanceBoundCleanup
             WindowsHandleDeletion.MarkForDeletion(handle, fullPath);
             return ArtifactCleanupOutcome.DeletedProvenOwned;
         }
+    }
+
+    /// <summary>
+    /// Deletes a migration final only when the current or legacy ownership record proves the
+    /// exact object and the manifest proves the exact expected bytes. Current
+    /// <see cref="OwnedArtifactKind.MigrationArtifact"/> records name the final in
+    /// <see cref="OwnedArtifactRecord.RestoreRelativePath"/>; legacy MigrationFinal records
+    /// named it in RelativePath. Retry recovery must understand both protocols.
+    /// </summary>
+    public static ArtifactCleanupOutcome DeleteMigrationFinalIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        IOwnedArtifactJournal journal)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
+        ArgumentNullException.ThrowIfNull(journal);
+
+        string fullRoot = Path.GetFullPath(physicalRoot);
+        string fullPath = Path.GetFullPath(path);
+        string relativePath = Path.GetRelativePath(fullRoot, fullPath);
+
+        SafeFileHandle? handle = OpenExactNonReparse(fullPath, fullRoot);
+        if (handle is null)
+        {
+            return ArtifactCleanupOutcome.Missing;
+        }
+
+        using (handle)
+        {
+            WindowsFileIdentity actual = WindowsFileIdentity.FromHandle(handle);
+            OwnedArtifactRecord? authority = journal.Read(fullRoot).Records.FirstOrDefault(record =>
+                record.Identity == actual &&
+                ((record.Kind == OwnedArtifactKind.MigrationArtifact &&
+                  string.Equals(record.RestoreRelativePath, relativePath, StringComparison.OrdinalIgnoreCase)) ||
+                 (record.Kind == OwnedArtifactKind.MigrationFinal &&
+                  string.Equals(record.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase))));
+
+            if (authority is null)
+            {
+                return ArtifactCleanupOutcome.PreservedUnproven;
+            }
+
+            // A current record carries its own content authority. It must agree with the
+            // manifest rather than allowing either authority to silently override the other.
+            if (authority.Kind == OwnedArtifactKind.MigrationArtifact &&
+                (authority.CandidateLength != expectedLength ||
+                 !string.Equals(
+                     authority.CandidateSha256Hex,
+                     expectedSha256Hex,
+                     StringComparison.OrdinalIgnoreCase)))
+            {
+                return ArtifactCleanupOutcome.PreservedUnproven;
+            }
+
+            if (!MatchesExpectedContent(handle, expectedLength, expectedSha256Hex))
+            {
+                return ArtifactCleanupOutcome.PreservedUnproven;
+            }
+
+            WindowsHandleDeletion.MarkForDeletion(handle, fullPath);
+            return ArtifactCleanupOutcome.DeletedProvenOwned;
+        }
+    }
+
+    internal static bool MatchesExpectedContent(
+        SafeFileHandle handle,
+        long expectedLength,
+        string expectedSha256Hex)
+    {
+        long length = RandomAccess.GetLength(handle);
+        if (length != expectedLength || length > int.MaxValue)
+        {
+            return false;
+        }
+
+        byte[] bytes = new byte[(int)length];
+        int read = 0;
+        while (read < bytes.Length)
+        {
+            int count = RandomAccess.Read(handle, bytes.AsSpan(read), read);
+            if (count <= 0)
+            {
+                return false;
+            }
+
+            read += count;
+        }
+
+        string actual = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        return string.Equals(actual, expectedSha256Hex, StringComparison.OrdinalIgnoreCase);
     }
 
     private static SafeFileHandle? OpenExactNonReparse(string path, string physicalRoot)

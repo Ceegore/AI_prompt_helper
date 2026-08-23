@@ -11,8 +11,13 @@ namespace PromptHelper.Tests;
 internal sealed class FakeOwnedFileStage : IOwnedFileStage
 {
     private readonly IOwnedFileStage _inner;
+    private readonly string _identityToken;
 
-    public FakeOwnedFileStage(IOwnedFileStage inner) => _inner = inner;
+    public FakeOwnedFileStage(IOwnedFileStage inner)
+    {
+        _inner = inner;
+        _identityToken = inner.IdentityToken;
+    }
 
     public Action<ReadOnlyMemory<byte>>? OnWrite { get; set; }
     public Action? OnFlushDurable { get; set; }
@@ -20,7 +25,9 @@ internal sealed class FakeOwnedFileStage : IOwnedFileStage
     public Action<string>? OnPromoteNoOverwriteExact { get; set; }
     public Action? OnDeleteExact { get; set; }
 
-    public string IdentityToken => _inner.IdentityToken;
+    // Keep the creation identity available to the caller even when a fault-injection seam
+    // deliberately releases the inner handle immediately after promotion.
+    public string IdentityToken => _identityToken;
 
     public void Write(ReadOnlySpan<byte> bytes)
     {

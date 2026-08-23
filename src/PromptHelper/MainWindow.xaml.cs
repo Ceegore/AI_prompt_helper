@@ -8,6 +8,13 @@ using PromptHelper.Views;
 
 namespace PromptHelper;
 
+internal enum LibraryMutationExecutionResult
+{
+    Succeeded,
+    OrdinaryFailure,
+    FatalRestartRequired
+}
+
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
@@ -119,6 +126,11 @@ public partial class MainWindow : Window
 
     private void AddCategoryButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         var existingNames = _viewModel.ChildCategories.Select(c => c.Name);
         var dialog = new NameDialog(
             "Create Category",
@@ -131,20 +143,18 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog() == true)
         {
-            try
-            {
-                var result = _viewModel.CreateCategory(dialog.ResultName);
-                ShowWarningIfPresent(result.Warning);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-            {
-                MessageBox.Show(
-                    this,
-                    $"Failed to create category:\n\n{ex.Message}",
-                    "Category Creation Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            ExecuteLibraryMutation(
+                () =>
+                {
+                    var result = _viewModel.CreateCategory(dialog.ResultName);
+                    ShowWarningIfPresent(result.Warning);
+                },
+                ex => MessageBox.Show(
+                        this,
+                        $"Failed to create category:\n\n{ex.Message}",
+                        "Category Creation Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error));
         }
     }
 
@@ -189,6 +199,11 @@ public partial class MainWindow : Window
 
     private void RenameCategory(CategoryItemViewModel cat)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         var existingNames = _viewModel.ChildCategories
             .Where(c => c.Id != cat.Id)
             .Select(c => c.Name);
@@ -204,25 +219,28 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog() == true)
         {
-            try
-            {
-                var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
-                ShowWarningIfPresent(result.Warning);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-            {
-                MessageBox.Show(
-                    this,
-                    $"Failed to rename category:\n\n{ex.Message}",
-                    "Category Rename Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            ExecuteLibraryMutation(
+                () =>
+                {
+                    var result = _viewModel.RenameCategory(cat.Id, dialog.ResultName);
+                    ShowWarningIfPresent(result.Warning);
+                },
+                ex => MessageBox.Show(
+                        this,
+                        $"Failed to rename category:\n\n{ex.Message}",
+                        "Category Rename Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error));
         }
     }
 
     private void DeleteCategory(CategoryItemViewModel cat)
     {
+        if (_fatalMutationShutdownRequested)
+        {
+            return;
+        }
+
         if (!_viewModel.CanDeleteCategory(cat.Id, out string? blockReason))
         {
             MessageBox.Show(
@@ -244,20 +262,18 @@ public partial class MainWindow : Window
 
         if (confirmDialog.ShowDialog() == true)
         {
-            try
-            {
-                var result = _viewModel.DeleteCategory(cat.Id);
-                ShowWarningIfPresent(result.Warning);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-            {
-                MessageBox.Show(
-                    this,
-                    $"Failed to delete category:\n\n{ex.Message}",
-                    "Delete Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            ExecuteLibraryMutation(
+                () =>
+                {
+                    var result = _viewModel.DeleteCategory(cat.Id);
+                    ShowWarningIfPresent(result.Warning);
+                },
+                ex => MessageBox.Show(
+                        this,
+                        $"Failed to delete category:\n\n{ex.Message}",
+                        "Delete Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error));
         }
     }
 
@@ -286,27 +302,24 @@ public partial class MainWindow : Window
             promptText = dialog.ResultText;
             headlineText = dialog.ResultHeadlineEditorText;
             headlineAutomatic = dialog.ResultUsesAutomaticHeadline;
-            try
+            LibraryMutationExecutionResult execution = ExecuteLibraryMutation(
+                () =>
+                {
+                    var result = _viewModel.CreatePrompt(promptText, dialog.ResultHeadline);
+                    ShowWarningIfPresent(result.Warning);
+                },
+                ex => MessageBox.Show(
+                        this,
+                        $"Failed to save new prompt:\n\n{ex.Message}",
+                        "Save Prompt Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error));
+
+            if (execution != LibraryMutationExecutionResult.OrdinaryFailure)
             {
-                var result = _viewModel.CreatePrompt(promptText, dialog.ResultHeadline);
-                ShowWarningIfPresent(result.Warning);
                 break;
             }
-            catch (CommittedMutationRequiresRestartException ex)
-            {
-                HandleFatalMutationException(ex);
-                break;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-            {
-                MessageBox.Show(
-                    this,
-                    $"Failed to save new prompt:\n\n{ex.Message}",
-                    "Save Prompt Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-                // Loop continues with promptText preserved so user work is not lost (PLH-001)
-            }
+            // Loop continues with promptText preserved so user work is not lost (PLH-001)
         }
     }
 
@@ -353,27 +366,24 @@ public partial class MainWindow : Window
                 promptText = dialog.ResultText;
                 headlineText = dialog.ResultHeadlineEditorText;
                 headlineAutomatic = dialog.ResultUsesAutomaticHeadline;
-                try
+                LibraryMutationExecutionResult execution = ExecuteLibraryMutation(
+                    () =>
+                    {
+                        var result = _viewModel.EditPrompt(card.Id, promptText, dialog.ResultHeadline);
+                        ShowWarningIfPresent(result.Warning);
+                    },
+                    ex => MessageBox.Show(
+                            this,
+                            $"Failed to save edited prompt:\n\n{ex.Message}",
+                            "Save Prompt Error",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error));
+
+                if (execution != LibraryMutationExecutionResult.OrdinaryFailure)
                 {
-                    var result = _viewModel.EditPrompt(card.Id, promptText, dialog.ResultHeadline);
-                    ShowWarningIfPresent(result.Warning);
                     break;
                 }
-                catch (CommittedMutationRequiresRestartException ex)
-                {
-                    HandleFatalMutationException(ex);
-                    break;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-                {
-                    MessageBox.Show(
-                        this,
-                        $"Failed to save edited prompt:\n\n{ex.Message}",
-                        "Save Prompt Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                    // Loop continues with promptText preserved so user work is not lost (PLH-001)
-                }
+                // Loop continues with promptText preserved so user work is not lost (PLH-001)
             }
         }
     }
@@ -397,24 +407,18 @@ public partial class MainWindow : Window
 
             if (confirmDialog.ShowDialog() == true)
             {
-                try
-                {
-                    var result = _viewModel.DeletePrompt(card.Id);
-                    ShowWarningIfPresent(result.Warning);
-                }
-                catch (CommittedMutationRequiresRestartException ex)
-                {
-                    HandleFatalMutationException(ex);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-                {
-                    MessageBox.Show(
-                        this,
-                        $"Failed to delete prompt:\n\n{ex.Message}",
-                        "Delete Prompt Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
+                ExecuteLibraryMutation(
+                    () =>
+                    {
+                        var result = _viewModel.DeletePrompt(card.Id);
+                        ShowWarningIfPresent(result.Warning);
+                    },
+                    ex => MessageBox.Show(
+                            this,
+                            $"Failed to delete prompt:\n\n{ex.Message}",
+                            "Delete Prompt Error",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error));
             }
         }
     }
@@ -440,32 +444,26 @@ public partial class MainWindow : Window
 
             if (dialog.ShowDialog() == true)
             {
-                try
-                {
-                    if (dialog.CopyInsteadOfMove)
+                ExecuteLibraryMutation(
+                    () =>
                     {
-                        var result = _viewModel.DuplicatePrompt(card.Id, dialog.DestinationCategoryId);
-                        ShowWarningIfPresent(result.Warning);
-                    }
-                    else
-                    {
-                        var result = _viewModel.MovePrompt(card.Id, dialog.DestinationCategoryId);
-                        ShowWarningIfPresent(result.Warning);
-                    }
-                }
-                catch (CommittedMutationRequiresRestartException ex)
-                {
-                    HandleFatalMutationException(ex);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
-                {
-                    MessageBox.Show(
-                        this,
-                        $"Failed to {(dialog.CopyInsteadOfMove ? "duplicate" : "move")} prompt:\n\n{ex.Message}",
-                        "Move/Duplicate Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
+                        if (dialog.CopyInsteadOfMove)
+                        {
+                            var result = _viewModel.DuplicatePrompt(card.Id, dialog.DestinationCategoryId);
+                            ShowWarningIfPresent(result.Warning);
+                        }
+                        else
+                        {
+                            var result = _viewModel.MovePrompt(card.Id, dialog.DestinationCategoryId);
+                            ShowWarningIfPresent(result.Warning);
+                        }
+                    },
+                    ex => MessageBox.Show(
+                            this,
+                            $"Failed to {(dialog.CopyInsteadOfMove ? "duplicate" : "move")} prompt:\n\n{ex.Message}",
+                            "Move/Duplicate Error",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error));
             }
         }
     }
@@ -547,13 +545,47 @@ public partial class MainWindow : Window
 
     internal bool FatalMutationShutdownRequested => _fatalMutationShutdownRequested;
 
+    internal LibraryMutationExecutionResult ExecuteLibraryMutationForTests(Action operation) =>
+        ExecuteLibraryMutation(operation, _ => { });
+
+    private LibraryMutationExecutionResult ExecuteLibraryMutation(
+        Action operation,
+        Action<Exception> handleOrdinaryFailure)
+    {
+        ProductionRuntimeEvidence.Hit("MainWindow.ExecuteLibraryMutation");
+
+        if (_fatalMutationShutdownRequested)
+        {
+            return LibraryMutationExecutionResult.FatalRestartRequired;
+        }
+
+        try
+        {
+            operation();
+            return LibraryMutationExecutionResult.Succeeded;
+        }
+        catch (CommittedMutationRequiresRestartException ex)
+        {
+            HandleFatalMutationException(ex);
+            return LibraryMutationExecutionResult.FatalRestartRequired;
+        }
+        catch (Exception ex) when (IsOrdinaryPersistenceException(ex))
+        {
+            handleOrdinaryFailure(ex);
+            return LibraryMutationExecutionResult.OrdinaryFailure;
+        }
+    }
+
+    private static bool IsOrdinaryPersistenceException(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException;
+
     internal void HandleFatalMutationException(CommittedMutationRequiresRestartException ex)
     {
         _fatalMutationShutdownRequested = true;
         try
         {
             string message =
-                "A prompt change was saved, but Prompt Helper could not finish its recovery bookkeeping.\n\n" +
+                "A library change was saved, but Prompt Helper could not finish its recovery bookkeeping.\n\n" +
                 "Prompt Helper must close now so it does not continue running with an unresolved recovery journal.\n\n" +
                 "Open Prompt Helper again after it closes.\n\n" +
                 ex.Message;

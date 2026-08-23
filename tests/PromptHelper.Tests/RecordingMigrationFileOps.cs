@@ -64,8 +64,16 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
     public void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim) =>
         _inner.RecordMigrationArtifactPublished(physicalRoot, claim);
 
-    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path)
-        => _inner.DeleteOwnedFinalIfProven(physicalRoot, path);
+    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex)
+        => _inner.DeleteOwnedFinalIfProven(
+            physicalRoot,
+            path,
+            expectedLength,
+            expectedSha256Hex);
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {

@@ -102,14 +102,33 @@ public sealed class Cruu16EvidenceQualityTests
         // object constructed in the same test body. This intentionally rejects the CRUU16-005
         // false positive that reflected over Rollback's surrounding types without executing it.
         bool constructsProduction = ProductionTypeNames.Value.Any(name =>
-            Regex.IsMatch(body, $@"\bnew\s+(?:[A-Za-z0-9_.]+\.)?{Regex.Escape(name)}\s*\("));
+            Regex.IsMatch(body, $@"\bnew\s+(?:[A-Za-z0-9_.]+\.)?{Regex.Escape(name)}\s*(?:\(|\{{)"));
         bool callsProductionStatic = ProductionTypeNames.Value.Any(name =>
             Regex.IsMatch(
                 body,
                 $@"\b{Regex.Escape(name)}\s*\.\s*(?!(?:Assembly|GetMethod|GetProperty|GetField|GetNestedTypes)\b)[A-Za-z_][A-Za-z0-9_]*\s*\("));
-        bool callsProductionInstance = Regex.IsMatch(
-            body,
-            @"\b(?!(?:Assert|StringAssert|CollectionAssert|File|Directory|Path|Regex|Enumerable)\b)[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(?!(?:GetMethod|GetProperty|GetField|GetNestedTypes|GetType|Contains|StartsWith|EndsWith|Single|Any|Where|Select)\b)[A-Za-z_][A-Za-z0-9_]*\s*\(");
+        var productionReceivers = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string name in ProductionTypeNames.Value)
+        {
+            foreach (Match match in Regex.Matches(
+                         body,
+                         $@"\b(?:[A-Za-z0-9_.]+\.)?{Regex.Escape(name)}\s+([A-Za-z_][A-Za-z0-9_]*)\b"))
+            {
+                productionReceivers.Add(match.Groups[1].Value);
+            }
+
+            foreach (Match match in Regex.Matches(
+                         body,
+                         $@"\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+(?:[A-Za-z0-9_.]+\.)?{Regex.Escape(name)}\s*\("))
+            {
+                productionReceivers.Add(match.Groups[1].Value);
+            }
+        }
+
+        bool callsProductionInstance = productionReceivers.Any(receiver =>
+            Regex.IsMatch(
+                body,
+                $@"\b{Regex.Escape(receiver)}\s*\.\s*(?!(?:GetMethod|GetProperty|GetField|GetNestedTypes|GetType)\b)[A-Za-z_][A-Za-z0-9_]*\s*\("));
 
         bool reflectionOrMentionOnly = touchesProduction &&
             !constructsProduction &&
@@ -145,6 +164,24 @@ public sealed class Cruu16EvidenceQualityTests
         Assert.AreNotEqual(
             EvidenceKind.ProductionBehavior,
             ClassifyBody("File.ReadAllText(path); typeof(IVerifiedArtifactDeleter).GetMethod(\"VerifyAndDelete\");"));
+    }
+
+    [TestMethod]
+    public void CRUU18_007_Nameof_production_type_plus_fake_instance_call_is_not_ProductionBehavior()
+    {
+        Assert.AreNotEqual(
+            EvidenceKind.ProductionBehavior,
+            ClassifyBody("string marker = nameof(DataFolderMigrationService); fake.DoWork();"));
+    }
+
+    [TestMethod]
+    public void CRUU18_007_Reflection_Invoke_without_mapped_production_hit_is_not_ProductionBehavior()
+    {
+        Assert.AreNotEqual(
+            EvidenceKind.ProductionBehavior,
+            ClassifyBody(
+                "var method = typeof(MigrationRecoveryService).GetMethod(\"RecoverForRetry\"); " +
+                "method!.Invoke(null, Array.Empty<object>());"));
     }
 
     /// <summary>

@@ -74,6 +74,24 @@ if ($uncovered.Count -gt 0) {
     exit 1
 }
 
+# CRUU18-007: from CRUU18 onward, every audited finding is high-risk recovery or evidence
+# work and must name the production method(s) its behavioral tests are required to hit. This
+# is deliberately independent of test-name presence: an exact sentinel name cannot substitute
+# for executing the integration layer it claims to cover.
+$missingRuntimeAuthority = @()
+foreach ($id in @($requiredIds | Where-Object { $_ -like 'CRUU18-*' })) {
+    $entry = $map.requiredProductionSymbols.PSObject.Properties[$id]
+    $symbols = if ($null -eq $entry) { @() } else { @($entry.Value) }
+    if ($symbols.Count -eq 0 -or @($symbols | Where-Object { $_ -notmatch '^[A-Za-z_][A-Za-z0-9_.]+\.[A-Za-z_][A-Za-z0-9_]+$' }).Count -gt 0) {
+        $missingRuntimeAuthority += $id
+    }
+}
+
+if ($missingRuntimeAuthority.Count -gt 0) {
+    Write-Error "CRUU18 findings missing valid required production-symbol authority: $($missingRuntimeAuthority -join ', ')"
+    exit 1
+}
+
 # --- 3. Flatten the map into the exact sentinel list. ------------------------------------
 $expected = [System.Collections.Generic.List[string]]::new()
 foreach ($property in ($map.findings.PSObject.Properties | Sort-Object Name)) {

@@ -373,19 +373,15 @@ public class DataFolderMigrationServiceTests
 
         var ops = new FaultInjectingMigrationFileOps
         {
-            OnPromoteStage = (src, dst, promote) =>
+            OnPromoteStageAfterHandleRelease = (src, dst) =>
             {
-                promote();
-
                 if (dst.EndsWith("library.json", StringComparison.OrdinalIgnoreCase))
                 {
                     // Alter the promoted bytes so the target no longer matches the source
-                    // snapshot, while remaining valid JSON. The staging object itself can no
-                    // longer be tampered with by pathname (CRUU15-002), so the interference
-                    // has to happen after promotion.
-                    string json = File.ReadAllText(dst);
-                    json = json.Replace("\"schemaVersion\": 1", "\"schemaVersion\": 1   ");
-                    File.WriteAllText(dst, json);
+                    // snapshot while remaining valid JSON. Trailing whitespace preserves the
+                    // file identity, proving rollback also checks content rather than identity
+                    // alone once the production handle's exclusive window ends.
+                    File.AppendAllText(dst, " ");
                 }
             }
         };

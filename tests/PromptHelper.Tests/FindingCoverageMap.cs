@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace PromptHelper.Tests;
@@ -15,7 +16,8 @@ namespace PromptHelper.Tests;
 /// </remarks>
 internal sealed record FindingCoverageMap(
     IReadOnlyDictionary<string, string> GatedReports,
-    IReadOnlyDictionary<string, IReadOnlyList<string>> Findings)
+    IReadOnlyDictionary<string, IReadOnlyList<string>> Findings,
+    IReadOnlyDictionary<string, IReadOnlyList<string>> RequiredProductionSymbols)
 {
     public static string MapPath => RepositoryTestPaths.RequireFile("tools", "FindingCoverageMap.json");
 
@@ -46,7 +48,20 @@ internal sealed record FindingCoverageMap(
             findings[property.Name] = tests;
         }
 
-        return new FindingCoverageMap(reports, findings);
+        var requiredSymbols = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        if (root.TryGetProperty("requiredProductionSymbols", out JsonElement symbolsRoot))
+        {
+            foreach (JsonProperty property in symbolsRoot.EnumerateObject())
+            {
+                requiredSymbols[property.Name] = property.Value.EnumerateArray()
+                    .Select(value => value.GetString()
+                        ?? throw new InvalidDataException(
+                            $"requiredProductionSymbols.{property.Name} contains a non-string entry."))
+                    .ToArray();
+            }
+        }
+
+        return new FindingCoverageMap(reports, findings, requiredSymbols);
     }
 
     /// <summary>

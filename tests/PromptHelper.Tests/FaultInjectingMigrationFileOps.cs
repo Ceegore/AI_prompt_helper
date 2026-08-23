@@ -25,11 +25,18 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
     /// pathname any more, which is the whole point of the owned-stage design (CRUU15-002).
     /// </summary>
     public Action<string, string, Action>? OnPromoteStage { get; set; }
+    /// <summary>
+    /// Runs after real promotion and after the retained creation handle is released. This is
+    /// the first point at which an external actor can actually modify the published pathname.
+    /// </summary>
+    public Action<string, string>? OnPromoteStageAfterHandleRelease { get; set; }
     public Func<string, IEnumerable<string>>? OnEnumeratePromptFiles { get; set; }
     public Func<string, bool>? OnFileExists { get; set; }
     public Func<string, bool>? OnDirectoryExists { get; set; }
     public Action<string>? OnDeleteFile { get; set; }
     public Action<string>? OnDeleteDirectory { get; set; }
+    public Action<string, MigrationArtifactClaim>? OnRecordMigrationArtifactPublished { get; set; }
+    public Action<string>? OnRetireCommittedMigrationArtifacts { get; set; }
     public Func<string, string, IReadOnlyList<string>>? OnEnumerateFiles { get; set; }
     public Func<string, IReadOnlyList<string>>? OnEnumerateEntries { get; set; }
 
@@ -94,6 +101,23 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
                 target => hook(path, target, () => inner.PromoteReplaceExact(target));
         }
 
+        if (OnPromoteStageAfterHandleRelease != null)
+        {
+            Action<string, string> hook = OnPromoteStageAfterHandleRelease;
+            stage.OnPromoteNoOverwriteExact = target =>
+            {
+                inner.PromoteNoOverwriteExact(target);
+                inner.Dispose();
+                hook(path, target);
+            };
+            stage.OnPromoteReplaceExact = target =>
+            {
+                inner.PromoteReplaceExact(target);
+                inner.Dispose();
+                hook(path, target);
+            };
+        }
+
         return stage;
     }
 
@@ -112,10 +136,22 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
             expectedLength,
             expectedSha256Hex);
 
-    public void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim) =>
-        _inner.RecordMigrationArtifactPublished(physicalRoot, claim);
+    public void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim)
+    {
+        if (OnRecordMigrationArtifactPublished != null)
+        {
+            OnRecordMigrationArtifactPublished(physicalRoot, claim);
+            return;
+        }
 
-    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path)
+        _inner.RecordMigrationArtifactPublished(physicalRoot, claim);
+    }
+
+    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex)
     {
         if (OnDeleteFile != null)
         {
@@ -123,7 +159,11 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
             return ArtifactCleanupOutcome.DeletedProvenOwned;
         }
 
-        return _inner.DeleteOwnedFinalIfProven(physicalRoot, path);
+        return _inner.DeleteOwnedFinalIfProven(
+            physicalRoot,
+            path,
+            expectedLength,
+            expectedSha256Hex);
     }
 
     public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
@@ -150,8 +190,16 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
 
     public void RetireOwnedArtifacts(string physicalRoot) => _inner.RetireOwnedArtifacts(physicalRoot);
 
-    public void RetireCommittedMigrationArtifacts(string physicalRoot) =>
+    public void RetireCommittedMigrationArtifacts(string physicalRoot)
+    {
+        if (OnRetireCommittedMigrationArtifacts != null)
+        {
+            OnRetireCommittedMigrationArtifacts(physicalRoot);
+            return;
+        }
+
         _inner.RetireCommittedMigrationArtifacts(physicalRoot);
+    }
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {

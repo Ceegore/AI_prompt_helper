@@ -68,7 +68,11 @@ internal interface IMigrationFileOps
     /// Deletes a promoted payload object only if a durable record proves this attempt created
     /// the exact object now at that pathname.
     /// </summary>
-    ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path);
+    ArtifactCleanupOutcome DeleteOwnedFinalIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex);
 
     /// <summary>
     /// Deletes the object at <paramref name="path"/> only if a durable ownership record proves
@@ -154,6 +158,7 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
+        ProductionRuntimeEvidence.Hit("DefaultMigrationFileOps.CreateOwnedStage");
         var stage = new OwnedMigrationStage(
             WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot));
         try
@@ -163,8 +168,23 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);
             return stage;
         }
-        catch
+        catch (Exception recordFailure)
         {
+            try
+            {
+                // The creation handle is stronger authority than a journal record. If the
+                // first durable claim fails, remove that exact object before releasing the
+                // only handle that can prove it is ours (CRUU18-006).
+                stage.DeleteExact();
+            }
+            catch (Exception cleanupFailure)
+            {
+                stage.Dispose();
+                throw new IOException(
+                    $"Migration stage ownership could not be recorded and exact cleanup failed for '{path}'.",
+                    new AggregateException(recordFailure, cleanupFailure));
+            }
+
             stage.Dispose();
             throw;
         }
@@ -221,8 +241,17 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             claim.ExpectedSha256Hex,
             claim.ExpectedLength);
 
-    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path) =>
-        ProvenanceBoundCleanup.DeleteFileIfProven(physicalRoot, path, _ownedArtifacts);
+    public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex) =>
+        ProvenanceBoundCleanup.DeleteMigrationFinalIfProven(
+            physicalRoot,
+            path,
+            expectedLength,
+            expectedSha256Hex,
+            _ownedArtifacts);
 
     /// <summary>
     /// Records a stage in the ownership journal of the data root it lives in. The root is

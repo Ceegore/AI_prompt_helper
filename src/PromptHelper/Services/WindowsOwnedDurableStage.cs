@@ -299,7 +299,8 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_terminal)
         {
-            return;
+            throw new InvalidOperationException(
+                "The staging object is already terminal; DeleteExact did not delete a published final.");
         }
 
         var dispInfo = new FILE_DISPOSITION_INFO { DeleteFile = true };

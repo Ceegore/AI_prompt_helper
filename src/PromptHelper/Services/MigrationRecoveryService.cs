@@ -34,6 +34,7 @@ public sealed class MigrationRecoveryService
 
     public RecoveryResult RecoverForRetry(MigrationRecoveryContext context)
     {
+        ProductionRuntimeEvidence.Hit("MigrationRecoveryService.RecoverForRetry");
         ArgumentNullException.ThrowIfNull(context);
 
         string markerPath = Path.Combine(context.TargetPhysicalRoot, ".prompthelper-migration.json");
@@ -210,7 +211,11 @@ public sealed class MigrationRecoveryService
                 string finalFullPath = MigrationManifestRepository.ResolveManifestArtifactPath(context.TargetPhysicalRoot, artifact.RelativePath);
 
                 ArtifactCleanupOutcome finalOutcome =
-                    _fileOps.DeleteOwnedFinalIfProven(context.TargetPhysicalRoot, finalFullPath);
+                    _fileOps.DeleteOwnedFinalIfProven(
+                        context.TargetPhysicalRoot,
+                        finalFullPath,
+                        artifact.Length,
+                        artifact.Sha256Hex);
 
                 if (finalOutcome == ArtifactCleanupOutcome.PreservedUnproven)
                 {
