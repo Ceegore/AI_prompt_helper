@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>PromptHelper</RootNamespace>
     <AssemblyName>PromptHelper</AssemblyName>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <InvariantGlobalization>false</InvariantGlobalization>
     <ApplicationIcon Condition="Exists('Assets\PromptHelper.ico')">Assets\PromptHelper.ico</ApplicationIcon>
   </PropertyGroup>
