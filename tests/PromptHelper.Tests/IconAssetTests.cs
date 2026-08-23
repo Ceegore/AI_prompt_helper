@@ -101,13 +101,10 @@ public sealed class IconAssetTests
     {
         string repoRoot = RepositoryTestPaths.Root;
         string scriptPath = Path.Combine(repoRoot, "tools", "VerifyReleaseAssets.ps1");
-        string exePath = Path.Combine(repoRoot, "src", "PromptHelper", "bin", "Debug", "net10.0-windows", "PromptHelper.exe");
-
-        // CRUU15-011: the release-asset check must not report success (or "not applicable")
-        // when the artefact it exists to validate is absent — that is precisely how an
-        // unvalidated executable ships.
-        Assert.IsTrue(File.Exists(exePath),
-            $"Built PromptHelper.exe not found at '{exePath}'. Build the main project before running the release-asset tests.");
+        // CRUU15-011: resolved for whichever configuration was built, and required to exist —
+        // a release-asset check that reports success (or "not applicable") when the artefact it
+        // validates is absent is precisely how an unvalidated executable ships.
+        string exePath = RepositoryTestPaths.RequireBuiltApplicationExe();
 
         var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe")
         {

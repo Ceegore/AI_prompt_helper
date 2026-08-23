@@ -183,11 +183,7 @@ public sealed class Cruu15IconChainTests
     [TestMethod]
     public void CRUU15_011_All_EXE_icon_groups_have_no_unapproved_required_frame_content()
     {
-        string exePath = Path.Combine(
-            RepositoryTestPaths.Root, "src", "PromptHelper", "bin", "Debug", "net10.0-windows", "PromptHelper.exe");
-
-        Assert.IsTrue(File.Exists(exePath),
-            $"Built PromptHelper.exe not found at '{exePath}'. Build the main project before running the release-asset tests.");
+        string exePath = RepositoryTestPaths.RequireBuiltApplicationExe();
 
         // The comparison runs through the real release tool, which enumerates every
         // RT_GROUP_ICON in the executable rather than stopping at the first one — an
