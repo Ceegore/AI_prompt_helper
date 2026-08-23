@@ -7,6 +7,10 @@ on:
   push:
     tags:
       - 'v*'
+  # Exercisable on demand as well. This does not weaken the tag path: every step below runs
+  # unconditionally either way, so there is no configuration in which a release is published
+  # without the strict asset chain having passed.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -47,6 +51,22 @@ jobs:
 
       - name: Build Release
         run: dotnet build PromptHelper.slnx -c Release --no-restore
+
+      # CRUU15-005 and CRUU16-003 verify that reparse points are never followed. Those tests
+      # fail rather than opt out, so the runner must be able to create symlinks; windows-ci.yml
+      # arranges the same thing before its filesystem-integration job.
+      - name: Enable symlink creation
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWord -Force | Out-Null
+
+          $probeDir = Join-Path $env:RUNNER_TEMP 'symlink-probe'
+          New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+          Set-Content -Path (Join-Path $probeDir 'target.txt') -Value 'probe' -Encoding utf8
+          cmd /c mklink "$probeDir\link.txt" "$probeDir\target.txt"
+          if ($LASTEXITCODE -ne 0) { throw 'This runner cannot create file symlinks; the reparse-point tests cannot be verified here.' }
 
       - name: Full test suite
         shell: pwsh

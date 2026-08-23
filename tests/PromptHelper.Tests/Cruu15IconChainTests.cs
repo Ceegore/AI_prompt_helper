@@ -162,6 +162,15 @@ public sealed class Cruu15IconChainTests
         Assert.IsFalse(releaseWorkflow.Contains("release_gate", StringComparison.Ordinal),
             "The release path must not depend on an opt-in workflow_dispatch input.");
 
+        // And no step in it is conditional: a strict check that some configuration can skip is
+        // a strict check that will eventually be skipped.
+        Assert.IsFalse(releaseWorkflow.Contains("if: ${{", StringComparison.Ordinal),
+            "No step on the release path may be conditional.");
+
+        // The reparse-point tests in the full suite fail rather than opt out, so the release
+        // runner has to be able to create symlinks.
+        StringAssert.Contains(releaseWorkflow, "Enable symlink creation");
+
         // And it runs the whole strict chain, including against the published executable.
         StringAssert.Contains(releaseWorkflow, "-RequireIcon");
         StringAssert.Contains(releaseWorkflow, "-PublishedExe");
