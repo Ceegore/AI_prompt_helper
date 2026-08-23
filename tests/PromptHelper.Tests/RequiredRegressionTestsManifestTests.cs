@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace PromptHelper.Tests;
@@ -22,32 +22,22 @@ public sealed class RequiredRegressionTestsManifestTests
     {
         string psd1Path = RepositoryTestPaths.RequireFile("tools", "RequiredRegressionTests.psd1");
 
-        var psi = new ProcessStartInfo("powershell.exe")
-        {
-            ArgumentList =
-            {
-                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                "-Command",
-                $"(Import-PowerShellDataFile -Path '{psd1Path}').Required | ConvertTo-Json -Compress"
-            },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+        // Parsed in-process rather than by shelling out to Import-PowerShellDataFile: that
+        // cmdlet is missing from the Windows PowerShell on GitHub's hosted runners, so this
+        // test used to fail in CI for a reason unrelated to the manifest's contents. The
+        // manifest's grammar is a list of single-quoted identifiers, which needs no shell.
+        string manifestText = File.ReadAllText(psd1Path);
 
-        ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 30_000);
-        Assert.IsTrue(run.Exited, "Import-PowerShellDataFile timed out.");
-        Assert.AreEqual(0, run.ExitCode, $"Failed to parse RequiredRegressionTests.psd1.\nSTDERR:\n{run.StandardError}");
-
-        string json = run.StandardOutput.Trim();
-        // A single-element array serializes as a bare string with -Compress; normalize to an array.
-        if (!json.StartsWith('['))
+        var names = new List<string>();
+        foreach (Match match in Regex.Matches(manifestText, "'([A-Za-z0-9_]+)'"))
         {
-            json = $"[{json}]";
+            names.Add(match.Groups[1].Value);
         }
 
-        return JsonSerializer.Deserialize<string[]>(json) ?? [];
+        Assert.IsTrue(names.Count > 0,
+            $"No sentinel names could be parsed from '{psd1Path}'.");
+
+        return names;
     }
 
     private static HashSet<string> LoadAllTestMethodNames()

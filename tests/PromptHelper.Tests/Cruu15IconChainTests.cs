@@ -139,14 +139,10 @@ public sealed class Cruu15IconChainTests
         File.Copy(SvgPath, Path.Combine(repo, "src", "PromptHelper", "Assets", "PromptHelperLogo.svg"));
         File.Copy(ManifestPath, Path.Combine(repo, "src", "PromptHelper", "Assets", "PromptHelperIcon.approved.json"));
 
-        var psi = new ProcessStartInfo("powershell.exe");
-        psi.ArgumentList.Add("-NoProfile");
-        psi.ArgumentList.Add("-NonInteractive");
-        psi.ArgumentList.Add("-ExecutionPolicy");
-        psi.ArgumentList.Add("Bypass");
-        psi.ArgumentList.Add("-File");
-        psi.ArgumentList.Add(Path.Combine(repo, "tools", "VerifyReleaseAssets.ps1"));
-        psi.ArgumentList.Add("-RequireIcon");
+        ProcessStartInfo psi = PowerShellHost.CreateStartInfo(
+            "-File",
+            Path.Combine(repo, "tools", "VerifyReleaseAssets.ps1"),
+            "-RequireIcon");
 
         ProcessRunResult run = ProcessTestRunner.Run(psi, timeoutMilliseconds: 120_000);
 

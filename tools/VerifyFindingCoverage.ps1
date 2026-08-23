@@ -127,8 +127,16 @@ if (-not (Test-Path $manifestPath)) {
     exit 1
 }
 
-$manifest = Import-PowerShellDataFile -Path $manifestPath
-$actual = @($manifest.Required)
+# Parsed by pattern rather than Import-PowerShellDataFile: that cmdlet is absent from some
+# Windows PowerShell hosts (notably the powershell.exe on GitHub's windows runners), and a
+# release gate that only works under one shell is a gate that silently does not run.
+$manifestText = Get-Content $manifestPath -Raw
+$actual = @([regex]::Matches($manifestText, "'([A-Za-z0-9_]+)'") | ForEach-Object { $_.Groups[1].Value })
+
+if ($actual.Count -eq 0) {
+    Write-Error "No sentinel names could be parsed from '$manifestPath'."
+    exit 1
+}
 
 $missingFromManifest = @($expected | Where-Object { $actual -notcontains $_ })
 $extraInManifest = @($actual | Where-Object { $expected -notcontains $_ })

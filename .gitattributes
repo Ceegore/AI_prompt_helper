@@ -1,0 +1,15 @@
+# Assets whose byte-for-byte identity is the thing being verified.
+#
+# Without this, a Windows checkout with core.autocrlf=true rewrites LF to CRLF in the
+# working tree, so the SVG's SHA-256 no longer matches the hash recorded in
+# PromptHelperIcon.approved.json and the whole approved-artwork identity chain fails on
+# CI while passing on the machine that generated it. These files are content, not source
+# text: never translate their line endings.
+*.svg           -text
+*.ico           binary
+*.png           binary
+*.approved.json -text
+
+# Verification inputs read by exact byte content or parsed by external tools.
+*.psd1 text eol=crlf
+*.ps1  text eol=crlf

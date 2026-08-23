@@ -23,16 +23,7 @@ public sealed class Cruu15EvidenceGateTests
 
     private static ProcessRunResult RunPowerShell(params string[] arguments)
     {
-        var psi = new ProcessStartInfo("powershell.exe");
-        psi.ArgumentList.Add("-NoProfile");
-        psi.ArgumentList.Add("-NonInteractive");
-        psi.ArgumentList.Add("-ExecutionPolicy");
-        psi.ArgumentList.Add("Bypass");
-        foreach (string argument in arguments)
-        {
-            psi.ArgumentList.Add(argument);
-        }
-
+        ProcessStartInfo psi = PowerShellHost.CreateStartInfo(arguments);
         return ProcessTestRunner.Run(psi, timeoutMilliseconds: 120_000);
     }
 
