@@ -387,9 +387,15 @@ public class Cruu12ComprehensiveVerificationTests
             ExpectedSha256Hex = Hash(payload)
         };
 
-        owned.MarkTempOwned();
+        string identityToken;
+        using (Microsoft.Win32.SafeHandles.SafeFileHandle handle = File.OpenHandle(tempPath))
+        {
+            identityToken = WindowsFileIdentity.FromHandle(handle).ToToken();
+        }
+
+        owned.MarkTempOwned(identityToken);
         File.Move(tempPath, finalPath);
-        owned.MarkFinalOwnedAfterMove();
+        owned.MarkFinalOwnedAfterMove(identityToken);
 
         Assert.AreEqual(DataFolderMigrationService.MigrationOwnedFileState.FinalOwned, owned.State);
     }

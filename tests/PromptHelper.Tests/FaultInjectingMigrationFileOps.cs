@@ -97,8 +97,23 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         return stage;
     }
 
-    public void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken)
-        => _inner.RecordPromotedFinal(physicalRoot, finalPath, identityToken);
+    public MigrationArtifactClaim RecordMigrationArtifactPrepared(
+        string physicalRoot,
+        string tempPath,
+        string finalPath,
+        string identityToken,
+        long expectedLength,
+        string expectedSha256Hex) =>
+        _inner.RecordMigrationArtifactPrepared(
+            physicalRoot,
+            tempPath,
+            finalPath,
+            identityToken,
+            expectedLength,
+            expectedSha256Hex);
+
+    public void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim) =>
+        _inner.RecordMigrationArtifactPublished(physicalRoot, claim);
 
     public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path)
     {
@@ -134,6 +149,9 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
     }
 
     public void RetireOwnedArtifacts(string physicalRoot) => _inner.RetireOwnedArtifacts(physicalRoot);
+
+    public void RetireCommittedMigrationArtifacts(string physicalRoot) =>
+        _inner.RetireCommittedMigrationArtifacts(physicalRoot);
 
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {

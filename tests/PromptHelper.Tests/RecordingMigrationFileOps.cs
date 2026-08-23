@@ -46,8 +46,23 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
         return new TracingStage(_inner.CreateOwnedStage(physicalRoot, path), path, Trace);
     }
 
-    public void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken)
-        => _inner.RecordPromotedFinal(physicalRoot, finalPath, identityToken);
+    public MigrationArtifactClaim RecordMigrationArtifactPrepared(
+        string physicalRoot,
+        string tempPath,
+        string finalPath,
+        string identityToken,
+        long expectedLength,
+        string expectedSha256Hex) =>
+        _inner.RecordMigrationArtifactPrepared(
+            physicalRoot,
+            tempPath,
+            finalPath,
+            identityToken,
+            expectedLength,
+            expectedSha256Hex);
+
+    public void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim) =>
+        _inner.RecordMigrationArtifactPublished(physicalRoot, claim);
 
     public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path)
         => _inner.DeleteOwnedFinalIfProven(physicalRoot, path);
@@ -82,6 +97,10 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
 
     public void RetireOwnedArtifacts(string physicalRoot)
         => _inner.RetireOwnedArtifacts(physicalRoot);
+
+    public void RetireCommittedMigrationArtifacts(string physicalRoot)
+        => _inner.RetireCommittedMigrationArtifacts(physicalRoot);
+
     public IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern = "*") => _inner.EnumerateFiles(directory, searchPattern);
     public IReadOnlyList<string> EnumerateEntries(string directory) => _inner.EnumerateEntries(directory);
 

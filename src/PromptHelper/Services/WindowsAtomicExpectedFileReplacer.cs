@@ -67,26 +67,18 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
     /// </summary>
     internal static Action<string>? BetweenRenamesForTests;
 
+    /// <summary>Fired after the honest Prepared record is durable and before the sideline rename.</summary>
+    internal static Action<string>? AfterPreparedRecordForTests;
+
+    /// <summary>Fired after the sideline rename and before its phase advance is recorded.</summary>
+    internal static Action<string>? AfterSidelineBeforePhaseRecordForTests;
+
     public void ReplaceIfExpected(
         string physicalRoot,
         string targetPath,
         ExpectedFileState expected,
         ReadOnlySpan<byte> candidateBytes,
         DurableFileClass fileClass)
-        => ReplaceIfExpected(physicalRoot, targetPath, expected, candidateBytes, fileClass, recordOwnership: true);
-
-    /// <summary>
-    /// <paramref name="recordOwnership"/> is false only for the ownership ledger itself, which
-    /// cannot appear in its own records without recursing. A crash during that particular swap
-    /// therefore leaves an unproven orphan, which reconciliation preserves rather than deletes.
-    /// </summary>
-    internal void ReplaceIfExpected(
-        string physicalRoot,
-        string targetPath,
-        ExpectedFileState expected,
-        ReadOnlySpan<byte> candidateBytes,
-        DurableFileClass fileClass,
-        bool recordOwnership)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
@@ -100,7 +92,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         if (expected.Kind == ExpectedFileStateKind.Missing)
         {
-            ReplaceExpectingMissing(physicalRoot, directory, fullTarget, candidateBytes, fileClass, recordOwnership);
+            ReplaceExpectingMissing(physicalRoot, directory, fullTarget, candidateBytes, fileClass);
             return;
         }
 
@@ -109,9 +101,9 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
             directory,
             fullTarget,
             expected.ExpectedSha256Hex!,
+            expected.ExpectedIdentity,
             candidateBytes,
-            fileClass,
-            recordOwnership);
+            fileClass);
     }
 
     private void ReplaceExpectingMissing(
@@ -119,8 +111,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
         string directory,
         string fullTarget,
         ReadOnlySpan<byte> candidateBytes,
-        DurableFileClass fileClass,
-        bool recordOwnership)
+        DurableFileClass fileClass)
     {
         Guid operationId = Guid.NewGuid();
         string stagePath = Path.Combine(
@@ -129,15 +120,12 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         using var stage = WindowsOwnedDurableStage.CreateNewUnderRoot(stagePath, physicalRoot);
 
-        if (recordOwnership)
-        {
-            _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
-                operationId,
-                OwnedArtifactKind.Stage,
-                OwnedArtifactPhase.Claimed,
-                Relative(physicalRoot, stagePath),
-                stage.Identity));
-        }
+        _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
+            operationId,
+            OwnedArtifactKind.Stage,
+            OwnedArtifactPhase.Claimed,
+            Relative(physicalRoot, stagePath),
+            stage.Identity));
 
         try
         {
@@ -168,9 +156,9 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
         string directory,
         string fullTarget,
         string expectedSha256Hex,
+        WindowsFileIdentity? expectedIdentity,
         ReadOnlySpan<byte> candidateBytes,
-        DurableFileClass fileClass,
-        bool recordOwnership)
+        DurableFileClass fileClass)
     {
         using WindowsExpectedTargetAuthority? authority =
             WindowsExpectedTargetAuthority.Open(fullTarget, physicalRoot);
@@ -182,6 +170,10 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
         }
 
         authority.AssertContentMatches(expectedSha256Hex);
+        if (expectedIdentity is WindowsFileIdentity identity)
+        {
+            authority.AssertIdentityMatches(identity);
+        }
 
         Guid operationId = Guid.NewGuid();
         string targetFileName = Path.GetFileName(fullTarget);
@@ -197,15 +189,12 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         using var stage = WindowsOwnedDurableStage.CreateNewUnderRoot(stagePath, physicalRoot);
 
-        if (recordOwnership)
-        {
-            _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
-                operationId,
-                OwnedArtifactKind.Stage,
-                OwnedArtifactPhase.Claimed,
-                Relative(physicalRoot, stagePath),
-                stage.Identity));
-        }
+        _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
+            operationId,
+            OwnedArtifactKind.Stage,
+            OwnedArtifactPhase.Claimed,
+            Relative(physicalRoot, stagePath),
+            stage.Identity));
 
         try
         {
@@ -220,20 +209,20 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         PreSwapBarrierForTests?.Invoke(fullTarget);
 
-        // Claim the pre-image durably *before* it exists, carrying the candidate's identity so
-        // recovery can prove which side of the swap actually completed.
-        if (recordOwnership)
-        {
-            _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
-                operationId,
-                OwnedArtifactKind.CasPreimage,
-                OwnedArtifactPhase.PreimageSidelined,
-                Relative(physicalRoot, preimagePath),
-                authority.Identity,
-                Relative(physicalRoot, fullTarget),
-                candidateSha256Hex,
-                candidateLength));
-        }
+        // Record an honest pre-rename phase. It carries enough old-object and candidate
+        // authority for recovery to distinguish "rename never started" from every crash cut
+        // that follows, without claiming the old object is already sidelined.
+        _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
+            operationId,
+            OwnedArtifactKind.CasPreimage,
+            OwnedArtifactPhase.Prepared,
+            Relative(physicalRoot, preimagePath),
+            authority.Identity,
+            Relative(physicalRoot, fullTarget),
+            candidateSha256Hex,
+            candidateLength));
+
+        AfterPreparedRecordForTests?.Invoke(fullTarget);
 
         if (!authority.RenameExactNoOverwrite(preimagePath, out int sidelineError))
         {
@@ -249,6 +238,30 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
             throw new IOException(
                 $"Unable to move the current '{fullTarget}' aside for atomic replacement.",
                 new Win32Exception(sidelineError));
+        }
+
+
+        AfterSidelineBeforePhaseRecordForTests?.Invoke(fullTarget);
+
+        try
+        {
+            _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
+                operationId,
+                OwnedArtifactKind.CasPreimage,
+                OwnedArtifactPhase.PreimageSidelined,
+                Relative(physicalRoot, preimagePath),
+                authority.Identity,
+                Relative(physicalRoot, fullTarget),
+                candidateSha256Hex,
+                candidateLength));
+        }
+        catch
+        {
+            // The candidate has not been published. Restore the exact old object if
+            // possible; otherwise the durable Prepared record lets startup do so.
+            authority.RenameExactNoOverwrite(fullTarget, out _);
+            DeleteStageQuietly(stage);
+            throw;
         }
 
         BetweenRenamesForTests?.Invoke(fullTarget);
@@ -280,7 +293,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
         // The candidate is published. Recording that before retiring the pre-image means a
         // crash in between is unambiguous on restart rather than merely probable.
-        if (recordOwnership)
+        try
         {
             _ownedArtifacts.Record(physicalRoot, new OwnedArtifactRecord(
                 operationId,
@@ -291,9 +304,18 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
                 Relative(physicalRoot, fullTarget),
                 candidateSha256Hex,
                 candidateLength));
-        }
 
-        authority.DeleteExact();
+            authority.DeleteExact();
+        }
+        catch (Exception ex) when (ex is not CommittedAtomicReplacementRequiresRestartException)
+        {
+            throw new CommittedAtomicReplacementRequiresRestartException(
+                operationId,
+                fullTarget,
+                $"The replacement of '{fullTarget}' was committed, but durable recovery bookkeeping " +
+                "did not finish. Restart Prompt Helper before making another change.",
+                ex);
+        }
     }
 
     private static void DeleteStageQuietly(WindowsOwnedDurableStage stage)

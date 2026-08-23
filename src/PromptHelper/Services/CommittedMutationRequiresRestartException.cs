@@ -12,7 +12,7 @@ public enum LibraryMutationMetadataState
     Other
 }
 
-public sealed class CommittedMutationRequiresRestartException : IOException
+public class CommittedMutationRequiresRestartException : IOException
 {
     public Guid OperationId { get; }
 
@@ -23,5 +23,26 @@ public sealed class CommittedMutationRequiresRestartException : IOException
         : base(message, inner)
     {
         OperationId = operationId;
+    }
+}
+
+/// <summary>
+/// The atomic replacement crossed its filesystem point of no return, but durable recovery
+/// bookkeeping or cleanup did not finish. Callers must treat the mutation as committed and
+/// prevent another mutation until startup reconciliation runs.
+/// </summary>
+public sealed class CommittedAtomicReplacementRequiresRestartException
+    : CommittedMutationRequiresRestartException
+{
+    public string TargetPath { get; }
+
+    public CommittedAtomicReplacementRequiresRestartException(
+        Guid operationId,
+        string targetPath,
+        string message,
+        Exception inner)
+        : base(operationId, message, inner)
+    {
+        TargetPath = targetPath;
     }
 }

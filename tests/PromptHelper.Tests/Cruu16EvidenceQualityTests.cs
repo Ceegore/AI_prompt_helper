@@ -72,6 +72,13 @@ public sealed class Cruu16EvidenceQualityTests
             return EvidenceKind.Structural;
         }
 
+        return ClassifyBody(body);
+    }
+
+    private static EvidenceKind ClassifyBody(string body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
         bool touchesProduction = ProductionTypeNames.Value.Any(
             name => Regex.IsMatch(body, $@"\b{Regex.Escape(name)}\b"));
 
@@ -85,16 +92,59 @@ public sealed class Cruu16EvidenceQualityTests
              (body.Contains(".ps1", StringComparison.Ordinal) ||
               body.Contains("ScriptPath", StringComparison.Ordinal)));
 
-        if (touchesProduction || executesTooling)
-        {
-            return EvidenceKind.ProductionBehavior;
-        }
-
         bool readsRepositoryText =
             body.Contains("RepositoryTestPaths.RequireFile", StringComparison.Ordinal) ||
             body.Contains("File.ReadAllText", StringComparison.Ordinal);
 
+        // A type token inside typeof/nameof or a reflection lookup proves only that a symbol
+        // exists. Count production behaviour only when the body also constructs a production
+        // type or calls a production static method. Instance calls are then reached through an
+        // object constructed in the same test body. This intentionally rejects the CRUU16-005
+        // false positive that reflected over Rollback's surrounding types without executing it.
+        bool constructsProduction = ProductionTypeNames.Value.Any(name =>
+            Regex.IsMatch(body, $@"\bnew\s+(?:[A-Za-z0-9_.]+\.)?{Regex.Escape(name)}\s*\("));
+        bool callsProductionStatic = ProductionTypeNames.Value.Any(name =>
+            Regex.IsMatch(
+                body,
+                $@"\b{Regex.Escape(name)}\s*\.\s*(?!(?:Assembly|GetMethod|GetProperty|GetField|GetNestedTypes)\b)[A-Za-z_][A-Za-z0-9_]*\s*\("));
+        bool callsProductionInstance = Regex.IsMatch(
+            body,
+            @"\b(?!(?:Assert|StringAssert|CollectionAssert|File|Directory|Path|Regex|Enumerable)\b)[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(?!(?:GetMethod|GetProperty|GetField|GetNestedTypes|GetType|Contains|StartsWith|EndsWith|Single|Any|Where|Select)\b)[A-Za-z_][A-Za-z0-9_]*\s*\(");
+
+        bool reflectionOrMentionOnly = touchesProduction &&
+            !constructsProduction &&
+            !callsProductionStatic &&
+            !callsProductionInstance;
+
+        if (executesTooling || (touchesProduction && !reflectionOrMentionOnly))
+        {
+            return EvidenceKind.ProductionBehavior;
+        }
+
         return readsRepositoryText ? EvidenceKind.SourceTextOnly : EvidenceKind.Structural;
+    }
+
+    [TestMethod]
+    public void CRUU17_008_Reflection_only_test_is_not_classified_ProductionBehavior()
+    {
+        string body = "typeof(DataFolderMigrationService).GetNestedTypes().Single().GetMethod(\"Rollback\");";
+        Assert.AreEqual(EvidenceKind.Structural, ClassifyBody(body));
+    }
+
+    [TestMethod]
+    public void CRUU17_008_Type_name_mention_alone_is_not_production_execution()
+    {
+        Assert.AreEqual(
+            EvidenceKind.Structural,
+            ClassifyBody("string mentioned = nameof(DataFolderMigrationService);"));
+    }
+
+    [TestMethod]
+    public void CRUU17_008_Source_or_reflection_only_sentinel_cannot_satisfy_high_risk_acceptance()
+    {
+        Assert.AreNotEqual(
+            EvidenceKind.ProductionBehavior,
+            ClassifyBody("File.ReadAllText(path); typeof(IVerifiedArtifactDeleter).GetMethod(\"VerifyAndDelete\");"));
     }
 
     /// <summary>

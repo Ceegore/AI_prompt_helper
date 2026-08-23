@@ -296,6 +296,12 @@ public sealed class LibraryRepository
                 "The library was saved, but library.backup.json was changed by something else " +
                 $"while it was being synchronized. The existing backup was preserved and was not overwritten. {ex.Message}");
         }
+        catch (CommittedAtomicReplacementRequiresRestartException)
+        {
+            // The backup pathname already contains the new object. Do not downgrade an
+            // incomplete post-commit ledger transition to a warning and keep mutating.
+            throw;
+        }
         catch (Exception ex)
         {
             return new CommitResult(

@@ -92,11 +92,16 @@ public sealed class DataFolderMigrationService
 
         public MigrationOwnedFileState State { get; private set; } = MigrationOwnedFileState.TempPlanned;
 
-        public void MarkTempOwned()
+        /// <summary>The exact stage identity captured while its creation handle is retained.</summary>
+        public string? TempIdentityToken { get; private set; }
+
+        public void MarkTempOwned(string identityToken)
         {
             if (State != MigrationOwnedFileState.TempPlanned)
                 throw new InvalidOperationException($"Cannot transition to TempOwned from {State}.");
 
+            ArgumentException.ThrowIfNullOrWhiteSpace(identityToken);
+            TempIdentityToken = identityToken;
             State = MigrationOwnedFileState.TempOwned;
         }
 
@@ -117,6 +122,8 @@ public sealed class DataFolderMigrationService
 
     internal sealed class MigrationTargetTransaction : IDisposable, ICreatedPathJournal
     {
+        internal static Action? RollbackEnteredForTests;
+
         private readonly List<MigrationOwnedFile> _ownedFiles = [];
         private readonly List<string> _createdDirectories = [];
         private readonly IVerifiedArtifactDeleter _verifiedDeleter;
@@ -158,17 +165,18 @@ public sealed class DataFolderMigrationService
         /// matches what is there. An object with the right bytes but a different identity is
         /// somebody else's file that happens to look like ours (CRUU16-005).
         /// </summary>
-        private void RemoveOwnedFinal(
+        private void RemoveOwnedFile(
             MigrationOwnedFile file,
             string path,
+            string? identityToken,
             string operation,
             List<MigrationRollbackFailure> failures)
         {
             try
             {
-                if (file.FinalIdentityToken is null)
+                if (identityToken is null)
                 {
-                    // Nothing was promoted under this claim, so there is nothing of ours here.
+                    // No exact-object authority exists for this location.
                     return;
                 }
 
@@ -185,7 +193,7 @@ public sealed class DataFolderMigrationService
                     path,
                     file.ExpectedLength,
                     file.ExpectedSha256Hex,
-                    file.FinalIdentityToken);
+                    identityToken);
 
                 if (!deleted)
                 {
@@ -203,6 +211,8 @@ public sealed class DataFolderMigrationService
 
         public MigrationRollbackResult Rollback()
         {
+            RollbackEnteredForTests?.Invoke();
+
             if (_committed || _rolledBack)
             {
                 return new MigrationRollbackResult([]);
@@ -210,7 +220,6 @@ public sealed class DataFolderMigrationService
 
             _rolledBack = true;
             var failures = new List<MigrationRollbackFailure>();
-            var authority = new StrictPathAuthority();
 
             // CRUU16-005: a promoted final is removed only when the recorded creation identity
             // still matches the object at that pathname. Expected length and hash prove content
@@ -219,27 +228,29 @@ public sealed class DataFolderMigrationService
             {
                 if (file.State == MigrationOwnedFileState.FinalOwned)
                 {
-                    RemoveOwnedFinal(file, file.FinalPath, "DeleteFinal", failures);
+                    RemoveOwnedFile(
+                        file,
+                        file.FinalPath,
+                        file.FinalIdentityToken,
+                        "DeleteFinal",
+                        failures);
                 }
                 else if (file.State == MigrationOwnedFileState.TempOwned)
                 {
-                    try
-                    {
-                        if (authority.Probe(file.TempPath).Kind == StrictPathKind.File)
-                        {
-                            _verifiedDeleter.VerifyAndDelete(
-                                _targetPhysicalRoot,
-                                file.TempPath,
-                                file.ExpectedLength,
-                                file.ExpectedSha256Hex);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        failures.Add(new MigrationRollbackFailure(file.TempPath, "DeleteTemp", ex.Message));
-                    }
-
-                    RemoveOwnedFinal(file, file.FinalPath, "DeleteUnexpectedFinal", failures);
+                    RemoveOwnedFile(
+                        file,
+                        file.TempPath,
+                        file.TempIdentityToken,
+                        "DeleteTemp",
+                        failures);
+                    // A promotion that reached the filesystem but threw before the in-memory
+                    // phase advanced is still authorized by the same exact stage identity.
+                    RemoveOwnedFile(
+                        file,
+                        file.FinalPath,
+                        file.TempIdentityToken,
+                        "DeleteUnexpectedFinal",
+                        failures);
                 }
             }
 
@@ -249,7 +260,26 @@ public sealed class DataFolderMigrationService
             // directory it created.
             try
             {
-                OwnedArtifactReconciler.Reconcile(_targetPhysicalRoot, new WindowsOwnedArtifactJournal());
+                OwnedArtifactReconciler.Result reconciliation =
+                    OwnedArtifactReconciler.Reconcile(
+                        _targetPhysicalRoot,
+                        new WindowsOwnedArtifactJournal());
+
+                foreach (ReconciliationOutcome outcome in reconciliation.Outcomes.Where(
+                             o => o.Severity is ReconciliationSeverity.Warning or ReconciliationSeverity.Fatal))
+                {
+                    failures.Add(new MigrationRollbackFailure(
+                        outcome.Path,
+                        $"Ownership:{outcome.Code}",
+                        outcome.Message));
+                }
+
+                if (reconciliation.HasFatal)
+                {
+                    // The ledger is the authority for every remaining destructive action. A
+                    // fatal semantic state means the manifest and directories must be kept.
+                    return new MigrationRollbackResult(failures);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -960,13 +990,27 @@ public sealed class DataFolderMigrationService
             : ResolvePayloadRoot(directory);
 
         using IOwnedFileStage stage = _fileOps.CreateOwnedStage(targetRoot, tempPath);
-        owned.MarkTempOwned();
+        owned.MarkTempOwned(stage.IdentityToken);
 
         try
         {
             stage.Write(payload);
             stage.FlushDurable();
+
+            MigrationArtifactClaim claim = _fileOps.RecordMigrationArtifactPrepared(
+                targetRoot,
+                tempPath,
+                finalPath,
+                stage.IdentityToken,
+                artifact.Length,
+                artifact.Sha256Hex);
+
             stage.PromoteNoOverwriteExact(finalPath);
+
+            // Publication, not the following journal append, advances in-memory rollback
+            // authority. The retained stage identity is unchanged by rename.
+            owned.MarkFinalOwnedAfterMove(stage.IdentityToken);
+            _fileOps.RecordMigrationArtifactPublished(targetRoot, claim);
         }
         catch
         {
@@ -983,12 +1027,8 @@ public sealed class DataFolderMigrationService
             throw;
         }
 
-        // CRUU16-005: the promotion preserved the object, so the ownership claim has to move
-        // with it. Without this the final loses its provenance the moment it is published, and
-        // rollback falls back to deleting whatever matches the expected bytes - which cannot
-        // distinguish this attempt's file from a foreign replacement carrying the same content.
-        _fileOps.RecordPromotedFinal(targetRoot, finalPath, stage.IdentityToken);
-        owned.MarkFinalOwnedAfterMove(stage.IdentityToken);
+        // The same durable operation describes both paths across the rename cut. There is no
+        // post-publication window in which recovery has only a vanished temp pathname.
     }
 
     private static void ValidateDocumentPromptBodies(

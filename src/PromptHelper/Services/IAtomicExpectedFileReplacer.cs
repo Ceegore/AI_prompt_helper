@@ -18,10 +18,14 @@ public enum ExpectedFileStateKind
 /// </summary>
 public sealed class ExpectedFileState
 {
-    private ExpectedFileState(ExpectedFileStateKind kind, string? expectedSha256Hex)
+    private ExpectedFileState(
+        ExpectedFileStateKind kind,
+        string? expectedSha256Hex,
+        WindowsFileIdentity? expectedIdentity)
     {
         Kind = kind;
         ExpectedSha256Hex = expectedSha256Hex;
+        ExpectedIdentity = expectedIdentity;
     }
 
     public ExpectedFileStateKind Kind { get; }
@@ -29,13 +33,30 @@ public sealed class ExpectedFileState
     /// <summary>Non-null exactly when <see cref="Kind"/> is <see cref="ExpectedFileStateKind.Present"/>.</summary>
     public string? ExpectedSha256Hex { get; }
 
+    /// <summary>
+    /// Optional exact-object authority. When present, byte-equivalent replacement objects are
+    /// stale rather than interchangeable with the object the caller originally read.
+    /// </summary>
+    internal WindowsFileIdentity? ExpectedIdentity { get; }
+
     public static ExpectedFileState Present(string expectedSha256Hex)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
-        return new ExpectedFileState(ExpectedFileStateKind.Present, expectedSha256Hex);
+        return new ExpectedFileState(ExpectedFileStateKind.Present, expectedSha256Hex, null);
     }
 
-    public static ExpectedFileState Missing { get; } = new(ExpectedFileStateKind.Missing, null);
+    internal static ExpectedFileState Present(
+        string expectedSha256Hex,
+        WindowsFileIdentity expectedIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
+        return new ExpectedFileState(
+            ExpectedFileStateKind.Present,
+            expectedSha256Hex,
+            expectedIdentity);
+    }
+
+    public static ExpectedFileState Missing { get; } = new(ExpectedFileStateKind.Missing, null, null);
 }
 
 /// <summary>

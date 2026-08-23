@@ -391,6 +391,12 @@ public sealed class MigrationRecoveryService
                     $"Unrecognized or foreign files in configured target root '{context.TargetPhysicalRoot}': {string.Join(", ", inventory.UnknownEntries)}.");
             }
 
+            // Settings already names this root, so the final payload is committed user data.
+            // Release only its rollback authority before retiring the marker; the files are
+            // preserved, while the append-only journal can be removed once no other claim is
+            // live. A failure keeps the marker for a later fail-closed retry.
+            _fileOps.RetireCommittedMigrationArtifacts(context.TargetPhysicalRoot);
+
             // Retire marker
             _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
             if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)

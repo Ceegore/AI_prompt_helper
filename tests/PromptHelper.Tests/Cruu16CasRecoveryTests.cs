@@ -156,7 +156,9 @@ public sealed class Cruu16CasRecoveryTests
         // distinction decidable at all.
         OwnedArtifactRecord record = new WindowsOwnedArtifactJournal()
             .Read(temp.Root).Records
-            .Single(r => r.Kind == OwnedArtifactKind.CasPreimage);
+            .Where(r => r.Kind == OwnedArtifactKind.CasPreimage)
+            .OrderByDescending(r => r.Phase)
+            .First();
 
         Assert.IsNotNull(record.CandidateSha256Hex);
         Assert.AreEqual(Hash(Encoding.UTF8.GetBytes("our candidate")), record.CandidateSha256Hex);
@@ -207,6 +209,33 @@ public sealed class Cruu16CasRecoveryTests
                 Assert.IsFalse(claimed.HasFatal);
                 Assert.IsFalse(File.Exists(stage));
                 return "STAGE_RETIRED";
+            }
+
+            case OwnedArtifactPhase.Prepared:
+            {
+                File.WriteAllBytes(target, committed);
+                WindowsAtomicExpectedFileReplacer.AfterPreparedRecordForTests =
+                    _ => throw new SimulatedCrash();
+                try
+                {
+                    Assert.ThrowsExactly<SimulatedCrash>(() =>
+                        new WindowsAtomicExpectedFileReplacer().ReplaceIfExpected(
+                            temp.Root,
+                            target,
+                            ExpectedFileState.Present(Hash(committed)),
+                            candidate,
+                            DurableFileClass.LibraryMetadata));
+                }
+                finally
+                {
+                    WindowsAtomicExpectedFileReplacer.AfterPreparedRecordForTests = null;
+                }
+
+                OwnedArtifactReconciler.Result prepared =
+                    OwnedArtifactReconciler.Reconcile(temp.Root, new WindowsOwnedArtifactJournal());
+                Assert.IsFalse(prepared.HasFatal);
+                CollectionAssert.AreEqual(committed, File.ReadAllBytes(target));
+                return "CAS_NOT_STARTED";
             }
 
             case OwnedArtifactPhase.PreimageSidelined:

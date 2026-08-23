@@ -28,7 +28,13 @@ internal enum OwnedArtifactKind
     /// with, so rollback and retry can destroy it only if it is still that exact object
     /// (CRUU16-005).
     /// </summary>
-    MigrationFinal
+    MigrationFinal,
+
+    /// <summary>
+    /// One migration payload object whose exact identity may be found at either its staging
+    /// path or final path. Both locations are recorded before publication.
+    /// </summary>
+    MigrationArtifact
 }
 
 /// <summary>How far a durable operation had got when the record was appended.</summary>
@@ -36,6 +42,13 @@ internal enum OwnedArtifactPhase
 {
     /// <summary>The artifact has been created and claimed; nothing has been published yet.</summary>
     Claimed,
+
+    /// <summary>
+    /// All authority needed for a compare-and-swap is durable, but the old target has not yet
+    /// been moved. Recovery must inspect the recorded old identity to determine whether the
+    /// rename happened before the next phase record landed.
+    /// </summary>
+    Prepared,
 
     /// <summary>A compare-and-swap has moved the previous committed object aside.</summary>
     PreimageSidelined,
@@ -361,23 +374,24 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             return;
         }
 
-        var builder = new StringBuilder();
-        foreach (OwnedArtifactRecord record in surviving)
+        // A provenance authority cannot safely use its own two-rename protocol to compact
+        // itself: a crash after sidelining the old ledger would leave no discoverable ledger
+        // capable of explaining that sideline. Keep the journal append-only while live claims
+        // remain. Dead history is harmless (CAS phases are grouped by operation ID and missing
+        // artifacts are ignored), and the exact ledger is retired once no live claim survives.
+        //
+        // Still bind this decision to both the identity and bytes that were read. A same-byte
+        // replacement is a foreign object and must not be treated as the snapshot's ledger.
+        using WindowsExpectedTargetAuthority? retained =
+            WindowsExpectedTargetAuthority.Open(journalPath, fullRoot);
+
+        if (retained is null || retained.Identity != expected.Identity)
         {
-            builder.Append(Serialize(record)).Append('\n');
+            throw new StaleExpectedFileException(
+                $"The ownership journal '{journalPath}' was replaced after it was read. The replacement was preserved.");
         }
 
-        // Replaced through the same audited compare-and-swap every other managed file uses,
-        // bound to the exact ledger that was read. Ownership of the swap's own artifacts is
-        // deliberately not recorded: the ledger cannot appear in itself, so a crash mid-rewrite
-        // leaves an unproven orphan, which is preserved rather than destroyed.
-        new WindowsAtomicExpectedFileReplacer().ReplaceIfExpected(
-            fullRoot,
-            journalPath,
-            ExpectedFileState.Present(expected.Sha256Hex!),
-            Encoding.UTF8.GetBytes(builder.ToString()),
-            DurableFileClass.MutationControl,
-            recordOwnership: false);
+        retained.AssertContentMatches(expected.Sha256Hex!);
     }
 
     private static void AssertNonReparseUnderRoot(SafeFileHandle handle, string journalPath, string root)
@@ -420,11 +434,13 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactKind.Stage => "stage",
                 OwnedArtifactKind.CasPreimage => "preimage",
                 OwnedArtifactKind.MigrationFinal => "final",
+                OwnedArtifactKind.MigrationArtifact => "migration",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
             record.Phase switch
             {
                 OwnedArtifactPhase.Claimed => "claimed",
+                OwnedArtifactPhase.Prepared => "prepared",
                 OwnedArtifactPhase.PreimageSidelined => "sidelined",
                 OwnedArtifactPhase.CandidatePublished => "published",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
@@ -475,12 +491,14 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             "stage" => OwnedArtifactKind.Stage,
             "preimage" => OwnedArtifactKind.CasPreimage,
             "final" => OwnedArtifactKind.MigrationFinal,
+            "migration" => OwnedArtifactKind.MigrationArtifact,
             _ => (OwnedArtifactKind)(-1)
         };
 
         OwnedArtifactPhase phase = parts[3] switch
         {
             "claimed" => OwnedArtifactPhase.Claimed,
+            "prepared" => OwnedArtifactPhase.Prepared,
             "sidelined" => OwnedArtifactPhase.PreimageSidelined,
             "published" => OwnedArtifactPhase.CandidatePublished,
             _ => (OwnedArtifactPhase)(-1)

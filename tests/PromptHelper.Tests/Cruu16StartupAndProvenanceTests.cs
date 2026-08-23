@@ -186,16 +186,24 @@ public sealed class Cruu16StartupAndProvenanceTests
             identity = stage.IdentityToken;
             stage.Write(Encoding.UTF8.GetBytes("payload"));
             stage.FlushDurable();
+            MigrationArtifactClaim claim = ops.RecordMigrationArtifactPrepared(
+                temp.Root,
+                stagePath,
+                finalPath,
+                stage.IdentityToken,
+                Encoding.UTF8.GetByteCount("payload"),
+                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("payload"))));
             stage.PromoteNoOverwriteExact(finalPath);
+            ops.RecordMigrationArtifactPublished(temp.Root, claim);
         }
-
-        ops.RecordPromotedFinal(temp.Root, finalPath, identity);
 
         OwnedArtifactRecord record = new WindowsOwnedArtifactJournal()
             .Read(temp.Root).Records
-            .Single(r => r.Kind == OwnedArtifactKind.MigrationFinal);
+            .Where(r => r.Kind == OwnedArtifactKind.MigrationArtifact)
+            .OrderByDescending(r => r.Phase)
+            .First();
 
-        Assert.AreEqual("payload.md", record.RelativePath);
+        Assert.AreEqual("payload.md", record.RestoreRelativePath);
         Assert.AreEqual(identity, record.Identity.ToToken(),
             "The promoted object keeps the identity it was created with, so provenance survives the rename.");
     }
@@ -213,8 +221,15 @@ public sealed class Cruu16StartupAndProvenanceTests
         {
             stage.Write(payload);
             stage.FlushDurable();
+            MigrationArtifactClaim claim = ops.RecordMigrationArtifactPrepared(
+                temp.Root,
+                stagePath,
+                finalPath,
+                stage.IdentityToken,
+                payload.Length,
+                Convert.ToHexStringLower(SHA256.HashData(payload)));
             stage.PromoteNoOverwriteExact(finalPath);
-            ops.RecordPromotedFinal(temp.Root, finalPath, stage.IdentityToken);
+            ops.RecordMigrationArtifactPublished(temp.Root, claim);
         }
 
         // Someone replaces the final with a different object holding identical bytes.
@@ -436,14 +451,15 @@ public sealed class Cruu16StartupAndProvenanceTests
     [TestMethod]
     public void CRUU16_007_Ownership_journal_rewrite_stage_is_root_bound()
     {
-        // The rewrite delegates to the audited compare-and-swap, which creates its stage with
-        // CreateNewUnderRoot; nothing in the journal reaches for a bare, unbound stage.
+        // Live-ledger rewrite is now append-only, so it creates no stage at all and cannot
+        // enter the ledger's former unjournaled two-rename crash window.
         string source = File.ReadAllText(
             RepositoryTestPaths.RequireFile("src", "PromptHelper", "Services", "IOwnedArtifactJournal.cs"));
 
         Assert.IsFalse(source.Contains("WindowsOwnedDurableStage.CreateNew(", StringComparison.Ordinal),
             "The ledger rewrite must not create an unbound stage.");
-        StringAssert.Contains(source, "WindowsAtomicExpectedFileReplacer");
+        StringAssert.Contains(source, "Keep the journal append-only");
+        Assert.IsFalse(source.Contains("recordOwnership: false", StringComparison.Ordinal));
     }
 
     [TestMethod]

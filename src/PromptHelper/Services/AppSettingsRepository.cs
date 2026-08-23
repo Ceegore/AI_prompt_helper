@@ -470,6 +470,12 @@ public sealed class AppSettingsRepository
             return "The settings backup was changed by something else while it was being " +
                    $"synchronized. The existing backup was preserved and was not overwritten. {ex.Message}";
         }
+        catch (CommittedAtomicReplacementRequiresRestartException)
+        {
+            // A published backup with incomplete recovery bookkeeping is not an ordinary
+            // best-effort backup warning: another mutation must not start before reconciliation.
+            throw;
+        }
         catch (Exception ex)
         {
             return $"The settings backup could not be synchronized (settings.backup.json could not be synchronized, could not be inspected or synchronized): {ex.Message}";

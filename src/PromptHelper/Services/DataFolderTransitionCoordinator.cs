@@ -362,6 +362,12 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         {
             saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
         }
+        catch (CommittedAtomicReplacementRequiresRestartException ex)
+        {
+            // settings.json is already live. This is a committed transition with a mandatory
+            // restart, not a failed selection; reservation cleanup may continue post-commit.
+            saveResult = new SettingsSaveResult(ex.Message);
+        }
         catch (Exception ex)
         {
             TargetReservationCleanupResult cleanup = reservation.Release();
@@ -618,9 +624,21 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                     DataRootPath = bound.LexicalRoot
                 };
 
-                saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
-                settingsCommitted = true;
-                tx.Commit();
+                try
+                {
+                    saveResult = _settingsRepo.SaveIfUnchanged(newSettings, settingsSnapshot.Precondition);
+                    settingsCommitted = true;
+                    tx.Commit();
+                }
+                catch (CommittedAtomicReplacementRequiresRestartException ex)
+                {
+                    // Candidate publication is the settings point of no return. The journal
+                    // append is post-commit bookkeeping, so target payload must never roll back
+                    // merely because that append failed.
+                    settingsCommitted = true;
+                    tx.Commit();
+                    saveResult = new SettingsSaveResult(ex.Message);
+                }
             }
             catch (Exception original)
             {
@@ -689,6 +707,21 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             // POINT OF NO RETURN
             reservation.CommitRootOwnership();
 
+            string? ownershipCleanupWarning = null;
+            try
+            {
+                // The settings commit made the migrated payload ordinary live data. Its
+                // pre-commit deletion authority must not pin the append-only ownership
+                // ledger forever; retiring the claims never deletes the payload itself.
+                _fileOps.RetireCommittedMigrationArtifacts(bound.PhysicalRoot);
+            }
+            catch (Exception ex)
+            {
+                // This is post-commit cleanup. Startup can retry it from the Ready marker,
+                // but the transition must never be reported as uncommitted or rolled back.
+                ownershipCleanupWarning = $"Could not retire committed migration ownership records: {ex.Message}";
+            }
+
             string? manifestCleanupWarning = null;
             try
             {
@@ -705,6 +738,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                 settingsSnapshot.Warning,
                 capResult?.Warning,
                 saveResult?.Warning,
+                ownershipCleanupWarning,
                 manifestCleanupWarning,
                 postcommitCleanup.ToWarning());
 

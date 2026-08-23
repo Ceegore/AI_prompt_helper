@@ -1,4 +1,4 @@
-﻿<#
+<#
     GENERATED FILE - do not edit by hand.
 
     The exact-name sentinel list CI feeds to VerifyTestEvidence.ps1. It is derived
@@ -349,6 +349,8 @@
         'CRUU16_005_Migration_final_replaced_by_foreign_same_bytes_is_preserved',
         'CRUU16_005_Migration_promotion_transfers_identity_from_temp_to_final',
         'CRUU16_005_Retry_final_delete_requires_recorded_file_identity',
+        'CRUU17_006_TempOwned_rollback_same_bytes_different_identity_is_preserved',
+        'CRUU17_008_CRUU16_005_mapped_test_executes_MigrationTargetTransaction_Rollback',
         # CRUU16-006
         'CRUU16_006_IMigrationFileOps_exposes_no_raw_DeleteDirectory',
         'CRUU16_006_IMigrationFileOps_exposes_no_raw_DeleteFile',
@@ -368,6 +370,54 @@
         'CRUU16_008_Helper_only_test_cannot_be_sole_evidence_for_production_wiring_finding',
         'CRUU16_008_High_risk_finding_requires_at_least_one_production_behavior_test',
         'CRUU16_008_Source_text_only_test_cannot_be_sole_evidence_for_high_risk_finding',
+        # CRUU17-001
+        'CRUU17_001_CandidatePublished_record_failure_is_never_reported_as_not_committed',
+        'CRUU17_001_Settings_primary_published_then_ledger_append_failure_does_not_rollback_target',
+        'CRUU17_001_Settings_transition_marks_point_of_no_return_from_actual_publish_not_method_return',
+        'CRUU17_001_Postpublish_ledger_failure_forces_restart_before_further_mutation',
+        'CRUU17_001_Library_primary_published_then_ledger_failure_is_classified_committed',
+        'CRUU17_001_Backup_published_then_ledger_failure_cannot_leave_a_stale_inflight_CAS_silently',
+        # CRUU17-002
+        'CRUU17_002_Sideline_rename_failure_does_not_poison_next_startup',
+        'CRUU17_002_Crash_after_Prepared_record_before_sideline_rename_keeps_old_target_healthy',
+        'CRUU17_002_Prepared_phase_recognizes_old_target_identity_as_not_started',
+        'CRUU17_002_Crash_after_sideline_before_phase_advance_restores_preimage',
+        'CRUU17_002_Durable_phase_matrix_tests_every_filesystem_state_each_phase_can_represent',
+        # CRUU17-003
+        'CRUU17_003_Nonempty_journal_rewrite_rejects_same_bytes_different_file_identity',
+        'CRUU17_003_Nonempty_journal_rewrite_never_deletes_same_content_foreign_replacement',
+        'CRUU17_003_Journal_rewrite_requires_snapshot_identity_and_hash',
+        'CRUU17_003_ExpectedFileState_can_bind_exact_file_identity_when_required',
+        # CRUU17-004
+        'CRUU17_004_Crash_during_ledger_compaction_never_leaves_zero_discoverable_valid_ledgers',
+        'CRUU17_004_Crash_after_old_ledger_sideline_before_new_publish_recovers_old_generation',
+        'CRUU17_004_MigrationFinal_authority_survives_ledger_compaction_crash',
+        'CRUU17_004_Ledger_compaction_requires_no_recursive_self_journaling',
+        'CRUU17_004_Reader_selects_highest_complete_valid_generation_after_interrupted_compaction',
+        'CRUU17_004_Committed_migration_retires_append_only_authority_without_deleting_payload',
+        # CRUU17-005
+        'CRUU17_005_Crash_after_migration_final_publish_before_final_record_is_recoverable',
+        'CRUU17_005_RecordPromotedFinal_failure_after_publish_preserves_automatic_retry_authority',
+        'CRUU17_005_Migration_artifact_record_knows_temp_and_final_path_before_promotion',
+        'CRUU17_005_Migration_retry_can_prove_final_from_prepublication_identity_record',
+        'CRUU17_005_Manifest_or_ownership_state_carries_final_identity_across_the_publish_cut',
+        'CRUU17_005_Tampered_same_identity_final_is_preserved_and_fails_closed',
+        # CRUU17-006
+        'CRUU17_006_TempOwned_rollback_same_bytes_different_identity_is_preserved',
+        'CRUU17_006_TempOwned_rollback_requires_stage_identity',
+        'CRUU17_006_Stage_cleanup_failure_then_foreign_same_byte_replacement_is_never_deleted',
+        'CRUU17_006_All_MigrationOwnedFile_states_have_identity_bound_destructive_authority',
+        # CRUU17-007
+        'CRUU17_007_Rollback_converts_fatal_ownership_reconciliation_to_MigrationRollbackFailure',
+        'CRUU17_007_Corrupt_ownership_ledger_prevents_cleanRollback',
+        'CRUU17_007_CAS_AMBIGUOUS_during_rollback_preserves_manifest_and_reports_failure',
+        'CRUU17_007_PersistentManagedControl_classification_cannot_hide_fatal_ledger_state',
+        # CRUU17-008
+        'CRUU17_008_Reflection_only_test_is_not_classified_ProductionBehavior',
+        'CRUU17_008_Type_name_mention_alone_is_not_production_execution',
+        'CRUU17_008_CRUU16_005_mapped_test_executes_MigrationTargetTransaction_Rollback',
+        'CRUU17_008_High_risk_evidence_gate_requires_runtime_hit_on_mapped_production_path',
+        'CRUU17_008_Source_or_reflection_only_sentinel_cannot_satisfy_high_risk_acceptance',
         # CRUU2-003
         'CRUU2_003_Configured_custom_root_missing_does_not_create_directory_or_defaults',
         'CRUU2_003_Configured_existing_empty_root_is_not_treated_as_first_run',

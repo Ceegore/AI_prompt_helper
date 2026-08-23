@@ -113,7 +113,10 @@ internal static class OwnedArtifactReconciler
         public bool HasFatal => Outcomes.Any(o => o.Severity == ReconciliationSeverity.Fatal);
     }
 
-    public static Result Reconcile(string physicalRoot, IOwnedArtifactJournal journal)
+    public static Result Reconcile(
+        string physicalRoot,
+        IOwnedArtifactJournal journal,
+        bool retireCommittedMigrationArtifacts = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
         ArgumentNullException.ThrowIfNull(journal);
@@ -165,10 +168,35 @@ internal static class OwnedArtifactReconciler
             ResolveCasTransaction(root, record, outcomes, surviving, proven);
         }
 
-        foreach (OwnedArtifactRecord record in
-                 snapshot.Records.Where(r => r.Kind != OwnedArtifactKind.CasPreimage))
+        // A migration artifact also advances through multiple records. Physical identity at
+        // either recorded path is authoritative even when the post-publication phase append
+        // did not land.
+        foreach (IGrouping<Guid, OwnedArtifactRecord> transaction in
+                 snapshot.Records.Where(r => r.Kind == OwnedArtifactKind.MigrationArtifact)
+                                 .GroupBy(r => r.OperationId))
         {
-            ResolveOwnedArtifact(root, record, outcomes, surviving, proven);
+            OwnedArtifactRecord record = transaction.OrderByDescending(r => r.Phase).First();
+            ResolveMigrationArtifact(
+                root,
+                record,
+                outcomes,
+                surviving,
+                proven,
+                retireCommittedMigrationArtifacts);
+        }
+
+        foreach (OwnedArtifactRecord record in
+                 snapshot.Records.Where(r =>
+                     r.Kind != OwnedArtifactKind.CasPreimage &&
+                     r.Kind != OwnedArtifactKind.MigrationArtifact))
+        {
+            ResolveOwnedArtifact(
+                root,
+                record,
+                outcomes,
+                surviving,
+                proven,
+                retireCommittedMigrationArtifacts);
         }
 
         // Never compact the ledger when any authority question is unresolved: it is the
@@ -179,7 +207,7 @@ internal static class OwnedArtifactReconciler
             {
                 journal.Rewrite(root, snapshot, surviving);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or StaleExpectedFileException)
             {
                 outcomes.Add(new ReconciliationOutcome(
                     ReconciliationSeverity.Warning,
@@ -263,6 +291,17 @@ internal static class OwnedArtifactReconciler
             {
                 outcomes.Add(Fatal("CAS_TARGET_UNREADABLE", targetPath, target.Error!));
                 surviving.Add(record);
+                return;
+            }
+
+            // Prepared is deliberately durable before the sideline rename. If the exact old
+            // object is still at the target, the swap never started (or was restored after a
+            // failed phase advance). A missing/foreign pre-image pathname is irrelevant in
+            // that state and is preserved.
+            if (record.Phase == OwnedArtifactPhase.Prepared &&
+                target.MatchesRecordedOldIdentity &&
+                !preimageIsOurs)
+            {
                 return;
             }
 
@@ -354,7 +393,12 @@ internal static class OwnedArtifactReconciler
         }
     }
 
-    private readonly record struct TargetState(bool Exists, bool MatchesCandidate, bool Unreadable, string? Error);
+    private readonly record struct TargetState(
+        bool Exists,
+        bool MatchesCandidate,
+        bool MatchesRecordedOldIdentity,
+        bool Unreadable,
+        string? Error);
 
     private static TargetState InspectTarget(string targetPath, string root, OwnedArtifactRecord record)
     {
@@ -365,12 +409,12 @@ internal static class OwnedArtifactReconciler
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            return new TargetState(true, false, true, ex.Message);
+            return new TargetState(true, false, false, true, ex.Message);
         }
 
         if (handle is null)
         {
-            return new TargetState(false, false, false, null);
+            return new TargetState(false, false, false, false, null);
         }
 
         using (handle)
@@ -380,7 +424,12 @@ internal static class OwnedArtifactReconciler
                 long length = RandomAccess.GetLength(handle);
                 if (record.CandidateLength >= 0 && length != record.CandidateLength)
                 {
-                    return new TargetState(true, false, false, null);
+                    return new TargetState(
+                        true,
+                        false,
+                        WindowsFileIdentity.FromHandle(handle) == record.Identity,
+                        false,
+                        null);
                 }
 
                 byte[] bytes = new byte[length];
@@ -390,7 +439,7 @@ internal static class OwnedArtifactReconciler
                     int n = RandomAccess.Read(handle, bytes.AsSpan(read), read);
                     if (n <= 0)
                     {
-                        return new TargetState(true, false, true, "Unexpected end of data.");
+                        return new TargetState(true, false, false, true, "Unexpected end of data.");
                     }
 
                     read += n;
@@ -400,11 +449,16 @@ internal static class OwnedArtifactReconciler
                 bool matches = record.CandidateSha256Hex is not null &&
                                string.Equals(actual, record.CandidateSha256Hex, StringComparison.OrdinalIgnoreCase);
 
-                return new TargetState(true, matches, false, null);
+                return new TargetState(
+                    true,
+                    matches,
+                    WindowsFileIdentity.FromHandle(handle) == record.Identity,
+                    false,
+                    null);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return new TargetState(true, false, true, ex.Message);
+                return new TargetState(true, false, false, true, ex.Message);
             }
         }
     }
@@ -414,7 +468,8 @@ internal static class OwnedArtifactReconciler
         OwnedArtifactRecord record,
         List<ReconciliationOutcome> outcomes,
         List<OwnedArtifactRecord> surviving,
-        HashSet<string> proven)
+        HashSet<string> proven,
+        bool retireCommittedMigrationArtifacts)
     {
         string artifactPath = Path.GetFullPath(Path.Combine(root, record.RelativePath));
 
@@ -454,7 +509,13 @@ internal static class OwnedArtifactReconciler
             {
                 // A migrated final is live data, not a leftover: the record exists so that
                 // rollback and retry can prove identity before deleting it (CRUU16-005).
-                surviving.Add(record);
+                // Once the settings commit is irrevocable it is ordinary user data and must
+                // no longer remain deletion-authorized forever merely to pin an append-only
+                // ledger. The file itself is never deleted here.
+                if (!retireCommittedMigrationArtifacts)
+                {
+                    surviving.Add(record);
+                }
                 return;
             }
 
@@ -472,6 +533,135 @@ internal static class OwnedArtifactReconciler
                 surviving.Add(record);
             }
         }
+    }
+
+    private static void ResolveMigrationArtifact(
+        string root,
+        OwnedArtifactRecord record,
+        List<ReconciliationOutcome> outcomes,
+        List<OwnedArtifactRecord> surviving,
+        HashSet<string> proven,
+        bool retireCommittedMigrationArtifacts)
+    {
+        string tempPath = Path.GetFullPath(Path.Combine(root, record.RelativePath));
+        string finalPath = Path.GetFullPath(Path.Combine(root, record.RestoreRelativePath!));
+        bool keepClaim = false;
+
+        // First settle an exact stage if the rename never happened. The handle both proves and
+        // deletes the same object; a byte-equivalent substitution is preserved.
+        SafeFileHandle? temp = null;
+        try
+        {
+            temp = OpenExactNonReparse(tempPath, root);
+            if (temp is not null && WindowsFileIdentity.FromHandle(temp) == record.Identity)
+            {
+                proven.Add(tempPath);
+                try
+                {
+                    WindowsHandleDeletion.MarkForDeletion(temp, tempPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    outcomes.Add(new ReconciliationOutcome(
+                        ReconciliationSeverity.Warning,
+                        "MIGRATION_STAGE_CLEANUP_FAILED",
+                        tempPath,
+                        ex.Message));
+                    keepClaim = true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            outcomes.Add(Fatal("MIGRATION_STAGE_UNREADABLE", tempPath, ex.Message));
+            keepClaim = true;
+        }
+        finally
+        {
+            temp?.Dispose();
+        }
+
+        // Publication preserves file identity. This check therefore recovers the exact final
+        // even when the FinalPublished append failed or the process died immediately after the
+        // rename. The final is live migration data and remains claimed for retry/rollback.
+        SafeFileHandle? final = null;
+        try
+        {
+            final = OpenExactNonReparse(finalPath, root);
+            if (final is not null && WindowsFileIdentity.FromHandle(final) == record.Identity)
+            {
+                if (MatchesRecordedContent(final, record, out string? mismatch))
+                {
+                    proven.Add(finalPath);
+                    keepClaim = !retireCommittedMigrationArtifacts;
+                }
+                else
+                {
+                    keepClaim = true;
+                    outcomes.Add(Fatal(
+                        "MIGRATION_FINAL_CONTENT_MISMATCH",
+                        finalPath,
+                        mismatch!));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            outcomes.Add(Fatal("MIGRATION_FINAL_UNREADABLE", finalPath, ex.Message));
+            keepClaim = true;
+        }
+        finally
+        {
+            final?.Dispose();
+        }
+
+        if (keepClaim)
+        {
+            surviving.Add(record);
+        }
+    }
+
+    private static bool MatchesRecordedContent(
+        SafeFileHandle handle,
+        OwnedArtifactRecord record,
+        out string? mismatch)
+    {
+        mismatch = null;
+        if (record.CandidateLength < 0 || record.CandidateSha256Hex is null)
+        {
+            mismatch = "The migration ownership record lacks the expected content authority.";
+            return false;
+        }
+
+        long length = RandomAccess.GetLength(handle);
+        if (length != record.CandidateLength)
+        {
+            mismatch = $"Expected {record.CandidateLength} bytes, found {length}. The object was preserved.";
+            return false;
+        }
+
+        byte[] bytes = new byte[length];
+        int read = 0;
+        while (read < bytes.Length)
+        {
+            int count = RandomAccess.Read(handle, bytes.AsSpan(read), read);
+            if (count <= 0)
+            {
+                mismatch = "Unexpected end of data while verifying the migration final. The object was preserved.";
+                return false;
+            }
+
+            read += count;
+        }
+
+        string actual = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        if (!string.Equals(actual, record.CandidateSha256Hex, StringComparison.OrdinalIgnoreCase))
+        {
+            mismatch = $"Expected SHA-256 {record.CandidateSha256Hex}, found {actual}. The object was preserved.";
+            return false;
+        }
+
+        return true;
     }
 
     private static ReconciliationOutcome Fatal(string code, string path, string message) =>

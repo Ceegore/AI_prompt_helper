@@ -23,6 +23,18 @@ internal enum ArtifactCleanupOutcome
     PreservedUnproven
 }
 
+/// <summary>
+/// Durable authority for one migration payload rename. The claim is self-contained so both
+/// pre- and post-publication journal records describe the same operation and exact object.
+/// </summary>
+internal sealed record MigrationArtifactClaim(
+    Guid OperationId,
+    string TempPath,
+    string FinalPath,
+    WindowsFileIdentity Identity,
+    long ExpectedLength,
+    string ExpectedSha256Hex);
+
 internal interface IMigrationFileOps
 {
     byte[] ReadAllBytes(string path);
@@ -39,12 +51,18 @@ internal interface IMigrationFileOps
     IOwnedFileStage CreateOwnedStage(string physicalRoot, string path);
 
     /// <summary>
-    /// Records that a promoted payload object is this attempt's, under its final name and with
-    /// the identity it was created with. Without this the object loses its provenance at
-    /// promotion and later deletion falls back to content matching, which cannot tell our file
-    /// from a foreign replacement carrying identical bytes (CRUU16-005).
+    /// Durably records both possible locations and exact identity before final publication.
     /// </summary>
-    void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken);
+    MigrationArtifactClaim RecordMigrationArtifactPrepared(
+        string physicalRoot,
+        string tempPath,
+        string finalPath,
+        string identityToken,
+        long expectedLength,
+        string expectedSha256Hex);
+
+    /// <summary>Advances a pre-publication claim after the exact object reaches its final name.</summary>
+    void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim);
 
     /// <summary>
     /// Deletes a promoted payload object only if a durable record proves this attempt created
@@ -74,6 +92,13 @@ internal interface IMigrationFileOps
     /// </summary>
     void RetireOwnedArtifacts(string physicalRoot);
 
+    /// <summary>
+    /// Retires only the deletion authority for migration finals after the settings point of
+    /// no return. The published files remain untouched; releasing their claims allows the
+    /// append-only ledger to disappear instead of accumulating dead history indefinitely.
+    /// </summary>
+    void RetireCommittedMigrationArtifacts(string physicalRoot);
+
     IEnumerable<string> EnumeratePromptFiles(string directory);
     bool FileExists(string path);
     bool DirectoryExists(string path);
@@ -85,6 +110,17 @@ internal interface IMigrationFileOps
 internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 {
     private readonly StrictPathAuthority _strictPathAuthority = new();
+    private readonly IOwnedArtifactJournal _ownedArtifacts;
+
+    public DefaultMigrationFileOps()
+        : this(null)
+    {
+    }
+
+    internal DefaultMigrationFileOps(IOwnedArtifactJournal? ownedArtifacts)
+    {
+        _ownedArtifacts = ownedArtifacts ?? new WindowsOwnedArtifactJournal();
+    }
 
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
 
@@ -116,8 +152,6 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
         fs.Flush(flushToDisk: true);
     }
 
-    private readonly IOwnedArtifactJournal _ownedArtifacts = new WindowsOwnedArtifactJournal();
-
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
         var stage = new OwnedMigrationStage(
@@ -136,24 +170,56 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
         }
     }
 
-    public void RecordPromotedFinal(string physicalRoot, string finalPath, string identityToken)
+    public MigrationArtifactClaim RecordMigrationArtifactPrepared(
+        string physicalRoot,
+        string tempPath,
+        string finalPath,
+        string identityToken,
+        long expectedLength,
+        string expectedSha256Hex)
     {
         string root = Path.GetFullPath(physicalRoot);
-        string full = Path.GetFullPath(finalPath);
+        string fullTemp = Path.GetFullPath(tempPath);
+        string fullFinal = Path.GetFullPath(finalPath);
 
         if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
         {
             throw new InvalidOperationException(
-                $"Promoted payload produced an unparsable identity token for '{finalPath}'.");
+                $"Migration stage produced an unparsable identity token for '{tempPath}'.");
         }
 
-        _ownedArtifacts.Record(root, new OwnedArtifactRecord(
+        var claim = new MigrationArtifactClaim(
             Guid.NewGuid(),
-            OwnedArtifactKind.MigrationFinal,
-            OwnedArtifactPhase.CandidatePublished,
-            Path.GetRelativePath(root, full),
-            identity));
+            fullTemp,
+            fullFinal,
+            identity,
+            expectedLength,
+            expectedSha256Hex);
+
+        _ownedArtifacts.Record(root, ToRecord(root, claim, OwnedArtifactPhase.Claimed));
+        return claim;
     }
+
+    public void RecordMigrationArtifactPublished(string physicalRoot, MigrationArtifactClaim claim)
+    {
+        ArgumentNullException.ThrowIfNull(claim);
+        string root = Path.GetFullPath(physicalRoot);
+        _ownedArtifacts.Record(root, ToRecord(root, claim, OwnedArtifactPhase.CandidatePublished));
+    }
+
+    private static OwnedArtifactRecord ToRecord(
+        string root,
+        MigrationArtifactClaim claim,
+        OwnedArtifactPhase phase) =>
+        new(
+            claim.OperationId,
+            OwnedArtifactKind.MigrationArtifact,
+            phase,
+            Path.GetRelativePath(root, claim.TempPath),
+            claim.Identity,
+            Path.GetRelativePath(root, claim.FinalPath),
+            claim.ExpectedSha256Hex,
+            claim.ExpectedLength);
 
     public ArtifactCleanupOutcome DeleteOwnedFinalIfProven(string physicalRoot, string path) =>
         ProvenanceBoundCleanup.DeleteFileIfProven(physicalRoot, path, _ownedArtifacts);
@@ -209,8 +275,21 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     public void RetireOwnedArtifacts(string physicalRoot)
     {
+        ReconcileOwnedArtifacts(physicalRoot, retireCommittedMigrationArtifacts: false);
+    }
+
+    public void RetireCommittedMigrationArtifacts(string physicalRoot)
+    {
+        ReconcileOwnedArtifacts(physicalRoot, retireCommittedMigrationArtifacts: true);
+    }
+
+    private void ReconcileOwnedArtifacts(string physicalRoot, bool retireCommittedMigrationArtifacts)
+    {
         OwnedArtifactReconciler.Result result =
-            OwnedArtifactReconciler.Reconcile(physicalRoot, _ownedArtifacts);
+            OwnedArtifactReconciler.Reconcile(
+                physicalRoot,
+                _ownedArtifacts,
+                retireCommittedMigrationArtifacts);
 
         ReconciliationOutcome[] problems =
             [.. result.Outcomes.Where(o => o.Severity != ReconciliationSeverity.Notice)];
