@@ -170,11 +170,15 @@ public sealed class MigrationManifestRepository
         string json = JsonSerializer.Serialize(manifest, JsonOptions);
         byte[] bytes = Encoding.UTF8.GetBytes(json);
 
-        using (Stream stream = _fileOps.CreateNew(markerPath))
-        {
-            stream.Write(bytes, 0, bytes.Length);
-            _fileOps.FlushToDisk(stream);
-        }
+        string physicalRoot = string.IsNullOrEmpty(dir)
+            ? Directory.GetCurrentDirectory()
+            : dir;
+        _fileOps.CreateInitialMarkerCrashAtomic(
+            physicalRoot,
+            markerPath,
+            manifest.AttemptId,
+            manifest.Phase,
+            bytes);
     }
 
     public void WriteReadyManifestDurable(string markerPath, MigrationAttemptManifest manifest)
@@ -190,42 +194,28 @@ public sealed class MigrationManifestRepository
         ValidateManifestInvariants(manifest, markerPath);
 
         string? dir = Path.GetDirectoryName(markerPath) ?? string.Empty;
-        string stagePath = Path.Combine(dir, $".prompthelper-migration.stage-{manifest.AttemptId:N}.tmp");
-
         string json = JsonSerializer.Serialize(manifest, JsonOptions);
         byte[] bytes = Encoding.UTF8.GetBytes(json);
+        string physicalRoot = string.IsNullOrEmpty(dir) ? Directory.GetCurrentDirectory() : dir;
 
-        // CRUU15-001: create the stage, keep its handle, and promote or delete that exact
-        // object. If something already occupies the stage pathname the creation fails and the
-        // pre-existing object is left untouched — the old implementation would have deleted
-        // it in its cleanup block purely because it sat at the declared stage name.
-        using IOwnedFileStage stage = _fileOps.CreateOwnedStage(
-            string.IsNullOrEmpty(dir) ? Directory.GetCurrentDirectory() : dir,
-            stagePath);
-
-        try
+        if (!_fileOps.FileExists(markerPath))
         {
-            stage.Write(bytes);
-            stage.FlushDurable();
-            stage.PromoteReplaceExact(markerPath);
+            _fileOps.CreateInitialMarkerCrashAtomic(
+                physicalRoot,
+                markerPath,
+                manifest.AttemptId,
+                manifest.Phase,
+                bytes);
+            return;
         }
-        catch (Exception primaryFailure)
-        {
-            try
-            {
-                stage.DeleteExact();
-            }
-            catch (Exception cleanupEx)
-            {
-                throw new ManifestWriteCleanupException(
-                    markerPath,
-                    stagePath,
-                    primaryFailure,
-                    cleanupEx);
-            }
 
-            throw;
-        }
+        byte[] expectedCopyingBytes = SerializeWithPhase(manifest, MigrationManifestPhase.Copying);
+        _fileOps.ReplaceMarkerIfExpected(
+            physicalRoot,
+            markerPath,
+            manifest.AttemptId,
+            expectedCopyingBytes,
+            bytes);
     }
 
     /// <summary>
@@ -258,6 +248,14 @@ public sealed class MigrationManifestRepository
             throw new InvalidDataException(
                 $"The migration marker at '{markerPath}' was replaced after it was written.");
         }
+
+        string physicalRoot = Path.GetDirectoryName(Path.GetFullPath(markerPath))
+            ?? throw new InvalidDataException($"Migration marker has no parent directory: '{markerPath}'.");
+        _fileOps.AssertMarkerAuthority(
+            physicalRoot,
+            markerPath,
+            expected.AttemptId,
+            expectedBytes);
     }
 
     public void WriteDurable(string markerPath, MigrationAttemptManifest manifest)
@@ -319,7 +317,51 @@ public sealed class MigrationManifestRepository
                 $"Migration manifest changed before retire at '{markerPath}'. Expected attempt {expectedAttemptId} phase {expectedPhase}, found attempt {manifest.AttemptId} phase {manifest.Phase}.");
         }
 
-        handle.DeleteExact();
+        byte[] expectedBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifest, JsonOptions));
+        handle.Dispose();
+        try
+        {
+            _fileOps.DeleteMarkerIfAuthorized(
+                root,
+                markerPath,
+                expectedAttemptId,
+                expectedBytes);
+        }
+        catch (StaleExpectedFileException) when (manifest.SchemaVersion < 5)
+        {
+            // Explicit compatibility for a marker genuinely created by a pre-identity
+            // binary. Current code can also write a legacy-schema fixture while still
+            // recording exact authority; the attempt above uses that stronger authority
+            // whenever it exists. Only a legacy marker with no such record reaches here.
+            using WindowsStrictRetirableFile? legacy =
+                WindowsStrictRetirableFile.OpenExistingOrNull(markerPath, root);
+            if (legacy is null)
+            {
+                return;
+            }
+            if (!legacy.ReadAllBytes().AsSpan().SequenceEqual(rawBytes))
+            {
+                throw new InvalidDataException(
+                    $"Legacy migration manifest changed before retire at '{markerPath}'.");
+            }
+            legacy.DeleteExact();
+        }
+    }
+
+    private static byte[] SerializeWithPhase(
+        MigrationAttemptManifest manifest,
+        MigrationManifestPhase phase)
+    {
+        MigrationManifestPhase original = manifest.Phase;
+        try
+        {
+            manifest.Phase = phase;
+            return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifest, JsonOptions));
+        }
+        finally
+        {
+            manifest.Phase = original;
+        }
     }
 
     private static int ValidateJsonStructure(string json, string path)

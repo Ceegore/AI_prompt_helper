@@ -14,6 +14,19 @@ internal sealed class ProductionSymbolEvidenceAttribute(string symbol) : Attribu
 }
 
 /// <summary>
+/// Declares the exact subprocess cut and child-side production symbols a hard-crash sentinel
+/// must prove in its durable signal. Parent-side integration remains enforced by the ordinary
+/// <see cref="ProductionSymbolEvidenceAttribute"/> wrapper on that same test method.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+internal sealed class HardCrashEvidenceAttribute(string cut, params string[] childProductionSymbols)
+    : Attribute
+{
+    public string Cut { get; } = cut;
+    public IReadOnlyList<string> ChildProductionSymbols { get; } = childProductionSymbols;
+}
+
+/// <summary>
 /// Wraps every test method in the class. Tests without evidence metadata execute unchanged;
 /// attributed tests automatically fail after execution unless every declared production
 /// symbol was observed at runtime.

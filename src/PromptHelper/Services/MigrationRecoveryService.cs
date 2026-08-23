@@ -56,6 +56,10 @@ public sealed class MigrationRecoveryService
         MigrationAttemptManifest? manifest;
         try
         {
+            // Marker authority is itself a crash state machine. Settle an unpublished initial
+            // candidate or an interrupted Copying->Ready two-rename window before interpreting
+            // the final marker pathname as migration state.
+            _fileOps.RetireOwnedArtifacts(context.TargetPhysicalRoot);
             manifest = _manifestRepo.TryReadStrict(markerPath);
         }
         catch (Exception ex)
@@ -360,6 +364,7 @@ public sealed class MigrationRecoveryService
 
             // 6. Delete marker LAST
             _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
+            _fileOps.RetireOwnedArtifacts(context.TargetPhysicalRoot);
 
             if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)
             {
@@ -418,6 +423,7 @@ public sealed class MigrationRecoveryService
             MigrationAttemptManifest? manifest;
             try
             {
+                _fileOps.RetireOwnedArtifacts(context.TargetPhysicalRoot);
                 manifest = _manifestRepo.TryReadStrict(markerPath);
             }
             catch (Exception ex)
@@ -534,6 +540,7 @@ public sealed class MigrationRecoveryService
 
             // Retire marker
             _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
+            _fileOps.RetireCommittedMigrationArtifacts(context.TargetPhysicalRoot);
             if (_authorityOps.GetPresenceStrict(markerPath) != StrictFilePresence.Missing)
             {
                 throw new IOException(

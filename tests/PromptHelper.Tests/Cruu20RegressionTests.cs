@@ -73,49 +73,61 @@ public sealed class Cruu20RegressionTests
     // ------------------------------ CRUU20-001 -----------------------------------------
 
     [TestMethod]
+    [HardCrashEvidence("Cruu20.ProbeAfterClaimBeforeWrite", "DefaultCapabilityFileOps.CreateOwnedProbe")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_001_Crash_after_probe_claim_before_full_write_is_recoverable()
     {
-        using CrashRun run = RunCrash("Cruu20.ProbeAfterClaimBeforeWrite");
-        Assert.AreEqual(ArtifactCleanupOutcome.DeletedProvenOwned,
-            DeleteProbe(run.Root, "probe-current.tmp", CreateBytes));
+        using CrashRun run = RunCrash("Cruu20.ProbeAfterClaimBeforeWrite",
+            expectedChildSymbols: ["DefaultCapabilityFileOps.CreateOwnedProbe"]);
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "probe-current.tmp")));
     }
 
     [TestMethod]
+    [HardCrashEvidence("Cruu20.ProbeDuringPartialWrite", "DefaultCapabilityFileOps.CreateOwnedProbe")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_001_Crash_during_probe_write_partial_content_is_recoverable()
     {
-        using CrashRun run = RunCrash("Cruu20.ProbeDuringPartialWrite");
+        using CrashRun run = RunCrash("Cruu20.ProbeDuringPartialWrite",
+            expectedChildSymbols: ["DefaultCapabilityFileOps.CreateOwnedProbe"]);
         string path = Path.Combine(run.Root, "probe-current.tmp");
         Assert.AreEqual(2, new FileInfo(path).Length);
-        Assert.AreEqual(ArtifactCleanupOutcome.DeletedProvenOwned,
-            DeleteProbe(run.Root, "probe-current.tmp", CreateBytes));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
     }
 
     [TestMethod]
+    [HardCrashEvidence("Cruu20.ProbeAfterWriteBeforeFlush", "DefaultCapabilityFileOps.CreateOwnedProbe")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_001_Crash_after_probe_data_write_before_flush_is_recoverable()
     {
-        using CrashRun run = RunCrash("Cruu20.ProbeAfterWriteBeforeFlush");
+        using CrashRun run = RunCrash("Cruu20.ProbeAfterWriteBeforeFlush",
+            expectedChildSymbols: ["DefaultCapabilityFileOps.CreateOwnedProbe"]);
         Assert.AreEqual(CreateBytes.Length, new FileInfo(Path.Combine(run.Root, "probe-current.tmp")).Length);
-        Assert.AreEqual(ArtifactCleanupOutcome.DeletedProvenOwned,
-            DeleteProbe(run.Root, "probe-current.tmp", CreateBytes));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
     }
 
     [TestMethod]
+    [HardCrashEvidence("DefaultCapabilityFileOps.AfterRenameToDisplacedBeforeRecord", "DefaultCapabilityFileOps.CreateOwnedProbe")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_001_Crash_after_current_probe_rename_before_new_location_record_is_recoverable()
     {
-        using CrashRun run = RunCrash("DefaultCapabilityFileOps.AfterRenameToDisplacedBeforeRecord");
+        using CrashRun run = RunCrash("DefaultCapabilityFileOps.AfterRenameToDisplacedBeforeRecord",
+            expectedChildSymbols: ["DefaultCapabilityFileOps.CreateOwnedProbe"]);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "probe-current.tmp")));
-        Assert.AreEqual(ArtifactCleanupOutcome.DeletedProvenOwned,
-            DeleteProbe(run.Root, "probe-displaced.tmp", CreateBytes));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
+        Assert.IsFalse(File.Exists(Path.Combine(run.Root, "probe-displaced.tmp")));
     }
 
     [TestMethod]
+    [HardCrashEvidence("DefaultCapabilityFileOps.AfterRenameToCurrentBeforeRecord", "DefaultCapabilityFileOps.CreateOwnedProbe")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_001_Crash_after_replacement_probe_rename_before_new_location_record_is_recoverable()
     {
-        using CrashRun run = RunCrash("DefaultCapabilityFileOps.AfterRenameToCurrentBeforeRecord");
+        using CrashRun run = RunCrash("DefaultCapabilityFileOps.AfterRenameToCurrentBeforeRecord",
+            expectedChildSymbols: ["DefaultCapabilityFileOps.CreateOwnedProbe"]);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "probe-replacement.tmp")));
-        Assert.AreEqual(ArtifactCleanupOutcome.DeletedProvenOwned,
-            DeleteProbe(run.Root, "probe-current.tmp", CreateBytes, ReplaceBytes));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
+        Assert.IsFalse(File.Exists(Path.Combine(run.Root, "probe-current.tmp")));
     }
 
     [TestMethod]
@@ -210,40 +222,60 @@ public sealed class Cruu20RegressionTests
     // ------------------------------ CRUU20-002 -----------------------------------------
 
     [TestMethod]
+    [HardCrashEvidence("WindowsAtomicExpectedFileReplacer.AfterCreateBeforeFirstClaim", "WindowsAtomicExpectedFileReplacer.ReplaceIfExpected")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_002_Hard_crash_between_CAS_stage_create_and_first_claim_leaves_no_unproven_stage()
     {
         using CrashRun run = RunCrash(
             "WindowsAtomicExpectedFileReplacer.AfterCreateBeforeFirstClaim",
-            root => File.WriteAllBytes(Path.Combine(root, "library.json"), Encoding.UTF8.GetBytes("old")));
+            root => File.WriteAllBytes(Path.Combine(root, "library.json"), Encoding.UTF8.GetBytes("old")),
+            "WindowsAtomicExpectedFileReplacer.ReplaceIfExpected");
         Assert.AreEqual(0, Directory.GetFiles(run.Root, ".prompthelper-tmp-*.tmp").Length);
         CollectionAssert.AreEqual(Encoding.UTF8.GetBytes("old"), File.ReadAllBytes(Path.Combine(run.Root, "library.json")));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
     }
 
     [TestMethod]
+    [HardCrashEvidence("DefaultMigrationFileOps.AfterCreateBeforeFirstClaim", "DefaultMigrationFileOps.CreateOwnedStage")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_002_Hard_crash_between_payload_stage_create_and_first_claim_leaves_no_unproven_temp()
     {
-        using CrashRun run = RunCrash("DefaultMigrationFileOps.AfterCreateBeforeFirstClaim");
+        using CrashRun run = RunCrash("DefaultMigrationFileOps.AfterCreateBeforeFirstClaim",
+            expectedChildSymbols: ["DefaultMigrationFileOps.CreateOwnedStage"]);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "payload-stage.tmp")));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
     }
 
     [TestMethod]
+    [HardCrashEvidence("DefaultMigrationManifestFileOps.AfterCreateBeforeFirstClaim", "DefaultMigrationManifestFileOps.CreateOwnedStage")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_002_Hard_crash_between_manifest_stage_create_and_first_claim_does_not_wedge_retry()
     {
-        using CrashRun run = RunCrash("DefaultMigrationManifestFileOps.AfterCreateBeforeFirstClaim");
+        using CrashRun run = RunCrash("DefaultMigrationManifestFileOps.AfterCreateBeforeFirstClaim",
+            expectedChildSymbols: ["DefaultMigrationManifestFileOps.CreateOwnedStage"]);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "manifest-stage.tmp")));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
     }
 
     [TestMethod]
+    [HardCrashEvidence("DefaultCapabilityFileOps.AfterCreateBeforeFirstClaim", "DefaultCapabilityFileOps.CreateOwnedProbe")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_002_Hard_crash_between_probe_create_and_first_claim_does_not_wedge_retry()
     {
-        using CrashRun run = RunCrash("DefaultCapabilityFileOps.AfterCreateBeforeFirstClaim");
+        using CrashRun run = RunCrash("DefaultCapabilityFileOps.AfterCreateBeforeFirstClaim",
+            expectedChildSymbols: ["DefaultCapabilityFileOps.CreateOwnedProbe"]);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "probe-current.tmp")));
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
     }
 
     [TestMethod]
+    [HardCrashEvidence("WindowsOwnedDirectoryCreator.AfterCreateBeforeFirstClaim", "WindowsOwnedDirectoryCreator.TryCreateOwned")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_002_Hard_crash_between_directory_create_and_identity_claim_does_not_wedge_retry()
     {
-        using CrashRun run = RunCrash("WindowsOwnedDirectoryCreator.AfterCreateBeforeFirstClaim");
+        using CrashRun run = RunCrash("WindowsOwnedDirectoryCreator.AfterCreateBeforeFirstClaim",
+            expectedChildSymbols: ["WindowsOwnedDirectoryCreator.TryCreateOwned"]);
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
         using var source = new TestDirectory();
         var manifest = new MigrationAttemptManifest
         {
@@ -281,16 +313,16 @@ public sealed class Cruu20RegressionTests
     }
 
     [TestMethod]
+    [HardCrashEvidence("WindowsOwnedArtifactJournal.AfterPartialFirstAppend", "DefaultMigrationFileOps.CreateOwnedStage")]
+    [ProductionSymbolEvidence("MigrationRecoveryService.RecoverForRetry")]
     public void CRUU20_002_Torn_first_ownership_append_cannot_leave_live_unproven_artifact()
     {
-        using CrashRun run = RunCrash("WindowsOwnedArtifactJournal.AfterPartialFirstAppend");
+        using CrashRun run = RunCrash("WindowsOwnedArtifactJournal.AfterPartialFirstAppend",
+            expectedChildSymbols: ["DefaultMigrationFileOps.CreateOwnedStage"]);
         Assert.IsFalse(File.Exists(Path.Combine(run.Root, "payload-stage.tmp")));
         string journalPath = WindowsOwnedArtifactJournal.GetJournalPath(run.Root);
         Assert.IsTrue(File.Exists(journalPath));
-        OwnedArtifactReconciler.Result result = OwnedArtifactReconciler.Reconcile(
-            run.Root,
-            new WindowsOwnedArtifactJournal());
-        Assert.IsFalse(result.HasFatal);
+        Assert.IsTrue(RecoverCrashRoot(run.Root).Success);
         Assert.IsFalse(File.Exists(journalPath));
     }
 
@@ -613,7 +645,10 @@ public sealed class Cruu20RegressionTests
             DeleteProbe(temp.Root, "probe-displaced.tmp", CreateBytes));
     }
 
-    private static CrashRun RunCrash(string cut, Action<string>? prepare = null)
+    private static CrashRun RunCrash(
+        string cut,
+        Action<string>? prepare = null,
+        params string[] expectedChildSymbols)
     {
         var directory = new TestDirectory();
         prepare?.Invoke(directory.Root);
@@ -668,6 +703,19 @@ public sealed class Cruu20RegressionTests
         Assert.IsTrue(process.WaitForExit(10_000), "Hard-crash child process tree did not terminate.");
         Assert.AreNotEqual(0, process.ExitCode, "The child must be killed, not unwind through cleanup.");
         WaitForKilledProcessHandles(directory.Root, signal);
+        using (JsonDocument evidence = JsonDocument.Parse(File.ReadAllBytes(signal)))
+        {
+            Assert.AreEqual(cut, evidence.RootElement.GetProperty("cut").GetString());
+            string[] actualSymbols = evidence.RootElement.GetProperty("productionSymbols")
+                .EnumerateArray()
+                .Select(element => element.GetString()!)
+                .ToArray();
+            foreach (string expectedSymbol in expectedChildSymbols)
+            {
+                CollectionAssert.Contains(actualSymbols, expectedSymbol,
+                    $"Hard-crash cut '{cut}' did not prove child production symbol '{expectedSymbol}'.");
+            }
+        }
         File.Delete(signal);
         return new CrashRun(directory);
     }
@@ -705,6 +753,10 @@ public sealed class Cruu20RegressionTests
 
         Assert.Fail("A killed hard-crash child retained a filesystem handle for more than ten seconds.");
     }
+
+    private static RecoveryResult RecoverCrashRoot(string root) =>
+        new MigrationRecoveryService().RecoverForRetry(
+            new MigrationRecoveryContext(root, ExpectedSourcePhysicalRoot: root));
 
     private static List<MigrationControlArtifact> LegacyProbeControls(Guid attemptId)
     {

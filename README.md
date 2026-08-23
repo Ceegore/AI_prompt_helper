@@ -35,6 +35,17 @@ dotnet publish src/PromptHelper/PromptHelper.csproj `
 dotnet run --project src/PromptHelper/PromptHelper.csproj -c Release
 ```
 
+## Crash-Recovery Guarantee
+
+Prompt Helper's automated migration recovery is verified for abrupt application termination.
+Process termination is exercised at the enumerated durable-write and rename cuts. These tests kill the process
+without allowing application cleanup to run.
+
+Abrupt VM reset, kernel failure, storage-controller reordering, and physical power loss are
+outside the verified automatic-recovery guarantee. Those events remain best-effort and
+fail-closed until a dedicated post-reboot VM-reset test matrix is run; process-kill evidence
+must not be presented as proof of power-loss durability.
+
 ## User Data & Data Folder Transitions
 
 By default, Prompt Helper stores its library in:

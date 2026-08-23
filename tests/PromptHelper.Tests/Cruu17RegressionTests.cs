@@ -146,8 +146,14 @@ public sealed class Cruu17RegressionTests
         Assert.IsTrue(result.RestartRequired);
         Assert.IsTrue(File.Exists(Path.Combine(target, "library.json")),
             "Published settings must not trigger pre-commit payload rollback.");
-        Assert.IsFalse(File.Exists(WindowsOwnedArtifactJournal.GetJournalPath(target)),
-            "The committed transition must release migration rollback authority without deleting its payload.");
+        string targetJournal = WindowsOwnedArtifactJournal.GetJournalPath(target);
+        string journalDetails = File.Exists(targetJournal)
+            ? string.Join(", ", new WindowsOwnedArtifactJournal().Read(target).Records.Select(record =>
+                $"{record.Kind}/{record.Phase}/{record.RelativePath}"))
+            : "absent";
+        Assert.IsFalse(File.Exists(targetJournal),
+            "The committed transition must release migration rollback authority without deleting its payload. " +
+            $"Remaining authority: {journalDetails}");
         Assert.AreEqual(Path.GetFullPath(target), settingsRepo.GetEffectiveDataRoot());
         StringAssert.Contains(result.Warning ?? string.Empty, "was committed");
     }

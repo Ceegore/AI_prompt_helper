@@ -212,11 +212,25 @@ internal static class OwnedArtifactReconciler
             ResolveCapabilityProbe(root, record, outcomes, surviving, proven);
         }
 
+        foreach (IGrouping<Guid?, OwnedArtifactRecord> attempt in
+                 snapshot.Records.Where(r => r.Kind == OwnedArtifactKind.MigrationMarker)
+                                 .GroupBy(r => r.MarkerAttemptId))
+        {
+            ResolveMigrationMarkerAttempt(
+                root,
+                attempt.Key,
+                attempt.ToArray(),
+                outcomes,
+                surviving,
+                proven);
+        }
+
         foreach (OwnedArtifactRecord record in
                  snapshot.Records.Where(r =>
                       r.Kind != OwnedArtifactKind.CasPreimage &&
                       r.Kind != OwnedArtifactKind.MigrationArtifact &&
-                      r.Kind != OwnedArtifactKind.CapabilityProbe))
+                      r.Kind != OwnedArtifactKind.CapabilityProbe &&
+                      r.Kind != OwnedArtifactKind.MigrationMarker))
         {
             ResolveOwnedArtifact(
                 root,
@@ -246,6 +260,246 @@ internal static class OwnedArtifactReconciler
         }
 
         return new Result(proven, outcomes);
+    }
+
+    private static void ResolveMigrationMarkerAttempt(
+        string root,
+        Guid? attemptId,
+        IReadOnlyList<OwnedArtifactRecord> records,
+        List<ReconciliationOutcome> outcomes,
+        List<OwnedArtifactRecord> surviving,
+        HashSet<string> proven)
+    {
+        if (attemptId is null)
+        {
+            outcomes.Add(Fatal(
+                "MIGRATION_MARKER_AUTHORITY_INVALID",
+                WindowsOwnedArtifactJournal.GetJournalPath(root),
+                "A migration-marker authority record has no attempt ID."));
+            surviving.AddRange(records);
+            return;
+        }
+
+        OwnedArtifactRecord[] latest = records
+            .GroupBy(record => record.OperationId)
+            .Select(group => group.OrderByDescending(record => record.Phase).First())
+            .ToArray();
+        OwnedArtifactRecord? retiring = latest
+            .Where(record => record.Phase == OwnedArtifactPhase.MarkerRetirePrepared)
+            .OrderByDescending(record => record.Phase)
+            .FirstOrDefault();
+        if (retiring is not null)
+        {
+            OwnedMarkerLocation retiringLocation = LocateOwnedMarker(root, retiring, outcomes);
+            if (retiringLocation.Path is not null)
+            {
+                DeleteExactMarker(root, retiring, retiringLocation.Path, outcomes);
+            }
+            return;
+        }
+
+        OwnedArtifactRecord? ready = latest
+            .Where(record => record.Phase is
+                OwnedArtifactPhase.MarkerReadyPrepared or
+                OwnedArtifactPhase.MarkerPublishedReady)
+            .OrderByDescending(record => record.Phase)
+            .FirstOrDefault();
+        OwnedArtifactRecord? copying = latest
+            .Where(record => record.Phase is
+                OwnedArtifactPhase.MarkerPrepared or
+                OwnedArtifactPhase.MarkerPublishedCopying or
+                OwnedArtifactPhase.MarkerCopyingRetirePrepared)
+            .OrderByDescending(record => record.Phase)
+            .FirstOrDefault();
+
+        OwnedMarkerLocation readyLocation = LocateOwnedMarker(root, ready, outcomes);
+        OwnedMarkerLocation copyingLocation = LocateOwnedMarker(root, copying, outcomes);
+        if (outcomes.Any(outcome => outcome.Severity == ReconciliationSeverity.Fatal &&
+                                    outcome.Code.StartsWith("MIGRATION_MARKER_", StringComparison.Ordinal)))
+        {
+            surviving.AddRange(latest);
+            return;
+        }
+
+        string markerPath = Path.GetFullPath(Path.Combine(
+            root,
+            (ready ?? copying)?.RestoreRelativePath
+                ?? throw new InvalidDataException("Migration marker authority has no final path.")));
+
+        if (ready is null)
+        {
+            if (copying is null)
+            {
+                return;
+            }
+
+            if (copyingLocation.Path is not null && PathIdentity.Equals(copyingLocation.Path, markerPath))
+            {
+                proven.Add(markerPath);
+                surviving.Add(copying);
+                return;
+            }
+
+            // The first marker never published. Its exact off-path candidate is transient and
+            // may be retired; a foreign occupant at either declared path is never touched.
+            if (copyingLocation.Path is not null)
+            {
+                DeleteExactMarker(root, copying, copyingLocation.Path, outcomes);
+            }
+            return;
+        }
+
+        if (readyLocation.Path is not null && PathIdentity.Equals(readyLocation.Path, markerPath))
+        {
+            proven.Add(markerPath);
+            if (copying is not null && copyingLocation.Path is not null)
+            {
+                DeleteExactMarker(root, copying, copyingLocation.Path, outcomes);
+            }
+            surviving.Add(ready);
+            return;
+        }
+
+        if (copying is not null &&
+            copyingLocation.Path is not null &&
+            PathIdentity.Equals(copyingLocation.Path, markerPath))
+        {
+            // The Ready candidate never published. Roll it back and keep exact Copying
+            // authority. This includes a crash before the sideline rename.
+            if (readyLocation.Path is not null)
+            {
+                DeleteExactMarker(root, ready, readyLocation.Path, outcomes);
+            }
+            proven.Add(markerPath);
+            surviving.Add(copying);
+            return;
+        }
+
+        StrictPathKind markerKind = new StrictPathAuthority().Probe(markerPath).Kind;
+        if (copying is not null && copyingLocation.Path is not null && markerKind == StrictPathKind.Missing)
+        {
+            // Crash between the two renames: restore the exact Copying marker into the hole,
+            // then retire the unpublished Ready candidate.
+            using WindowsExpectedTargetAuthority authority =
+                OpenExactMarker(root, copying, copyingLocation.Path)
+                ?? throw new InvalidDataException("Recorded Copying marker identity disappeared during recovery.");
+            if (!authority.RenameExactNoOverwrite(markerPath, out int error))
+            {
+                outcomes.Add(Fatal(
+                    "MIGRATION_MARKER_COPYING_RESTORE_FAILED",
+                    copyingLocation.Path,
+                    new Win32Exception(error).Message));
+                surviving.AddRange(latest);
+                return;
+            }
+
+            if (readyLocation.Path is not null)
+            {
+                DeleteExactMarker(root, ready, readyLocation.Path, outcomes);
+            }
+            proven.Add(markerPath);
+            surviving.Add(copying);
+            return;
+        }
+
+        // A different object occupies the final marker path while an exact marker object from
+        // this attempt survives elsewhere. Preserve every object and fail closed.
+        outcomes.Add(Fatal(
+            "MIGRATION_MARKER_FOREIGN_REPLACEMENT",
+            markerPath,
+            "The authoritative migration marker was replaced by a different filesystem object. Every object was preserved."));
+        surviving.AddRange(latest);
+    }
+
+    private readonly record struct OwnedMarkerLocation(string? Path);
+
+    private static OwnedMarkerLocation LocateOwnedMarker(
+        string root,
+        OwnedArtifactRecord? record,
+        List<ReconciliationOutcome> outcomes)
+    {
+        if (record is null)
+        {
+            return new OwnedMarkerLocation(null);
+        }
+
+        foreach (string relativePath in new[] { record.RelativePath, record.RestoreRelativePath }
+                     .Where(path => !string.IsNullOrWhiteSpace(path))
+                     .Distinct(StringComparer.OrdinalIgnoreCase)!)
+        {
+            string path = Path.GetFullPath(Path.Combine(root, relativePath!));
+            try
+            {
+                using WindowsExpectedTargetAuthority? authority = OpenExactMarker(root, record, path);
+                if (authority is not null)
+                {
+                    return new OwnedMarkerLocation(path);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                outcomes.Add(Fatal("MIGRATION_MARKER_UNREADABLE", path, ex.Message));
+                return new OwnedMarkerLocation(null);
+            }
+        }
+
+        return new OwnedMarkerLocation(null);
+    }
+
+    private static WindowsExpectedTargetAuthority? OpenExactMarker(
+        string root,
+        OwnedArtifactRecord record,
+        string path)
+    {
+        WindowsExpectedTargetAuthority? authority = WindowsExpectedTargetAuthority.Open(path, root);
+        if (authority is null)
+        {
+            return null;
+        }
+
+        if (authority.Identity != record.Identity)
+        {
+            authority.Dispose();
+            return null;
+        }
+
+        try
+        {
+            if (record.CandidateLength < 0 || record.CandidateSha256Hex is null ||
+                authority.ReadAllBytes().LongLength != record.CandidateLength)
+            {
+                throw new InvalidDataException(
+                    $"Exact migration marker '{path}' does not match its durable content authority.");
+            }
+            authority.AssertContentMatches(record.CandidateSha256Hex);
+            return authority;
+        }
+        catch
+        {
+            authority.Dispose();
+            throw;
+        }
+    }
+
+    private static void DeleteExactMarker(
+        string root,
+        OwnedArtifactRecord record,
+        string path,
+        List<ReconciliationOutcome> outcomes)
+    {
+        try
+        {
+            using WindowsExpectedTargetAuthority? authority = OpenExactMarker(root, record, path);
+            authority?.DeleteExact();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            outcomes.Add(new ReconciliationOutcome(
+                ReconciliationSeverity.Warning,
+                "MIGRATION_MARKER_CLEANUP_FAILED",
+                path,
+                ex.Message));
+        }
     }
 
     private static void ResolveCapabilityProbe(

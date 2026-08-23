@@ -92,6 +92,35 @@ if ($missingRuntimeAuthority.Count -gt 0) {
     exit 1
 }
 
+# CRUU21-004: hard-crash authority is per exact sentinel. A normal success test for the same
+# finding cannot satisfy the child cut or parent recovery obligations of a killed subprocess.
+$crashEvidence = $map.requiredCrashEvidence
+if ($null -eq $crashEvidence -or @($crashEvidence.PSObject.Properties).Count -eq 0) {
+    Write-Error 'requiredCrashEvidence is missing or empty.'
+    exit 1
+}
+
+$allMappedTests = @($map.findings.PSObject.Properties | ForEach-Object { @($_.Value) })
+$invalidCrashEvidence = @()
+foreach ($entry in $crashEvidence.PSObject.Properties) {
+    $value = $entry.Value
+    $childProductionSymbols = @($value.childProductionSymbols)
+    $parentProductionSymbols = @($value.parentProductionSymbols)
+    if ($allMappedTests -notcontains $entry.Name -or
+        [string]::IsNullOrWhiteSpace([string]$value.cut) -or
+        $childProductionSymbols.Count -eq 0 -or
+        $parentProductionSymbols.Count -eq 0 -or
+        @($childProductionSymbols + $parentProductionSymbols |
+            Where-Object { $_ -notmatch '^[A-Za-z_][A-Za-z0-9_.]+\.[A-Za-z_][A-Za-z0-9_]+$' }).Count -gt 0) {
+        $invalidCrashEvidence += $entry.Name
+    }
+}
+
+if ($invalidCrashEvidence.Count -gt 0) {
+    Write-Error "Invalid per-sentinel crash evidence: $($invalidCrashEvidence -join ', ')"
+    exit 1
+}
+
 # --- 3. Flatten the map into the exact sentinel list. ------------------------------------
 $expected = [System.Collections.Generic.List[string]]::new()
 foreach ($property in ($map.findings.PSObject.Properties | Sort-Object Name)) {

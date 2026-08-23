@@ -46,7 +46,14 @@ internal enum OwnedArtifactKind
     /// An ephemeral capability probe whose exact identity may move between two paths that
     /// were both durably declared before the first rename.
     /// </summary>
-    CapabilityProbe
+    CapabilityProbe,
+
+    /// <summary>
+    /// The authoritative migration marker object. Unlike semantic marker validation, this
+    /// claim binds Copying publication, Ready replacement, restart recovery, and retirement
+    /// to the exact NTFS object created by the attempt.
+    /// </summary>
+    MigrationMarker
 }
 
 /// <summary>How far a durable operation had got when the record was appended.</summary>
@@ -81,7 +88,25 @@ internal enum OwnedArtifactPhase
     ProbeRenamed = 13,
 
     /// <summary>The exact probe handle was marked for deletion.</summary>
-    ProbeRetired = 14
+    ProbeRetired = 14,
+
+    /// <summary>A complete durable marker candidate exists off-path, before publication.</summary>
+    MarkerPrepared = 20,
+
+    /// <summary>The exact candidate is published as the Copying marker.</summary>
+    MarkerPublishedCopying = 21,
+
+    /// <summary>The Copying marker's exact identity and pre-image path are durable before rename.</summary>
+    MarkerCopyingRetirePrepared = 22,
+
+    /// <summary>A complete Ready marker candidate is durable and both legal locations are declared.</summary>
+    MarkerReadyPrepared = 23,
+
+    /// <summary>The exact candidate is published as the Ready marker.</summary>
+    MarkerPublishedReady = 24,
+
+    /// <summary>Exact marker retirement is authorized and durable before handle-bound deletion.</summary>
+    MarkerRetirePrepared = 25
 }
 
 /// <summary>
@@ -103,7 +128,8 @@ internal sealed record OwnedArtifactRecord(
     WindowsFileIdentity Identity,
     string? RestoreRelativePath = null,
     string? CandidateSha256Hex = null,
-    long CandidateLength = -1);
+    long CandidateLength = -1,
+    Guid? MarkerAttemptId = null);
 
 /// <summary>
 /// The ownership ledger could not be trusted. Because the ledger authorizes deletion and
@@ -168,7 +194,7 @@ internal interface IOwnedArtifactJournal
 internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 {
     internal const string JournalFileName = ".prompthelper-owned.log";
-    private const string RecordVersion = "3";
+    private const string RecordVersion = "4";
 
     private const uint GENERIC_READ = 0x80000000;
     private const uint GENERIC_WRITE = 0x40000000;
@@ -465,11 +491,14 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         // Preserve the deployed v2 wire shape for every legacy artifact kind. Only the new
         // capability-probe state machine requires v3, so ordinary CAS and migration journals
         // remain readable by the previous binary.
-        string recordVersion = record.Kind == OwnedArtifactKind.CapabilityProbe
-            ? RecordVersion
-            : "2";
-        string body = string.Join(
-            '|',
+        string recordVersion = record.Kind switch
+        {
+            OwnedArtifactKind.MigrationMarker => RecordVersion,
+            OwnedArtifactKind.CapabilityProbe => "3",
+            _ => "2"
+        };
+        var fields = new List<string>
+        {
             recordVersion,
             record.OperationId.ToString("N"),
             record.Kind switch
@@ -480,6 +509,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactKind.MigrationArtifact => "migration",
                 OwnedArtifactKind.MigrationDirectory => "directory",
                 OwnedArtifactKind.CapabilityProbe => "probe",
+                OwnedArtifactKind.MigrationMarker => "marker",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
             record.Phase switch
@@ -493,6 +523,12 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactPhase.ProbeRenamePrepared => "probe-rename-prepared",
                 OwnedArtifactPhase.ProbeRenamed => "probe-renamed",
                 OwnedArtifactPhase.ProbeRetired => "probe-retired",
+                OwnedArtifactPhase.MarkerPrepared => "marker-prepared",
+                OwnedArtifactPhase.MarkerPublishedCopying => "marker-copying",
+                OwnedArtifactPhase.MarkerCopyingRetirePrepared => "marker-retire-prepared",
+                OwnedArtifactPhase.MarkerReadyPrepared => "marker-ready-prepared",
+                OwnedArtifactPhase.MarkerPublishedReady => "marker-ready",
+                OwnedArtifactPhase.MarkerRetirePrepared => "marker-retire",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
             record.Identity.ToToken(),
@@ -501,7 +537,15 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 ? string.Empty
                 : Convert.ToBase64String(Encoding.UTF8.GetBytes(record.RestoreRelativePath)),
             record.CandidateSha256Hex ?? string.Empty,
-            record.CandidateLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            record.CandidateLength.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        };
+        if (record.Kind == OwnedArtifactKind.MigrationMarker)
+        {
+            fields.Add(record.MarkerAttemptId?.ToString("N") ?? throw new InvalidOperationException(
+                "Migration marker authority requires an attempt ID."));
+        }
+
+        string body = string.Join('|', fields);
 
         return body + "|" + Checksum(body);
     }
@@ -526,7 +570,9 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         }
 
         string[] parts = body.Split('|');
-        if (parts.Length != 9 || (parts[0] != "2" && parts[0] != RecordVersion))
+        bool legacyShape = parts.Length == 9 && (parts[0] == "2" || parts[0] == "3");
+        bool markerShape = parts.Length == 10 && parts[0] == RecordVersion;
+        if (!legacyShape && !markerShape)
         {
             return false;
         }
@@ -544,6 +590,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             "migration" => OwnedArtifactKind.MigrationArtifact,
             "directory" => OwnedArtifactKind.MigrationDirectory,
             "probe" => OwnedArtifactKind.CapabilityProbe,
+            "marker" => OwnedArtifactKind.MigrationMarker,
             _ => (OwnedArtifactKind)(-1)
         };
 
@@ -558,6 +605,12 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             "probe-rename-prepared" => OwnedArtifactPhase.ProbeRenamePrepared,
             "probe-renamed" => OwnedArtifactPhase.ProbeRenamed,
             "probe-retired" => OwnedArtifactPhase.ProbeRetired,
+            "marker-prepared" => OwnedArtifactPhase.MarkerPrepared,
+            "marker-copying" => OwnedArtifactPhase.MarkerPublishedCopying,
+            "marker-retire-prepared" => OwnedArtifactPhase.MarkerCopyingRetirePrepared,
+            "marker-ready-prepared" => OwnedArtifactPhase.MarkerReadyPrepared,
+            "marker-ready" => OwnedArtifactPhase.MarkerPublishedReady,
+            "marker-retire" => OwnedArtifactPhase.MarkerRetirePrepared,
             _ => (OwnedArtifactPhase)(-1)
         };
 
@@ -601,6 +654,22 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             return false;
         }
 
+        Guid? markerAttemptId = null;
+        if (markerShape &&
+            (!Guid.TryParseExact(parts[9], "N", out Guid parsedAttemptId) ||
+             kind != OwnedArtifactKind.MigrationMarker))
+        {
+            return false;
+        }
+        if (markerShape)
+        {
+            markerAttemptId = Guid.ParseExact(parts[9], "N");
+        }
+        else if (kind == OwnedArtifactKind.MigrationMarker)
+        {
+            return false;
+        }
+
         record = new OwnedArtifactRecord(
             operationId,
             kind,
@@ -609,7 +678,8 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             identity,
             restoreRelativePath,
             candidateSha,
-            candidateLength);
+            candidateLength,
+            markerAttemptId);
         return true;
     }
 

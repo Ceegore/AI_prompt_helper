@@ -685,6 +685,11 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                         try
                         {
                             _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
+                            // Marker retirement removes only marker authority. Settle directory
+                            // and payload claims whose exact objects the rollback just removed,
+                            // so the ownership journal cannot keep a newly-created target root
+                            // non-empty after an otherwise clean rollback.
+                            _fileOps.RetireOwnedArtifacts(bound.PhysicalRoot);
                         }
                         catch (Exception markerEx)
                         {
@@ -731,6 +736,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                 try
                 {
                     _manifestRepo.DeleteStrict(markerPath, manifest.AttemptId, manifest.Phase);
+                    _fileOps.RetireCommittedMigrationArtifacts(bound.PhysicalRoot);
                 }
                 catch (Exception ex)
                 {

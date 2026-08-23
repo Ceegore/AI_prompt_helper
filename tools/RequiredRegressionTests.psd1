@@ -538,6 +538,35 @@
         'CRUU20_004_Evidence_enforcement_does_not_depend_on_AssertProductionHit_helper',
         'CRUU20_004_All_ProductionSymbolEvidence_tests_use_automatic_runtime_harness',
         'CRUU20_004_Nested_evidence_capture_restores_previous_sink',
+        # CRUU21-001
+        'CRUU21_001_Hard_crash_after_initial_marker_create_before_write_leaves_no_final_marker',
+        'CRUU21_001_Hard_crash_during_initial_Copying_marker_write_leaves_no_truncated_final_marker',
+        'CRUU21_001_Hard_crash_after_initial_marker_write_before_flush_is_retryable',
+        'CRUU21_001_Hard_crash_after_initial_marker_commit_leaves_strictly_parseable_Copying_marker',
+        'CRUU21_001_Initial_Copying_marker_has_no_partial_authoritative_final_state',
+        'CRUU21_001_Initial_marker_crash_before_payload_copy_does_not_wedge_target',
+        'CRUU21_001_Real_transition_retry_recovers_each_initial_marker_crash_cut',
+        # CRUU21-002
+        'CRUU21_002_Ready_marker_update_rejects_same_path_foreign_replacement',
+        'CRUU21_002_Ready_marker_update_preserves_same_bytes_different_identity_replacement',
+        'CRUU21_002_Ready_marker_update_requires_exact_Copying_marker_identity',
+        'CRUU21_002_DeleteStrict_preserves_same_attempt_phase_foreign_marker_identity',
+        'CRUU21_002_DeleteStrict_preserves_byte_identical_foreign_marker_identity',
+        'CRUU21_002_DeleteStrict_requires_durable_marker_identity_not_attempt_phase_only',
+        'CRUU21_002_Copying_marker_identity_survives_restart',
+        'CRUU21_002_Ready_marker_identity_survives_restart',
+        'CRUU21_002_Marker_identity_authority_advances_atomically_Copying_to_Ready',
+        'CRUU21_002_No_marker_write_path_unconditionally_replaces_current_marker_path',
+        # CRUU21-003
+        'CRUU21_003_Release_claim_distinguishes_process_kill_from_power_loss',
+        # CRUU21-004
+        'CRUU21_004_CRUU20_001_each_hard_crash_sentinel_has_child_cut_authority',
+        'CRUU21_004_CRUU20_001_retry_sentinels_execute_real_MigrationRecoveryService',
+        'CRUU21_004_CRUU20_002_each_kill_sentinel_is_runtime_bound_to_its_production_creator',
+        'CRUU21_004_Normal_success_test_cannot_substitute_for_hard_crash_runtime_authority',
+        'CRUU21_004_CrashHarness_signal_contains_exact_production_cut_identity',
+        'CRUU21_004_Hard_crash_evidence_map_is_per_sentinel_not_only_per_finding',
+        'CRUU21_004_Release_gate_validates_child_and_parent_crash_evidence',
         # CRUU3-001
         'CRUU3_001_MainWindow_Requests_Shutdown_On_RestartRequired',
         # CRUU3-002

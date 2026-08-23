@@ -193,6 +193,10 @@ public sealed class Cruu8ComprehensiveVerificationTests
             ]
         };
 
+        manifest.Phase = MigrationManifestPhase.Copying;
+        repo.CreateInitialCopyingManifestDurable(markerPath, manifest);
+        manifest.Phase = MigrationManifestPhase.ReadyToCommit;
+
         Assert.Throws<ManifestWriteCleanupException>(() => repo.WriteReadyManifestDurable(markerPath, manifest));
     }
 

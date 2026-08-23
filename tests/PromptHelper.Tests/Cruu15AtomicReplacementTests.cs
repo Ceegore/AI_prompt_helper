@@ -158,13 +158,15 @@ public sealed class Cruu15AtomicReplacementTests
         Guid attemptId = Guid.NewGuid();
 
         MigrationAttemptManifest manifest = BuildReadyManifest(temp.Root, attemptId);
+        manifest.Phase = MigrationManifestPhase.Copying;
+        var repo = new MigrationManifestRepository();
+        repo.CreateInitialCopyingManifestDurable(markerPath, manifest);
+        manifest.Phase = MigrationManifestPhase.ReadyToCommit;
 
         // Something already occupies the deterministic stage pathname.
         string stagePath = Path.Combine(temp.Root, $".prompthelper-migration.stage-{attemptId:N}.tmp");
         byte[] foreign = Encoding.UTF8.GetBytes("foreign content that this attempt never created");
         File.WriteAllBytes(stagePath, foreign);
-
-        var repo = new MigrationManifestRepository();
 
         Assert.ThrowsExactly<IOException>(() => repo.WriteReadyManifestDurable(markerPath, manifest));
 
@@ -179,6 +181,9 @@ public sealed class Cruu15AtomicReplacementTests
         string markerPath = Path.Combine(temp.Root, ".prompthelper-migration.json");
         Guid attemptId = Guid.NewGuid();
         MigrationAttemptManifest manifest = BuildReadyManifest(temp.Root, attemptId);
+        manifest.Phase = MigrationManifestPhase.Copying;
+        new MigrationManifestRepository().CreateInitialCopyingManifestDurable(markerPath, manifest);
+        manifest.Phase = MigrationManifestPhase.ReadyToCommit;
 
         string stagePath = Path.Combine(temp.Root, $".prompthelper-migration.stage-{attemptId:N}.tmp");
 
@@ -222,11 +227,10 @@ public sealed class Cruu15AtomicReplacementTests
         // The marker as persisted is accepted...
         repo.AssertPersistedMarkerMatches(markerPath, manifest);
 
-        // ...and a marker replaced after the phase promotion is not.
+        // ...and a foreign attempt cannot replace it merely by targeting the same pathname.
         MigrationAttemptManifest other = BuildReadyManifest(temp.Root, Guid.NewGuid());
-        repo.WriteReadyManifestDurable(markerPath, other);
-
-        Assert.ThrowsExactly<InvalidDataException>(() => repo.AssertPersistedMarkerMatches(markerPath, manifest));
+        Assert.ThrowsExactly<StaleExpectedFileException>(() => repo.WriteReadyManifestDurable(markerPath, other));
+        repo.AssertPersistedMarkerMatches(markerPath, manifest);
     }
 
     [TestMethod]

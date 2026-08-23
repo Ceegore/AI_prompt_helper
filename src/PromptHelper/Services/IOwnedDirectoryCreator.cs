@@ -29,6 +29,7 @@ internal sealed class WindowsOwnedDirectoryCreator : IOwnedDirectoryCreator
 
     public OwnedDirectoryCreationResult TryCreateOwned(string path)
     {
+        ProductionRuntimeEvidence.Hit("WindowsOwnedDirectoryCreator.TryCreateOwned");
         string fullPath = System.IO.Path.GetFullPath(path);
         string parent = System.IO.Path.GetDirectoryName(fullPath)
             ?? throw new InvalidOperationException($"Created directory has no parent: '{path}'.");

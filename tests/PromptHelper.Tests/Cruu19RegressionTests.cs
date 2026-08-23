@@ -365,7 +365,7 @@ public sealed class Cruu19RegressionTests
     }
 
     [TestMethod]
-    [ProductionSymbolEvidence("DefaultMigrationManifestFileOps.CreateOwnedStage")]
+    [ProductionSymbolEvidence("WindowsMigrationMarkerAuthority.ReplaceIfExpected")]
     public void CRUU19_002_Ready_manifest_stage_claim_failure_does_not_wedge_RecoverForRetry()
     {
         using var fixture = new ProbeFixture(includeProbePlan: false);
@@ -374,7 +374,7 @@ public sealed class Cruu19RegressionTests
             new PhaseFailingJournal { FailAfterRecord = true });
         var repository = new MigrationManifestRepository(failing);
         Cruu18RegressionTests.AssertProductionHitThrows<IOException>(
-            "DefaultMigrationManifestFileOps.CreateOwnedStage",
+            "WindowsMigrationMarkerAuthority.ReplaceIfExpected",
             () => repository.WriteReadyManifestDurable(fixture.MarkerPath, fixture.Manifest));
 
         fixture.Manifest.Phase = MigrationManifestPhase.Copying;

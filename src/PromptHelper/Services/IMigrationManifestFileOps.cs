@@ -10,6 +10,32 @@ public interface IMigrationManifestFileOps
     Stream CreateNew(string path);
     void FlushToDisk(Stream stream);
 
+    void CreateInitialMarkerCrashAtomic(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        MigrationManifestPhase phase,
+        ReadOnlySpan<byte> bytes);
+
+    void ReplaceMarkerIfExpected(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes,
+        ReadOnlySpan<byte> candidateBytes);
+
+    void AssertMarkerAuthority(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes);
+
+    void DeleteMarkerIfAuthorized(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes);
+
     /// <summary>
     /// Creates an owned stage at <paramref name="path"/>, proven from its retained handle to be
     /// physically inside <paramref name="physicalRoot"/> (CRUU16-007). Fails if anything already
@@ -55,6 +81,58 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
 
         fs.Flush(flushToDisk: true);
     }
+
+    public void CreateInitialMarkerCrashAtomic(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        MigrationManifestPhase phase,
+        ReadOnlySpan<byte> bytes) =>
+        WindowsMigrationMarkerAuthority.CreateInitial(
+            physicalRoot,
+            markerPath,
+            attemptId,
+            phase,
+            bytes,
+            _ownedArtifacts);
+
+    public void ReplaceMarkerIfExpected(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes,
+        ReadOnlySpan<byte> candidateBytes) =>
+        WindowsMigrationMarkerAuthority.ReplaceIfExpected(
+            physicalRoot,
+            markerPath,
+            attemptId,
+            expectedBytes,
+            candidateBytes,
+            _ownedArtifacts);
+
+    public void AssertMarkerAuthority(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes) =>
+        WindowsMigrationMarkerAuthority.AssertCurrent(
+            physicalRoot,
+            markerPath,
+            attemptId,
+            expectedBytes,
+            _ownedArtifacts);
+
+    public void DeleteMarkerIfAuthorized(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes) =>
+        WindowsMigrationMarkerAuthority.DeleteCurrent(
+            physicalRoot,
+            markerPath,
+            attemptId,
+            expectedBytes,
+            _ownedArtifacts);
 
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {

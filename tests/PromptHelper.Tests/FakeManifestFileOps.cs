@@ -36,6 +36,79 @@ internal sealed class FakeManifestFileOps : IMigrationManifestFileOps
         _inner.FlushToDisk(stream);
     }
 
+    public void CreateInitialMarkerCrashAtomic(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        MigrationManifestPhase phase,
+        ReadOnlySpan<byte> bytes)
+    {
+        Trace.Add($"CreateInitialMarkerCrashAtomic:{Path.GetFileName(markerPath)}");
+        _inner.CreateInitialMarkerCrashAtomic(
+            physicalRoot,
+            markerPath,
+            attemptId,
+            phase,
+            bytes);
+    }
+
+    public void ReplaceMarkerIfExpected(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes,
+        ReadOnlySpan<byte> candidateBytes)
+    {
+        Trace.Add($"ReplaceMarkerIfExpected:{Path.GetFileName(markerPath)}");
+        Action<string>? previousPublish = WindowsMigrationMarkerAuthority.BeforeReadyPublishForTests;
+        Action<string>? previousDelete = WindowsMigrationMarkerAuthority.BeforeReadyCandidateDeleteForTests;
+        try
+        {
+            if (OnReplaceWriteThrough is not null)
+            {
+                WindowsMigrationMarkerAuthority.BeforeReadyPublishForTests = stagePath =>
+                {
+                    Trace.Add($"ReplaceWriteThrough:{Path.GetFileName(stagePath)}->{Path.GetFileName(markerPath)}");
+                    OnReplaceWriteThrough(stagePath, markerPath);
+                };
+            }
+            if (OnDeleteFile is not null)
+            {
+                WindowsMigrationMarkerAuthority.BeforeReadyCandidateDeleteForTests = stagePath =>
+                {
+                    Trace.Add($"DeleteFile:{Path.GetFileName(stagePath)}");
+                    OnDeleteFile(stagePath);
+                };
+            }
+
+            _inner.ReplaceMarkerIfExpected(
+                physicalRoot,
+                markerPath,
+                attemptId,
+                expectedBytes,
+                candidateBytes);
+        }
+        finally
+        {
+            WindowsMigrationMarkerAuthority.BeforeReadyPublishForTests = previousPublish;
+            WindowsMigrationMarkerAuthority.BeforeReadyCandidateDeleteForTests = previousDelete;
+        }
+    }
+
+    public void AssertMarkerAuthority(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes) =>
+        _inner.AssertMarkerAuthority(physicalRoot, markerPath, attemptId, expectedBytes);
+
+    public void DeleteMarkerIfAuthorized(
+        string physicalRoot,
+        string markerPath,
+        Guid attemptId,
+        ReadOnlySpan<byte> expectedBytes) =>
+        _inner.DeleteMarkerIfAuthorized(physicalRoot, markerPath, attemptId, expectedBytes);
+
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
         Trace.Add($"CreateOwnedStage:{Path.GetFileName(path)}");
