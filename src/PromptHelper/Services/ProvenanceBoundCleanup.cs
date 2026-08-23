@@ -165,6 +165,102 @@ internal static class ProvenanceBoundCleanup
         }
     }
 
+    public static ArtifactCleanupOutcome DeleteCapabilityProbeIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        long? alternateExpectedLength,
+        string? alternateExpectedSha256Hex,
+        IOwnedArtifactJournal journal)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
+        ArgumentNullException.ThrowIfNull(journal);
+
+        string fullRoot = Path.GetFullPath(physicalRoot);
+        string fullPath = Path.GetFullPath(path);
+        string relativePath = Path.GetRelativePath(fullRoot, fullPath);
+        SafeFileHandle? handle = OpenExactNonReparse(fullPath, fullRoot);
+        if (handle is null)
+        {
+            return ArtifactCleanupOutcome.Missing;
+        }
+
+        using (handle)
+        {
+            WindowsFileIdentity actualIdentity = WindowsFileIdentity.FromHandle(handle);
+            OwnedArtifactRecord? authority = journal.Read(fullRoot).Records.FirstOrDefault(record =>
+                record.Kind == OwnedArtifactKind.Stage &&
+                record.Identity == actualIdentity &&
+                string.Equals(record.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
+
+            if (authority is null || authority.CandidateSha256Hex is null)
+            {
+                return ArtifactCleanupOutcome.PreservedUnproven;
+            }
+
+            bool primaryAuthority =
+                authority.CandidateLength == expectedLength &&
+                string.Equals(authority.CandidateSha256Hex, expectedSha256Hex, StringComparison.OrdinalIgnoreCase);
+            bool alternateAuthority =
+                alternateExpectedLength is not null &&
+                alternateExpectedSha256Hex is not null &&
+                authority.CandidateLength == alternateExpectedLength.Value &&
+                string.Equals(
+                    authority.CandidateSha256Hex,
+                    alternateExpectedSha256Hex,
+                    StringComparison.OrdinalIgnoreCase);
+
+            if ((!primaryAuthority && !alternateAuthority) ||
+                !MatchesExpectedContent(
+                    handle,
+                    authority.CandidateLength,
+                    authority.CandidateSha256Hex))
+            {
+                return ArtifactCleanupOutcome.PreservedUnproven;
+            }
+
+            WindowsHandleDeletion.MarkForDeletion(handle, fullPath);
+            return ArtifactCleanupOutcome.DeletedProvenOwned;
+        }
+    }
+
+    public static ArtifactCleanupOutcome DeleteDirectoryIfProven(
+        string physicalRoot,
+        string path,
+        IOwnedArtifactJournal journal)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(physicalRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(journal);
+
+        string fullRoot = Path.GetFullPath(physicalRoot);
+        string fullPath = Path.GetFullPath(path);
+        string relativePath = Path.GetRelativePath(fullRoot, fullPath);
+
+        using WindowsRetirableDirectory? directory =
+            WindowsRetirableDirectory.OpenExistingOrNull(fullPath, fullRoot);
+        if (directory is null)
+        {
+            return ArtifactCleanupOutcome.Missing;
+        }
+
+        bool proven = journal.Read(fullRoot).Records.Any(record =>
+            record.Kind == OwnedArtifactKind.MigrationDirectory &&
+            record.Identity == directory.Identity &&
+            string.Equals(record.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
+
+        if (!proven)
+        {
+            return ArtifactCleanupOutcome.PreservedUnproven;
+        }
+
+        directory.DeleteExact();
+        return ArtifactCleanupOutcome.DeletedProvenOwned;
+    }
+
     internal static bool MatchesExpectedContent(
         SafeFileHandle handle,
         long expectedLength,

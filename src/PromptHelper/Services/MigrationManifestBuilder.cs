@@ -63,7 +63,9 @@ internal static class MigrationManifestBuilder
                 RelativePath = probePlan.RootProbe.CurrentRelativePath,
                 Kind = MigrationControlArtifactKind.CapabilityProbeFile,
                 ExpectedLength = createBytes.LongLength,
-                ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes))
+                ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes)),
+                AlternateExpectedLength = replaceBytes.LongLength,
+                AlternateExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(replaceBytes))
             });
             controlArtifacts.Add(new MigrationControlArtifact
             {
@@ -71,6 +73,13 @@ internal static class MigrationManifestBuilder
                 Kind = MigrationControlArtifactKind.CapabilityProbeFile,
                 ExpectedLength = replaceBytes.LongLength,
                 ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(replaceBytes))
+            });
+            controlArtifacts.Add(new MigrationControlArtifact
+            {
+                RelativePath = probePlan.RootProbe.DisplacedRelativePath,
+                Kind = MigrationControlArtifactKind.CapabilityProbeFile,
+                ExpectedLength = createBytes.LongLength,
+                ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes))
             });
 
             if (probePlan.PromptsProbe != null)
@@ -80,7 +89,9 @@ internal static class MigrationManifestBuilder
                     RelativePath = probePlan.PromptsProbe.CurrentRelativePath,
                     Kind = MigrationControlArtifactKind.CapabilityProbeFile,
                     ExpectedLength = createBytes.LongLength,
-                    ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes))
+                    ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes)),
+                    AlternateExpectedLength = replaceBytes.LongLength,
+                    AlternateExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(replaceBytes))
                 });
                 controlArtifacts.Add(new MigrationControlArtifact
                 {
@@ -88,6 +99,13 @@ internal static class MigrationManifestBuilder
                     Kind = MigrationControlArtifactKind.CapabilityProbeFile,
                     ExpectedLength = replaceBytes.LongLength,
                     ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(replaceBytes))
+                });
+                controlArtifacts.Add(new MigrationControlArtifact
+                {
+                    RelativePath = probePlan.PromptsProbe.DisplacedRelativePath,
+                    Kind = MigrationControlArtifactKind.CapabilityProbeFile,
+                    ExpectedLength = createBytes.LongLength,
+                    ExpectedSha256Hex = Convert.ToHexStringLower(SHA256.HashData(createBytes))
                 });
             }
         }

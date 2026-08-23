@@ -409,7 +409,15 @@ public sealed class MigrationManifestRepository
                 {
                     StrictJsonObjectAuthority.ValidateExactObject(
                         control,
-                        allowedMembers: ["relativePath", "kind", "expectedLength", "expectedSha256Hex"],
+                        allowedMembers:
+                        [
+                            "relativePath",
+                            "kind",
+                            "expectedLength",
+                            "expectedSha256Hex",
+                            "alternateExpectedLength",
+                            "alternateExpectedSha256Hex"
+                        ],
                         requiredMembers: ["relativePath", "kind"],
                         description: $"manifest.controlArtifacts[{index}] in '{path}'");
                     index++;
@@ -655,8 +663,10 @@ public sealed class MigrationManifestRepository
                 [
                     $".prompthelper-probe-{attemptId:N}-root-current.tmp",
                     $".prompthelper-probe-{attemptId:N}-root-replacement.tmp",
+                    $".prompthelper-probe-{attemptId:N}-root-displaced.tmp",
                     Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-current.tmp"),
-                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-replacement.tmp")
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-replacement.tmp"),
+                    Path.Combine("prompts", $".prompthelper-probe-{attemptId:N}-prompts-displaced.tmp")
                 ];
 
                 if (allowed.Any(x => string.Equals(x, rel, StringComparison.OrdinalIgnoreCase)))

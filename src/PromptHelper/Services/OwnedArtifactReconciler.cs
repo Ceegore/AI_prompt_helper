@@ -473,6 +473,19 @@ internal static class OwnedArtifactReconciler
     {
         string artifactPath = Path.GetFullPath(Path.Combine(root, record.RelativePath));
 
+        if (record.Kind == OwnedArtifactKind.MigrationDirectory)
+        {
+            ResolveOwnedDirectory(
+                root,
+                artifactPath,
+                record,
+                outcomes,
+                surviving,
+                proven,
+                retireCommittedMigrationArtifacts);
+            return;
+        }
+
         SafeFileHandle? handle;
         try
         {
@@ -532,6 +545,60 @@ internal static class OwnedArtifactReconciler
                     ex.Message));
                 surviving.Add(record);
             }
+        }
+    }
+
+    private static void ResolveOwnedDirectory(
+        string root,
+        string directoryPath,
+        OwnedArtifactRecord record,
+        List<ReconciliationOutcome> outcomes,
+        List<OwnedArtifactRecord> surviving,
+        HashSet<string> proven,
+        bool retireCommittedMigrationArtifacts)
+    {
+        try
+        {
+            using WindowsRetirableDirectory? directory =
+                WindowsRetirableDirectory.OpenExistingOrNull(
+                    directoryPath,
+                    root,
+                    requireDeleteAccess: false);
+            if (directory is null)
+            {
+                return;
+            }
+
+            if (directory.Identity != record.Identity)
+            {
+                // A different directory now owns the pathname. Preserve it and retire our
+                // stale authority so it can never authorize deletion of the replacement.
+                return;
+            }
+
+            proven.Add(directoryPath);
+            // A live attempt directory is data-bearing structure, like MigrationFinal: keep
+            // its deletion authority for rollback/retry, but never remove it during routine
+            // transient cleanup. Once commit is irrevocable, retire only the authority.
+            if (!retireCommittedMigrationArtifacts)
+            {
+                surviving.Add(record);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The directory was replaced by a non-directory object. That object is foreign;
+            // preserve it and retire the stale directory claim so it can never become delete
+            // authority if the pathname later changes type again.
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            outcomes.Add(new ReconciliationOutcome(
+                ReconciliationSeverity.Warning,
+                "OWNED_DIRECTORY_UNREADABLE",
+                directoryPath,
+                ex.Message));
+            surviving.Add(record);
         }
     }
 

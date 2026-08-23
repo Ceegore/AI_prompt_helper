@@ -92,7 +92,10 @@ public sealed class Cruu8ComprehensiveVerificationTests
         Guid attemptId = Guid.NewGuid();
         string tempRel = Path.Combine("prompts", $".test.md.migration-{attemptId:N}-{new string('b', 32)}.tmp");
         string tempFullPath = Path.Combine(target.Root, tempRel);
-        Directory.CreateDirectory(Path.GetDirectoryName(tempFullPath)!);
+        Assert.AreEqual(
+            DirectoryCreateOutcome.CreatedByCaller,
+            new WindowsOwnedDirectoryCreator()
+                .TryCreateOwned(Path.GetDirectoryName(tempFullPath)!).Outcome);
         File.WriteAllText(tempFullPath, "partial temp content");
 
         var manifest = new MigrationAttemptManifest

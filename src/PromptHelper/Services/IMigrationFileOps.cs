@@ -74,12 +74,26 @@ internal interface IMigrationFileOps
         long expectedLength,
         string expectedSha256Hex);
 
+    ArtifactCleanupOutcome DeleteOwnedCapabilityProbeIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        long? alternateExpectedLength,
+        string? alternateExpectedSha256Hex);
+
     /// <summary>
     /// Deletes the object at <paramref name="path"/> only if a durable ownership record proves
     /// this application created it (CRUU15-006). An object with no such proof is preserved and
     /// reported, never destroyed on the strength of its pathname alone.
     /// </summary>
     ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path);
+
+    /// <summary>
+    /// Deletes a directory only when the durable creation record matches the exact directory
+    /// identity currently at that path.
+    /// </summary>
+    ArtifactCleanupOutcome DeleteOwnedDirectoryIfProven(string physicalRoot, string path);
 
     /// <summary>
     /// Removes the exact directory object at <paramref name="path"/> through a single retained
@@ -253,6 +267,22 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             expectedSha256Hex,
             _ownedArtifacts);
 
+    public ArtifactCleanupOutcome DeleteOwnedCapabilityProbeIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        long? alternateExpectedLength,
+        string? alternateExpectedSha256Hex) =>
+        ProvenanceBoundCleanup.DeleteCapabilityProbeIfProven(
+            physicalRoot,
+            path,
+            expectedLength,
+            expectedSha256Hex,
+            alternateExpectedLength,
+            alternateExpectedSha256Hex,
+            _ownedArtifacts);
+
     /// <summary>
     /// Records a stage in the ownership journal of the data root it lives in. The root is
     /// derived by walking up from the stage until a directory holding managed control state is
@@ -294,6 +324,9 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
     public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path) =>
         ProvenanceBoundCleanup.DeleteFileIfProven(physicalRoot, path, _ownedArtifacts);
+
+    public ArtifactCleanupOutcome DeleteOwnedDirectoryIfProven(string physicalRoot, string path) =>
+        ProvenanceBoundCleanup.DeleteDirectoryIfProven(physicalRoot, path, _ownedArtifacts);
 
     public void DeleteDirectoryExact(string physicalRoot, string path)
     {

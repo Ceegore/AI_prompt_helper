@@ -15,4 +15,6 @@ public sealed class MigrationControlArtifact
     public MigrationControlArtifactKind Kind { get; set; }
     public long? ExpectedLength { get; set; }
     public string? ExpectedSha256Hex { get; set; }
+    public long? AlternateExpectedLength { get; set; }
+    public string? AlternateExpectedSha256Hex { get; set; }
 }

@@ -357,12 +357,14 @@ public class Cruu12ComprehensiveVerificationTests
         string targetDir = Path.Combine(temp.Root, "SubDir");
 
         var creator = new WindowsOwnedDirectoryCreator();
-        var outcome1 = creator.TryCreateOwned(targetDir);
-        Assert.AreEqual(DirectoryCreateOutcome.CreatedByCaller, outcome1);
+        OwnedDirectoryCreationResult outcome1 = creator.TryCreateOwned(targetDir);
+        Assert.AreEqual(DirectoryCreateOutcome.CreatedByCaller, outcome1.Outcome);
+        Assert.IsNotNull(outcome1.Claim);
 
         // Second creator detects preexisting
-        var outcome2 = creator.TryCreateOwned(targetDir);
-        Assert.AreEqual(DirectoryCreateOutcome.AlreadyExists, outcome2);
+        OwnedDirectoryCreationResult outcome2 = creator.TryCreateOwned(targetDir);
+        Assert.AreEqual(DirectoryCreateOutcome.AlreadyExists, outcome2.Outcome);
+        Assert.IsNull(outcome2.Claim);
     }
 
     // ==========================================

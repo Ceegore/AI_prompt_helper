@@ -24,6 +24,7 @@ internal sealed class WindowsRetirableDirectory : IDisposable
     private const uint GENERIC_READ = 0x80000000;
     private const uint DELETE = 0x00010000;
     private const uint FILE_SHARE_READ = 0x00000001;
+    private const uint FILE_SHARE_WRITE = 0x00000002;
     private const uint FILE_SHARE_DELETE = 0x00000004;
     private const uint OPEN_EXISTING = 3;
     private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
@@ -81,15 +82,20 @@ internal sealed class WindowsRetirableDirectory : IDisposable
     /// path is a strict descendant of <paramref name="expectedPhysicalRoot"/>. Returns null
     /// only when the path genuinely does not exist.
     /// </summary>
-    public static WindowsRetirableDirectory? OpenExistingOrNull(string path, string expectedPhysicalRoot)
+    public static WindowsRetirableDirectory? OpenExistingOrNull(
+        string path,
+        string expectedPhysicalRoot,
+        bool requireDeleteAccess = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedPhysicalRoot);
 
         SafeFileHandle handle = CreateFileW(
             path,
-            GENERIC_READ | DELETE,
-            FILE_SHARE_READ | FILE_SHARE_DELETE,
+            requireDeleteAccess ? GENERIC_READ | DELETE : GENERIC_READ,
+            requireDeleteAccess
+                ? FILE_SHARE_READ | FILE_SHARE_DELETE
+                : FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             IntPtr.Zero,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,

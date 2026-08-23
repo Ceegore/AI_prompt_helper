@@ -75,6 +75,21 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
             expectedLength,
             expectedSha256Hex);
 
+    public ArtifactCleanupOutcome DeleteOwnedCapabilityProbeIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        long? alternateExpectedLength,
+        string? alternateExpectedSha256Hex)
+        => _inner.DeleteOwnedCapabilityProbeIfProven(
+            physicalRoot,
+            path,
+            expectedLength,
+            expectedSha256Hex,
+            alternateExpectedLength,
+            alternateExpectedSha256Hex);
+
     public IEnumerable<string> EnumeratePromptFiles(string directory)
     {
         Trace.Add("EnumeratePromptFiles");
@@ -99,6 +114,9 @@ internal sealed class RecordingMigrationFileOps : IMigrationFileOps
 
     public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
         => _inner.DeleteOwnedFileIfProven(physicalRoot, path);
+
+    public ArtifactCleanupOutcome DeleteOwnedDirectoryIfProven(string physicalRoot, string path)
+        => _inner.DeleteOwnedDirectoryIfProven(physicalRoot, path);
 
     public void DeleteDirectoryExact(string physicalRoot, string path)
         => _inner.DeleteDirectoryExact(physicalRoot, path);

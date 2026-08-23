@@ -228,7 +228,7 @@ public sealed class Cruu10ComprehensiveVerificationTests
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);
 
         var result = recovery.RecoverForRetry(context);
-        Assert.IsTrue(result.Success);
+        Assert.IsTrue(result.Success, result.ErrorMessage);
 
         // Pre-existing directories MUST be preserved
         Assert.IsTrue(Directory.Exists(targetPrompts));
@@ -257,8 +257,12 @@ public sealed class Cruu10ComprehensiveVerificationTests
         // Attempt creates them
         string targetPrompts = Path.Combine(target.Root, "prompts");
         string targetRecovery = Path.Combine(target.Root, "recovery");
-        Directory.CreateDirectory(targetPrompts);
-        Directory.CreateDirectory(targetRecovery);
+        Assert.AreEqual(
+            DirectoryCreateOutcome.CreatedByCaller,
+            new WindowsOwnedDirectoryCreator().TryCreateOwned(targetPrompts).Outcome);
+        Assert.AreEqual(
+            DirectoryCreateOutcome.CreatedByCaller,
+            new WindowsOwnedDirectoryCreator().TryCreateOwned(targetRecovery).Outcome);
 
         var repo = new MigrationManifestRepository();
         string markerPath = Path.Combine(target.Root, ".prompthelper-migration.json");
@@ -268,7 +272,7 @@ public sealed class Cruu10ComprehensiveVerificationTests
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);
 
         var result = recovery.RecoverForRetry(context);
-        Assert.IsTrue(result.Success);
+        Assert.IsTrue(result.Success, result.ErrorMessage);
 
         // Attempt-created empty directories MUST be deleted
         Assert.IsFalse(Directory.Exists(targetPrompts));

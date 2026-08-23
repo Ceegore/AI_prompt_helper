@@ -166,6 +166,29 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
             expectedSha256Hex);
     }
 
+    public ArtifactCleanupOutcome DeleteOwnedCapabilityProbeIfProven(
+        string physicalRoot,
+        string path,
+        long expectedLength,
+        string expectedSha256Hex,
+        long? alternateExpectedLength,
+        string? alternateExpectedSha256Hex)
+    {
+        if (OnDeleteFile != null)
+        {
+            OnDeleteFile(path);
+            return ArtifactCleanupOutcome.DeletedProvenOwned;
+        }
+
+        return _inner.DeleteOwnedCapabilityProbeIfProven(
+            physicalRoot,
+            path,
+            expectedLength,
+            expectedSha256Hex,
+            alternateExpectedLength,
+            alternateExpectedSha256Hex);
+    }
+
     public ArtifactCleanupOutcome DeleteOwnedFileIfProven(string physicalRoot, string path)
     {
         if (OnDeleteFile != null)
@@ -175,6 +198,17 @@ internal sealed class FaultInjectingMigrationFileOps : IMigrationFileOps
         }
 
         return _inner.DeleteOwnedFileIfProven(physicalRoot, path);
+    }
+
+    public ArtifactCleanupOutcome DeleteOwnedDirectoryIfProven(string physicalRoot, string path)
+    {
+        if (OnDeleteDirectory != null)
+        {
+            OnDeleteDirectory(path);
+            return ArtifactCleanupOutcome.DeletedProvenOwned;
+        }
+
+        return _inner.DeleteOwnedDirectoryIfProven(physicalRoot, path);
     }
 
     public void DeleteDirectoryExact(string physicalRoot, string path)

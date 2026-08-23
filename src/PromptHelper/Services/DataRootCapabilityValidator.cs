@@ -17,12 +17,15 @@ internal sealed record ExistingLibraryCapabilityContext(
 public sealed class DataRootCapabilityValidator
 {
     private readonly ICapabilityFileOps _fileOps;
-    private readonly IVerifiedArtifactDeleter _verifiedDeleter;
+
+    internal static Action<string, string>? BeforeCurrentSidelineForTests;
+    internal static Action<string, string>? BeforeReplacementPromotionForTests;
+    internal static Action<string>? BeforeFinalRetirementForTests;
 
     internal DataRootCapabilityValidator(ICapabilityFileOps? fileOps = null, IVerifiedArtifactDeleter? verifiedDeleter = null)
     {
         _fileOps = fileOps ?? new DefaultCapabilityFileOps();
-        _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        _ = verifiedDeleter; // retained only for source compatibility with older test constructors
     }
 
     public DataRootCapabilityValidator()
@@ -36,12 +39,21 @@ public sealed class DataRootCapabilityValidator
         ExistingLibraryCapabilityContext? existing = null,
         MigrationCapabilityProbePlan? probePlan = null)
     {
+        ProductionRuntimeEvidence.Hit("DataRootCapabilityValidator.ValidateWritable");
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
         if (!_fileOps.DirectoryExists(root))
         {
             Directory.CreateDirectory(root);
-            journal?.TrackCreatedDirectory(root);
+            if (journal is not null)
+            {
+                string parent = Path.GetDirectoryName(root)
+                    ?? throw new InvalidOperationException($"Created data root has no parent: '{root}'.");
+                using WindowsRetirableDirectory createdRoot =
+                    WindowsRetirableDirectory.OpenExistingOrNull(root, parent)
+                    ?? throw new IOException($"Created data root disappeared before it could be claimed: '{root}'.");
+                journal.TrackCreatedDirectory(root, createdRoot.Identity.ToToken());
+            }
         }
 
         if (probePlan != null)
@@ -224,155 +236,133 @@ public sealed class DataRootCapabilityValidator
         CapabilityFileProbePlan plan,
         ICreatedPathJournal? journal)
     {
-        string currentFile = Path.Combine(root, plan.CurrentRelativePath);
-        string replacementFile = Path.Combine(root, plan.ReplacementRelativePath);
-
-        bool currentCreated = false;
-        bool replacementCreated = false;
-
-        try
-        {
-            using (Stream curStream = _fileOps.CreateNew(currentFile))
-            {
-                currentCreated = true;
-                journal?.TrackCreatedFile(currentFile);
-                byte[] data = Encoding.UTF8.GetBytes("create");
-                curStream.Write(data, 0, data.Length);
-                _fileOps.FlushToDisk(curStream);
-            }
-
-            using (Stream repStream = _fileOps.CreateNew(replacementFile))
-            {
-                replacementCreated = true;
-                journal?.TrackCreatedFile(replacementFile);
-                byte[] data = Encoding.UTF8.GetBytes("replace");
-                repStream.Write(data, 0, data.Length);
-                _fileOps.FlushToDisk(repStream);
-            }
-
-            _fileOps.Replace(replacementFile, currentFile, null);
-            replacementCreated = false;
-
-            _fileOps.DeleteFile(currentFile);
-            currentCreated = false;
-        }
-        catch (Exception ex)
-        {
-            var cleanupFailures = new List<MigrationRollbackFailure>();
-
-            // Identity-verified cleanup (reparse-point rejection + strict-descendant-path
-            // binding under root), not raw path deletion: a foreign file swapped in at the
-            // declared probe path during the failure window is refused, not destroyed.
-            // Content cannot be required to match, because the write that created the file
-            // may not have completed before the failure occurred.
-            if (currentCreated)
-            {
-                try
-                {
-                    _verifiedDeleter.VerifyIdentityAndDelete(root, currentFile);
-                }
-                catch (Exception deleteEx)
-                {
-                    cleanupFailures.Add(new MigrationRollbackFailure(currentFile, "DeleteProbeCurrentFile", deleteEx.Message));
-                }
-            }
-
-            if (replacementCreated)
-            {
-                try
-                {
-                    _verifiedDeleter.VerifyIdentityAndDelete(root, replacementFile);
-                }
-                catch (Exception deleteEx)
-                {
-                    cleanupFailures.Add(new MigrationRollbackFailure(replacementFile, "DeleteProbeReplacementFile", deleteEx.Message));
-                }
-            }
-
-            if (cleanupFailures.Count > 0)
-            {
-                throw new DataRootCapabilityProbeException(
-                    root,
-                    ex,
-                    cleanupFailures);
-            }
-
-            throw;
-        }
+        ProbeOwnedTransaction(
+            root,
+            Path.Combine(root, plan.CurrentRelativePath),
+            Path.Combine(root, plan.ReplacementRelativePath),
+            Path.Combine(root, plan.DisplacedRelativePath),
+            journal,
+            recordDurableOwnership: true);
     }
 
     private void ProbeLocation(string directory, ICreatedPathJournal? journal)
     {
         string nonce = Guid.NewGuid().ToString("N");
-        string currentFile = Path.Combine(directory, $".prompthelper-capability-{nonce}-current.tmp");
-        string replacementFile = Path.Combine(directory, $".prompthelper-capability-{nonce}-replacement.tmp");
+        ProbeOwnedTransaction(
+            directory,
+            Path.Combine(directory, $".prompthelper-capability-{nonce}-current.tmp"),
+            Path.Combine(directory, $".prompthelper-capability-{nonce}-replacement.tmp"),
+            Path.Combine(directory, $".prompthelper-capability-{nonce}-displaced.tmp"),
+            journal,
+            recordDurableOwnership: false);
+    }
 
-        bool currentCreated = false;
-        bool replacementCreated = false;
+    private void ProbeOwnedTransaction(
+        string physicalRoot,
+        string currentFile,
+        string replacementFile,
+        string displacedFile,
+        ICreatedPathJournal? journal,
+        bool recordDurableOwnership)
+    {
+        byte[] currentBytes = Encoding.UTF8.GetBytes("create");
+        byte[] replacementBytes = Encoding.UTF8.GetBytes("replace");
+        IOwnedCapabilityProbe? current = null;
+        IOwnedCapabilityProbe? replacement = null;
+        bool currentRetired = false;
+        bool replacementRetired = false;
 
         try
         {
-            using (Stream curStream = _fileOps.CreateNew(currentFile))
+            current = _fileOps.CreateOwnedProbe(
+                physicalRoot,
+                currentFile,
+                currentBytes,
+                recordDurableOwnership);
+            journal?.TrackCreatedFile(currentFile);
+            current.Write(currentBytes);
+            current.FlushDurable();
+
+            replacement = _fileOps.CreateOwnedProbe(
+                physicalRoot,
+                replacementFile,
+                replacementBytes,
+                recordDurableOwnership);
+            journal?.TrackCreatedFile(replacementFile);
+            replacement.Write(replacementBytes);
+            replacement.FlushDurable();
+
+            BeforeCurrentSidelineForTests?.Invoke(currentFile, displacedFile);
+            current.RenameNoOverwriteRetainingOwnership(displacedFile);
+
+            BeforeReplacementPromotionForTests?.Invoke(replacementFile, currentFile);
+            replacement.RenameNoOverwriteRetainingOwnership(currentFile);
+
+            BeforeFinalRetirementForTests?.Invoke(currentFile);
+            current.DeleteExact();
+            currentRetired = true;
+            replacement.DeleteExact();
+            replacementRetired = true;
+
+            if (recordDurableOwnership)
             {
-                currentCreated = true;
-                journal?.TrackCreatedFile(currentFile);
-                byte[] data = Encoding.UTF8.GetBytes("create");
-                curStream.Write(data, 0, data.Length);
-                _fileOps.FlushToDisk(curStream);
+                _fileOps.RetireSettledOwnership(physicalRoot);
             }
-
-            using (Stream repStream = _fileOps.CreateNew(replacementFile))
-            {
-                replacementCreated = true;
-                journal?.TrackCreatedFile(replacementFile);
-                byte[] data = Encoding.UTF8.GetBytes("replace");
-                repStream.Write(data, 0, data.Length);
-                _fileOps.FlushToDisk(repStream);
-            }
-
-            _fileOps.Replace(replacementFile, currentFile, null);
-            replacementCreated = false;
-
-            _fileOps.DeleteFile(currentFile);
-            currentCreated = false;
         }
         catch (Exception ex)
         {
             var cleanupFailures = new List<MigrationRollbackFailure>();
+            DeleteOwnedProbe(current, currentRetired, currentFile, "DeleteProbeCurrentFile", cleanupFailures);
+            DeleteOwnedProbe(replacement, replacementRetired, replacementFile, "DeleteProbeReplacementFile", cleanupFailures);
 
-            // Identity-verified cleanup, matching ProbeLocationWithPlan: never delete by raw
-            // path authority, and never require content to match (the write may not have
-            // completed before the failure).
-            if (currentCreated)
+            if (recordDurableOwnership && cleanupFailures.Count == 0)
             {
                 try
                 {
-                    _verifiedDeleter.VerifyIdentityAndDelete(directory, currentFile);
+                    _fileOps.RetireSettledOwnership(physicalRoot);
                 }
-                catch (Exception deleteEx)
+                catch (Exception reconcileEx)
                 {
-                    cleanupFailures.Add(new MigrationRollbackFailure(currentFile, "DeleteProbeCurrentFile", deleteEx.Message));
+                    cleanupFailures.Add(new MigrationRollbackFailure(
+                        physicalRoot,
+                        "RetireProbeOwnership",
+                        reconcileEx.Message));
                 }
             }
 
-            if (replacementCreated)
+            if (cleanupFailures.Count > 0)
             {
-                try
-                {
-                    _verifiedDeleter.VerifyIdentityAndDelete(directory, replacementFile);
-                }
-                catch (Exception deleteEx)
-                {
-                    cleanupFailures.Add(new MigrationRollbackFailure(replacementFile, "DeleteProbeReplacementFile", deleteEx.Message));
-                }
-            }
-
-            if (cleanupFailures.Count > 0 && journal == null)
-            {
-                throw new DataRootCapabilityProbeException(directory, ex, cleanupFailures);
+                throw new DataRootCapabilityProbeException(physicalRoot, ex, cleanupFailures);
             }
 
             throw;
+        }
+        finally
+        {
+            replacement?.Dispose();
+            current?.Dispose();
+        }
+    }
+
+    private static void DeleteOwnedProbe(
+        IOwnedCapabilityProbe? probe,
+        bool alreadyRetired,
+        string path,
+        string operation,
+        List<MigrationRollbackFailure> failures)
+    {
+        if (probe is null || alreadyRetired)
+        {
+            return;
+        }
+
+        try
+        {
+            probe.DeleteExact();
+        }
+        catch (Exception deleteEx)
+        {
+            failures.Add(new MigrationRollbackFailure(path, operation, deleteEx.Message));
         }
     }
 }

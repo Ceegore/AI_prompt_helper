@@ -317,15 +317,26 @@ public sealed class Cruu16StartupAndProvenanceTests
     {
         using var temp = new TestDirectory();
         string dir = Path.Combine(temp.Root, "attempt-created");
+        string displaced = Path.Combine(temp.Root, "original-attempt-created");
+        Directory.CreateDirectory(dir);
+        using WindowsRetirableDirectory owned =
+            WindowsRetirableDirectory.OpenExistingOrNull(dir, temp.Root)!;
+        WindowsFileIdentity identity = owned.Identity;
+        owned.Dispose();
+
+        using var tx = new DataFolderMigrationService.MigrationTargetTransaction(temp.Root);
+        tx.TrackCreatedDirectory(dir, identity.ToToken());
+
+        // Same type, same empty state, different object identity at the same pathname.
+        Directory.Move(dir, displaced);
         Directory.CreateDirectory(dir);
 
-        // The directory is replaced by a file after the attempt tracked it.
-        Directory.Delete(dir);
-        File.WriteAllText(dir, "now a file");
-
-        IMigrationFileOps ops = new DefaultMigrationFileOps();
-        Assert.ThrowsExactly<InvalidOperationException>(() => ops.DeleteDirectoryExact(temp.Root, dir));
-        Assert.IsTrue(File.Exists(dir));
+        MigrationRollbackResult result = tx.Rollback();
+        Assert.IsFalse(result.Success);
+        Assert.IsTrue(Directory.Exists(dir));
+        using WindowsRetirableDirectory replacement =
+            WindowsRetirableDirectory.OpenExistingOrNull(dir, temp.Root)!;
+        Assert.AreNotEqual(identity, replacement.Identity);
     }
 
     [TestMethod]

@@ -34,7 +34,13 @@ internal enum OwnedArtifactKind
     /// One migration payload object whose exact identity may be found at either its staging
     /// path or final path. Both locations are recorded before publication.
     /// </summary>
-    MigrationArtifact
+    MigrationArtifact,
+
+    /// <summary>
+    /// A directory created by the current migration attempt. Its NTFS identity, rather than
+    /// its pathname or emptiness, is the authority for rollback and retry deletion.
+    /// </summary>
+    MigrationDirectory
 }
 
 /// <summary>How far a durable operation had got when the record was appended.</summary>
@@ -435,6 +441,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactKind.CasPreimage => "preimage",
                 OwnedArtifactKind.MigrationFinal => "final",
                 OwnedArtifactKind.MigrationArtifact => "migration",
+                OwnedArtifactKind.MigrationDirectory => "directory",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
             record.Phase switch
@@ -492,6 +499,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             "preimage" => OwnedArtifactKind.CasPreimage,
             "final" => OwnedArtifactKind.MigrationFinal,
             "migration" => OwnedArtifactKind.MigrationArtifact,
+            "directory" => OwnedArtifactKind.MigrationDirectory,
             _ => (OwnedArtifactKind)(-1)
         };
 

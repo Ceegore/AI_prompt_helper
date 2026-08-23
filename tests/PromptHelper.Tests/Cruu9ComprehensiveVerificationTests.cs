@@ -844,7 +844,16 @@ public sealed class Cruu9ComprehensiveVerificationTests
         // now verifies that hash/length before deleting a declared control, so the fixture
         // must match it to simulate a real crash rather than a foreign-file substitution.
         string probeFile = Path.Combine(target.Root, probePlan.RootProbe.CurrentRelativePath);
-        File.WriteAllText(probeFile, "create");
+        byte[] probeBytes = Encoding.UTF8.GetBytes("create");
+        using (IOwnedCapabilityProbe probe = new DefaultCapabilityFileOps().CreateOwnedProbe(
+                   target.Root,
+                   probeFile,
+                   probeBytes,
+                   recordDurableOwnership: true))
+        {
+            probe.Write(probeBytes);
+            probe.FlushDurable();
+        }
 
         var recovery = new MigrationRecoveryService();
         var context = new MigrationRecoveryContext(target.Root, ExpectedSourcePhysicalRoot: source.Root);

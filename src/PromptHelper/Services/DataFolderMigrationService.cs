@@ -134,7 +134,7 @@ public sealed class DataFolderMigrationService
         internal static Action? RollbackEnteredForTests;
 
         private readonly List<MigrationOwnedFile> _ownedFiles = [];
-        private readonly List<string> _createdDirectories = [];
+        private readonly List<OwnedDirectoryClaim> _createdDirectories = [];
         private readonly IVerifiedArtifactDeleter _verifiedDeleter;
         private readonly string _targetPhysicalRoot;
         private bool _committed;
@@ -164,7 +164,16 @@ public sealed class DataFolderMigrationService
         }
 
         public void TrackCreatedFile(string path) { }
-        public void TrackCreatedDirectory(string path) => _createdDirectories.Add(path);
+        public void TrackCreatedDirectory(string path, string identityToken)
+        {
+            if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
+            {
+                throw new InvalidOperationException(
+                    $"Attempt-created directory produced an invalid identity token for '{path}'.");
+            }
+
+            _createdDirectories.Add(new OwnedDirectoryClaim(Path.GetFullPath(path), identity));
+        }
         public void Commit() => _committed = true;
 
         public void PromoteCreatedFile(string oldOwnedPath, string newOwnedPath) { }
@@ -220,6 +229,7 @@ public sealed class DataFolderMigrationService
 
         public MigrationRollbackResult Rollback()
         {
+            ProductionRuntimeEvidence.Hit("MigrationTargetTransaction.Rollback");
             RollbackEnteredForTests?.Invoke();
 
             if (_committed || _rolledBack)
@@ -263,6 +273,17 @@ public sealed class DataFolderMigrationService
                 }
             }
 
+            // CRUU19-003: the directory opened for deletion must also be the exact directory
+            // identity captured immediately after creation. Same pathname and emptiness are
+            // not ownership. Delete children first; the target root (if this transaction
+            // created it) must wait until its ownership ledger has been retired below.
+            foreach (OwnedDirectoryClaim claim in _createdDirectories
+                         .Where(c => !PathIdentity.Equals(c.Path, _targetPhysicalRoot))
+                         .OrderByDescending(c => c.Path.Length))
+            {
+                RemoveOwnedDirectory(claim, failures);
+            }
+
             // Every claim this attempt made is now dead, so the ledger itself has nothing left
             // to protect. Retiring it here is what lets an attempt-created root actually become
             // empty again; leaving it behind would make rollback unable to remove the very
@@ -296,24 +317,50 @@ public sealed class DataFolderMigrationService
                     _targetPhysicalRoot, "RetireOwnershipLedger", ex.Message));
             }
 
-            // CRUU16-006: removed through a single retained directory handle, so the directory
-            // proven empty and the directory removed are the same object. The kernel re-checks
-            // emptiness atomically when the disposition is applied.
-            foreach (string dir in _createdDirectories.OrderByDescending(x => x.Length))
+            // The root can become empty only after the root-scoped ownership ledger is gone.
+            foreach (OwnedDirectoryClaim claim in _createdDirectories
+                         .Where(c => PathIdentity.Equals(c.Path, _targetPhysicalRoot)))
             {
-                try
-                {
-                    using WindowsRetirableDirectory? handle =
-                        WindowsRetirableDirectory.OpenExistingOrNull(dir, _targetPhysicalRoot);
-                    handle?.DeleteExact();
-                }
-                catch (Exception ex)
-                {
-                    failures.Add(new MigrationRollbackFailure(dir, "DeleteDirectory", ex.Message));
-                }
+                RemoveOwnedDirectory(claim, failures);
             }
 
             return new MigrationRollbackResult(failures);
+        }
+
+        private void RemoveOwnedDirectory(
+            OwnedDirectoryClaim claim,
+            List<MigrationRollbackFailure> failures)
+        {
+            try
+            {
+                string containmentRoot = PathIdentity.Equals(claim.Path, _targetPhysicalRoot)
+                    ? Path.GetDirectoryName(claim.Path)
+                        ?? throw new InvalidOperationException(
+                            $"Attempt-created root has no parent: '{claim.Path}'.")
+                    : _targetPhysicalRoot;
+
+                using WindowsRetirableDirectory? handle =
+                    WindowsRetirableDirectory.OpenExistingOrNull(claim.Path, containmentRoot);
+                if (handle is null)
+                {
+                    return;
+                }
+
+                if (handle.Identity != claim.Identity)
+                {
+                    failures.Add(new MigrationRollbackFailure(
+                        claim.Path,
+                        "DeleteDirectory",
+                        "The directory at this pathname is not the object this attempt created, so it was preserved."));
+                    return;
+                }
+
+                handle.DeleteExact();
+            }
+            catch (Exception ex)
+            {
+                failures.Add(new MigrationRollbackFailure(claim.Path, "DeleteDirectory", ex.Message));
+            }
         }
 
         public void Dispose()
@@ -1112,10 +1159,13 @@ public sealed class DataFolderMigrationService
         IOwnedDirectoryCreator? creator = null)
     {
         var activeCreator = creator ?? new WindowsOwnedDirectoryCreator();
-        DirectoryCreateOutcome outcome = activeCreator.TryCreateOwned(path);
-        if (outcome == DirectoryCreateOutcome.CreatedByCaller)
+        OwnedDirectoryCreationResult result = activeCreator.TryCreateOwned(path);
+        if (result.Outcome == DirectoryCreateOutcome.CreatedByCaller)
         {
-            tx.TrackCreatedDirectory(path);
+            OwnedDirectoryClaim claim = result.Claim
+                ?? throw new InvalidOperationException(
+                    $"Owned directory creator returned no identity for '{path}'.");
+            tx.TrackCreatedDirectory(claim.Path, claim.Identity.ToToken());
         }
         else
         {

@@ -244,7 +244,18 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
     /// <summary>Handle-bound rename of the exact staged object onto <paramref name="targetPath"/>; fails if a file already exists there.</summary>
     public void PromoteNoOverwriteExact(string targetPath) => Promote(targetPath, replaceIfExists: false);
 
-    private void Promote(string targetPath, bool replaceIfExists)
+    /// <summary>
+    /// Renames the exact object without overwriting the destination while retaining authority
+    /// to rename or delete that same object again. Capability probing uses this to exercise a
+    /// multi-rename transaction without ever reopening a pathname (CRUU19-001).
+    /// </summary>
+    internal void RenameNoOverwriteRetainingOwnership(string targetPath) =>
+        Rename(targetPath, replaceIfExists: false, becomeTerminal: false);
+
+    private void Promote(string targetPath, bool replaceIfExists) =>
+        Rename(targetPath, replaceIfExists, becomeTerminal: true);
+
+    private void Rename(string targetPath, bool replaceIfExists, bool becomeTerminal)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_terminal)
@@ -286,7 +297,7 @@ internal sealed class WindowsOwnedDurableStage : IDisposable
                 new Win32Exception(error));
         }
 
-        _terminal = true;
+        _terminal = becomeTerminal;
     }
 
     /// <summary>

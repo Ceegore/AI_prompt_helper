@@ -24,6 +24,19 @@ public interface IMigrationManifestFileOps
 
 public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
 {
+    private readonly IOwnedArtifactJournal _ownedArtifacts;
+    private readonly StrictPathAuthority _strictPathAuthority = new();
+
+    public DefaultMigrationManifestFileOps()
+        : this(null)
+    {
+    }
+
+    internal DefaultMigrationManifestFileOps(IOwnedArtifactJournal? ownedArtifacts)
+    {
+        _ownedArtifacts = ownedArtifacts ?? new WindowsOwnedArtifactJournal();
+    }
+
     public Stream CreateNew(string path)
     {
         return new FileStream(
@@ -43,10 +56,9 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
         fs.Flush(flushToDisk: true);
     }
 
-    private readonly IOwnedArtifactJournal _ownedArtifacts = new WindowsOwnedArtifactJournal();
-
     public IOwnedFileStage CreateOwnedStage(string physicalRoot, string path)
     {
+        ProductionRuntimeEvidence.Hit("DefaultMigrationManifestFileOps.CreateOwnedStage");
         var stage = new OwnedManifestStage(
             WindowsOwnedDurableStage.CreateNewUnderRoot(path, physicalRoot));
         try
@@ -54,14 +66,24 @@ public sealed class DefaultMigrationManifestFileOps : IMigrationManifestFileOps
             DefaultMigrationFileOps.RecordStageOwnership(_ownedArtifacts, path, stage.IdentityToken);
             return stage;
         }
-        catch
+        catch (Exception recordFailure)
         {
+            try
+            {
+                stage.DeleteExact();
+            }
+            catch (Exception cleanupFailure)
+            {
+                stage.Dispose();
+                throw new IOException(
+                    $"Manifest stage ownership could not be recorded and exact cleanup failed for '{path}'.",
+                    new AggregateException(recordFailure, cleanupFailure));
+            }
+
             stage.Dispose();
             throw;
         }
     }
-
-    private readonly StrictPathAuthority _strictPathAuthority = new();
 
     public bool FileExists(string path) => _strictPathAuthority.Probe(path).Kind == StrictPathKind.File;
 

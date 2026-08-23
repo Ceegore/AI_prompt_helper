@@ -15,7 +15,6 @@ public sealed class MigrationRecoveryService
     private readonly MigrationManifestRepository _manifestRepo;
     private readonly IMigrationFileOps _fileOps;
     private readonly IAuthorityFileOps _authorityOps;
-    private readonly IVerifiedArtifactDeleter _verifiedDeleter;
     private readonly ManagedTreeTopologyValidator _treeValidator;
 
     internal MigrationRecoveryService(
@@ -28,7 +27,7 @@ public sealed class MigrationRecoveryService
         _manifestRepo = manifestRepo ?? new MigrationManifestRepository();
         _fileOps = fileOps ?? new DefaultMigrationFileOps();
         _authorityOps = authorityOps ?? new DefaultAuthorityFileOps();
-        _verifiedDeleter = verifiedDeleter ?? new WindowsVerifiedArtifactDeleter();
+        _ = verifiedDeleter; // retained for source compatibility; cleanup is journal-identity bound
         _treeValidator = treeValidator ?? new ManagedTreeTopologyValidator();
     }
 
@@ -147,11 +146,20 @@ public sealed class MigrationRecoveryService
                                 $"Declared control artifact '{control.RelativePath}' has no expected hash/length recorded. Recovery aborted to protect data.");
                         }
 
-                        _verifiedDeleter.VerifyAndDelete(
-                            context.TargetPhysicalRoot,
-                            controlPath,
-                            control.ExpectedLength.Value,
-                            control.ExpectedSha256Hex);
+                        ArtifactCleanupOutcome outcome =
+                            _fileOps.DeleteOwnedCapabilityProbeIfProven(
+                                context.TargetPhysicalRoot,
+                                controlPath,
+                                control.ExpectedLength.Value,
+                                control.ExpectedSha256Hex,
+                                control.AlternateExpectedLength,
+                                control.AlternateExpectedSha256Hex);
+
+                        if (outcome == ArtifactCleanupOutcome.PreservedUnproven)
+                        {
+                            throw new InvalidDataException(
+                                $"A file occupies the declared capability probe path '{control.RelativePath}', but exact creation identity plus expected content were not both proven. It was preserved.");
+                        }
                     }
                 }
                 else if (control.Kind == MigrationControlArtifactKind.ManifestPhaseStaging)
@@ -178,7 +186,16 @@ public sealed class MigrationRecoveryService
                     // object proven empty and the object removed are the same one. The kernel
                     // re-checks emptiness atomically when the disposition is applied, which is
                     // strictly stronger than the previous enumerate-then-delete-by-path pair.
-                    _fileOps.DeleteDirectoryExact(context.TargetPhysicalRoot, controlPath);
+                    ArtifactCleanupOutcome directoryOutcome =
+                        _fileOps.DeleteOwnedDirectoryIfProven(
+                            context.TargetPhysicalRoot,
+                            controlPath);
+                    if (directoryOutcome == ArtifactCleanupOutcome.PreservedUnproven)
+                    {
+                        throw new InvalidDataException(
+                            $"A directory occupies the declared capability-probe path '{control.RelativePath}', " +
+                            "but its creation identity was not proven. It was preserved.");
+                    }
                 }
             }
 
@@ -232,13 +249,29 @@ public sealed class MigrationRecoveryService
             string promptsDir = Path.Combine(context.TargetPhysicalRoot, "prompts");
             if (manifest.TargetBaseline == null || !manifest.TargetBaseline.PromptsDirectoryExistedBefore)
             {
-                _fileOps.DeleteDirectoryExact(context.TargetPhysicalRoot, promptsDir);
+                ArtifactCleanupOutcome promptsOutcome =
+                    _fileOps.DeleteOwnedDirectoryIfProven(
+                        context.TargetPhysicalRoot,
+                        promptsDir);
+                if (promptsOutcome == ArtifactCleanupOutcome.PreservedUnproven)
+                {
+                    throw new InvalidDataException(
+                        "The prompts directory is not the exact directory this attempt created. It was preserved.");
+                }
             }
 
             string recoveryDir = Path.Combine(context.TargetPhysicalRoot, "recovery");
             if (manifest.TargetBaseline == null || !manifest.TargetBaseline.RecoveryDirectoryExistedBefore)
             {
-                _fileOps.DeleteDirectoryExact(context.TargetPhysicalRoot, recoveryDir);
+                ArtifactCleanupOutcome recoveryOutcome =
+                    _fileOps.DeleteOwnedDirectoryIfProven(
+                        context.TargetPhysicalRoot,
+                        recoveryDir);
+                if (recoveryOutcome == ArtifactCleanupOutcome.PreservedUnproven)
+                {
+                    throw new InvalidDataException(
+                        "The recovery directory is not the exact directory this attempt created. It was preserved.");
+                }
             }
 
             _fileOps.RetireOwnedArtifacts(context.TargetPhysicalRoot);

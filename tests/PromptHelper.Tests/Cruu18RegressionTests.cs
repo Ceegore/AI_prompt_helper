@@ -153,7 +153,7 @@ public sealed class Cruu18RegressionTests
         return WindowsFileIdentity.FromHandle(handle);
     }
 
-    private static T AssertProductionHit<T>(string requiredSymbol, Func<T> action)
+    internal static T AssertProductionHit<T>(string requiredSymbol, Func<T> action)
     {
         var hits = new HashSet<string>(StringComparer.Ordinal);
         Action<string>? previous = ProductionRuntimeEvidence.SinkForTests;
@@ -171,12 +171,47 @@ public sealed class Cruu18RegressionTests
         }
     }
 
-    private static void AssertProductionHit(string requiredSymbol, Action action) =>
+    internal static void AssertProductionHit(string requiredSymbol, Action action) =>
         AssertProductionHit(requiredSymbol, () =>
         {
             action();
             return true;
         });
+
+    internal static TException AssertProductionHitThrows<TException>(
+        string requiredSymbol,
+        Action action)
+        where TException : Exception
+    {
+        var hits = new HashSet<string>(StringComparer.Ordinal);
+        Action<string>? previous = ProductionRuntimeEvidence.SinkForTests;
+        ProductionRuntimeEvidence.SinkForTests = symbol => hits.Add(symbol);
+        Exception? observed = null;
+        try
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                observed = ex;
+            }
+
+            // This assertion deliberately precedes exception validation. Therefore an expected
+            // exception cannot let an outer Throws assertion bypass production-hit evidence.
+            Assert.IsTrue(hits.Contains(requiredSymbol),
+                $"The test did not execute required production symbol '{requiredSymbol}'. Hits: {string.Join(", ", hits)}");
+            Assert.IsNotNull(observed, $"Expected {typeof(TException).Name}, but no exception was thrown.");
+            Assert.AreEqual(typeof(TException), observed.GetType(),
+                $"Expected exactly {typeof(TException).Name}, but got {observed.GetType().Name}.");
+            return (TException)observed;
+        }
+        finally
+        {
+            ProductionRuntimeEvidence.SinkForTests = previous;
+        }
+    }
 
     private static void SeedValidLibrary(string root, out LibraryDocument document)
     {
@@ -294,15 +329,14 @@ public sealed class Cruu18RegressionTests
             throw new IOException("Injected promotion failure.");
         try
         {
-            Assert.ThrowsExactly<IOException>(() =>
-                AssertProductionHit(
-                    "WindowsAtomicExpectedFileReplacer.ReplaceIfExpected",
-                    () => replacer.ReplaceIfExpected(
-                        temp.Root,
-                        target,
-                        ExpectedFileState.Present(Hash(oldBytes)),
-                        Utf8("candidate"),
-                        DurableFileClass.LibraryMetadata)));
+            AssertProductionHitThrows<IOException>(
+                "WindowsAtomicExpectedFileReplacer.ReplaceIfExpected",
+                () => replacer.ReplaceIfExpected(
+                    temp.Root,
+                    target,
+                    ExpectedFileState.Present(Hash(oldBytes)),
+                    Utf8("candidate"),
+                    DurableFileClass.LibraryMetadata));
         }
         finally
         {
@@ -599,10 +633,9 @@ public sealed class Cruu18RegressionTests
                 fileOps: ops,
                 caseInspector: null);
 
-            Assert.ThrowsExactly<IOException>(() =>
-                AssertProductionHit(
-                    "DataFolderMigrationService.CopySnapshotToTarget",
-                    () => coordinator.RequestTransition(target)));
+            AssertProductionHitThrows<IOException>(
+                "DataFolderMigrationService.CopySnapshotToTarget",
+                () => coordinator.RequestTransition(target));
         }
         finally
         {
@@ -679,14 +712,14 @@ public sealed class Cruu18RegressionTests
         using var temp = new TestDirectory();
         var replacer = new WindowsAtomicExpectedFileReplacer(FailingStageJournal(failAfterRecord: false));
 
-        Assert.ThrowsExactly<IOException>(() => AssertProductionHit(
+        AssertProductionHitThrows<IOException>(
             "WindowsAtomicExpectedFileReplacer.ReplaceIfExpected",
             () => replacer.ReplaceIfExpected(
                 temp.Root,
                 Path.Combine(temp.Root, "new.json"),
                 ExpectedFileState.Missing,
                 Utf8("candidate"),
-                DurableFileClass.LibraryMetadata)));
+                DurableFileClass.LibraryMetadata));
 
         Assert.AreEqual(0, Directory.GetFiles(temp.Root, ".prompthelper-tmp-*.tmp").Length);
     }
@@ -699,9 +732,9 @@ public sealed class Cruu18RegressionTests
         string stagePath = Path.Combine(temp.Root, "migration.tmp");
         var ops = new DefaultMigrationFileOps(FailingStageJournal(failAfterRecord: false));
 
-        Assert.ThrowsExactly<IOException>(() => AssertProductionHit(
+        AssertProductionHitThrows<IOException>(
             "DefaultMigrationFileOps.CreateOwnedStage",
-            () => ops.CreateOwnedStage(temp.Root, stagePath)));
+            () => ops.CreateOwnedStage(temp.Root, stagePath));
         Assert.IsFalse(File.Exists(stagePath));
     }
 
@@ -742,10 +775,15 @@ public sealed class Cruu18RegressionTests
     }
 
     [TestMethod]
+    [ProductionSymbolEvidence("WindowsAtomicExpectedFileReplacer.ReplaceIfExpected")]
+    [ProductionSymbolEvidence("DefaultMigrationFileOps.CreateOwnedStage")]
+    [ProductionSymbolEvidence("DefaultMigrationManifestFileOps.CreateOwnedStage")]
     public void CRUU18_006_No_stage_factory_closes_unclaimed_creation_handle_without_exact_cleanup()
     {
         CRUU18_006_CAS_stage_claim_failure_deletes_exact_stage_before_releasing_handle();
         CRUU18_006_Migration_CreateOwnedStage_claim_failure_leaves_no_unproven_temp();
+        new Cruu19RegressionTests()
+            .CRUU19_002_Manifest_stage_claim_failure_deletes_exact_stage_before_handle_release();
     }
 
     [TestMethod]

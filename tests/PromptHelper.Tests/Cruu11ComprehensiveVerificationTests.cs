@@ -976,7 +976,10 @@ public class Cruu11ComprehensiveVerificationTests
             TargetBaseline = new MigrationTargetBaseline(false, false)
         };
         new MigrationManifestRepository().CreateInitialCopyingManifestDurable(targetMarker, oldManifest);
-        Directory.CreateDirectory(Path.Combine(target.Root, "prompts"));
+        Assert.AreEqual(
+            DirectoryCreateOutcome.CreatedByCaller,
+            new WindowsOwnedDirectoryCreator()
+                .TryCreateOwned(Path.Combine(target.Root, "prompts")).Outcome);
 
         var coordinator = new DataFolderTransitionCoordinator(source.Root, settingsRepo, mig, new FakeUserConfirmationService());
 

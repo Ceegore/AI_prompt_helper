@@ -79,7 +79,7 @@ if ($uncovered.Count -gt 0) {
 # is deliberately independent of test-name presence: an exact sentinel name cannot substitute
 # for executing the integration layer it claims to cover.
 $missingRuntimeAuthority = @()
-foreach ($id in @($requiredIds | Where-Object { $_ -like 'CRUU18-*' })) {
+foreach ($id in @($requiredIds | Where-Object { $_ -match '^CRUU(1[89]|[2-9][0-9])-' })) {
     $entry = $map.requiredProductionSymbols.PSObject.Properties[$id]
     $symbols = if ($null -eq $entry) { @() } else { @($entry.Value) }
     if ($symbols.Count -eq 0 -or @($symbols | Where-Object { $_ -notmatch '^[A-Za-z_][A-Za-z0-9_.]+\.[A-Za-z_][A-Za-z0-9_]+$' }).Count -gt 0) {
@@ -88,7 +88,7 @@ foreach ($id in @($requiredIds | Where-Object { $_ -like 'CRUU18-*' })) {
 }
 
 if ($missingRuntimeAuthority.Count -gt 0) {
-    Write-Error "CRUU18 findings missing valid required production-symbol authority: $($missingRuntimeAuthority -join ', ')"
+    Write-Error "CRUU18+ findings missing valid required production-symbol authority: $($missingRuntimeAuthority -join ', ')"
     exit 1
 }
 

@@ -270,7 +270,10 @@ public sealed class Cruu7ComprehensiveVerificationTests
         SeedValidLibrary(source.Root, out Guid promptId);
 
         string targetPrompt = Path.Combine(target.Root, "prompts", $"{promptId:N}.md");
-        Directory.CreateDirectory(Path.GetDirectoryName(targetPrompt)!);
+        Assert.AreEqual(
+            DirectoryCreateOutcome.CreatedByCaller,
+            new WindowsOwnedDirectoryCreator()
+                .TryCreateOwned(Path.GetDirectoryName(targetPrompt)!).Outcome);
         File.WriteAllText(targetPrompt, "Prompt body content");
 
         string targetLib = Path.Combine(target.Root, "library.json");
