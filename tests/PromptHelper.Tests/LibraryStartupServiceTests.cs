@@ -130,6 +130,60 @@ public sealed class LibraryStartupServiceTests
     }
 
     [TestMethod]
+    public void Valid_primary_with_missing_body_starts_in_degraded_mode_when_backup_is_also_incomplete()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, libRepo, promptRepo) = CreateTestContext(testDir.Root);
+        Guid promptId = Guid.NewGuid();
+        promptRepo.Create(promptId, "Recoverable content");
+
+        var doc = new LibraryDocument
+        {
+            Prompts =
+            [
+                new PromptRecord { Id = promptId, Title = "Unavailable prompt", SortOrder = 10 }
+            ]
+        };
+        libRepo.Commit(doc);
+        File.Delete(paths.GetPromptPath(promptId));
+
+        StartupResult result = service.LoadOrInitialize();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.AreEqual(promptId, result.Document.Prompts.Single().Id);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "degraded mode");
+        StringAssert.Contains(result.Warning, promptId.ToString("N"));
+        Assert.IsTrue(File.Exists(paths.LibraryPath));
+        Assert.IsTrue(File.Exists(paths.LibraryBackupPath));
+    }
+
+    [TestMethod]
+    public void Valid_primary_with_invalid_utf8_body_starts_in_degraded_mode()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, libRepo, promptRepo) = CreateTestContext(testDir.Root);
+        Guid promptId = Guid.NewGuid();
+        promptRepo.Create(promptId, "Initially valid");
+
+        var doc = new LibraryDocument
+        {
+            Prompts =
+            [
+                new PromptRecord { Id = promptId, Title = "Invalid UTF-8", SortOrder = 10 }
+            ]
+        };
+        libRepo.Commit(doc);
+        File.WriteAllBytes(paths.GetPromptPath(promptId), [0xC3, 0x28]);
+
+        StartupResult result = service.LoadOrInitialize();
+
+        Assert.IsFalse(result.RecoveredFromBackup);
+        Assert.IsNotNull(result.Warning);
+        StringAssert.Contains(result.Warning, "degraded mode");
+    }
+
+    [TestMethod]
     public void Corrupt_primary_valid_backup_recovers()
     {
         using var testDir = new TestDirectory();

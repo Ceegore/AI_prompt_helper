@@ -658,6 +658,21 @@ public sealed class PromptLibraryServiceTests
     }
 
     [TestMethod]
+    public void Get_prompts_marks_invalid_utf8_body_as_unavailable()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, _, _, _, _) = CreateTestContext(testDir.Root);
+        var prompt = service.CreatePrompt(null, "Initially valid", "Invalid UTF-8").Value;
+        File.WriteAllBytes(paths.GetPromptPath(prompt.Id), [0xC3, 0x28]);
+
+        PromptDisplayRecord display = service.GetPrompts(null).Single(p => p.Id == prompt.Id);
+
+        Assert.IsFalse(display.IsContentAvailable);
+        Assert.AreEqual(string.Empty, display.Content);
+        Assert.IsNotNull(display.LoadError);
+    }
+
+    [TestMethod]
     public void Deep_hierarchy_test()
     {
         using var testDir = new TestDirectory();
