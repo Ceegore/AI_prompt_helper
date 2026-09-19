@@ -104,20 +104,38 @@ jobs:
           -RequireIcon
           -PublishedExe artifacts/release/PromptHelper.exe
 
-      # Tag and manually dispatched release builds fail closed until the repository owner
-      # configures the two signing secrets documented in docs/RELEASE_SIGNING.md. Keeping
-      # unsigned output out of the release artifact is intentional.
-      - name: Sign release executable
+      # Signing is optional for this hobby project. No secrets means an unsigned release;
+      # exactly one secret is a configuration error; both secrets enable Authenticode.
+      - name: Detect optional signing configuration
+        id: signing
         shell: pwsh
         env:
           SIGNING_CERTIFICATE_PFX: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PFX }}
           SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PFX) -or
-              [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD)) {
-            throw 'Release signing secrets are not configured. See docs/RELEASE_SIGNING.md.'
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PFX)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD)
+
+          if ($hasCertificate -xor $hasPassword) {
+            throw 'Incomplete signing configuration: configure both signing secrets or remove both.'
           }
 
+          if ($hasCertificate) {
+            'enabled=true' >> $env:GITHUB_OUTPUT
+            Write-Host 'Authenticode signing is enabled.'
+          }
+          else {
+            'enabled=false' >> $env:GITHUB_OUTPUT
+            Write-Host 'Unsigned hobby release: no optional signing certificate is configured.'
+          }
+
+      - name: Sign release executable
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_PFX: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PFX }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
           $certificatePath = Join-Path $env:RUNNER_TEMP 'prompt-helper-signing.pfx'
           try {
             [IO.File]::WriteAllBytes(
