@@ -8,6 +8,8 @@
         MinWidth="900"
         MinHeight="600"
         WindowStartupLocation="CenterScreen"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        AutomationProperties.Name="Prompt Helper library"
         Background="{StaticResource AppBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
@@ -27,7 +29,12 @@
                     <Border Width="36" Height="36" Background="{StaticResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
                         <TextBlock Text="P" Foreground="{StaticResource SurfaceBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                    <TextBlock Text="Prompt Helper"
+                               FontSize="20"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimaryBrush}"
+                               AutomationProperties.HeadingLevel="Level1"
+                               VerticalAlignment="Center"/>
                 </StackPanel>
 
                 <Button x:Name="SettingsButton"
@@ -89,7 +96,8 @@
                                         Style="{StaticResource CompactCopyButtonStyle}"
                                         Click="RecentPromptCopyButton_Click"
                                         ToolTip="Copy prompt"
-                                        AutomationProperties.Name="Copy recent prompt"/>
+                                        AutomationProperties.Name="{Binding Headline, StringFormat='Copy recent prompt: {0}'}"
+                                        AutomationProperties.LiveSetting="Polite"/>
                             </Grid>
                         </Border>
                     </DataTemplate>
@@ -127,6 +135,7 @@
                                 <Button x:Name="AncestorButton"
                                         Content="{Binding Name}"
                                         ToolTip="{Binding Name}"
+                                        AutomationProperties.Name="{Binding Name, StringFormat='Navigate to category: {0}'}"
                                         Style="{StaticResource BreadcrumbButtonStyle}"
                                         Click="BreadcrumbButton_Click"/>
                                 <!-- Separator -->
@@ -162,12 +171,15 @@
                 <TextBlock Text="Categories"
                            FontSize="18"
                            FontWeight="Bold"
+                           AutomationProperties.HeadingLevel="Level2"
                            Foreground="{StaticResource TextPrimaryBrush}"
                            VerticalAlignment="Center"/>
-                <Button Content="+ Add"
+                <Button Content="+ _Add"
                         Style="{StaticResource SecondaryButtonStyle}"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
+                        AutomationProperties.Name="Add category"
+                        ToolTip="Add category (Ctrl+Shift+N)"
                         Click="AddCategoryButton_Click"/>
             </Grid>
 
@@ -199,6 +211,7 @@
                                     <Button Grid.Column="0"
                                             Style="{StaticResource CategoryOpenButtonStyle}"
                                             Click="OpenCategoryButton_Click"
+                                            AutomationProperties.Name="{Binding Name, StringFormat='Open category: {0}'}"
                                             ToolTip="{Binding Name}">
                                         <TextBlock Text="{Binding Name}"
                                                    TextTrimming="CharacterEllipsis"
@@ -214,7 +227,7 @@
                                                 Content="🔧"
                                                 Style="{StaticResource IconButtonStyle}"
                                                 ToolTip="Category actions"
-                                                AutomationProperties.Name="Category actions"
+                                                AutomationProperties.Name="{Binding Name, StringFormat='Category actions: {0}'}"
                                                 Click="CategoryActionsButton_Click">
                                             <Button.ContextMenu>
                                                 <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -244,12 +257,15 @@
                 <TextBlock Text="Prompts"
                            FontSize="18"
                            FontWeight="Bold"
+                           AutomationProperties.HeadingLevel="Level2"
                            Foreground="{StaticResource TextPrimaryBrush}"
                            VerticalAlignment="Center"/>
-                <Button Content="+ Prompt"
+                <Button Content="+ _Prompt"
                         Style="{StaticResource PrimaryButtonStyle}"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
+                        AutomationProperties.Name="Create prompt"
+                        ToolTip="Create prompt (Ctrl+N)"
                         Click="AddPromptButton_Click"/>
             </Grid>
 
@@ -260,6 +276,7 @@
                            FontSize="14"
                            Foreground="{StaticResource SubtleTextBrush}"
                            FontStyle="Italic"
+                           AutomationProperties.LiveSetting="Polite"
                            Margin="0,16,0,0">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
@@ -276,6 +293,7 @@
                 <!-- Prompt Grid ListBox -->
                 <ListBox ItemsSource="{Binding Prompts}"
                          ItemContainerStyle="{StaticResource PromptGridListBoxItemStyle}"
+                         AutomationProperties.Name="Prompts in current category"
                          Background="Transparent"
                          BorderThickness="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -298,6 +316,8 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate DataType="{x:Type vm:PromptCardViewModel}">
                             <Border Style="{StaticResource CardBorderStyle}"
+                                    AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Prompt: {0}'}"
+                                    AutomationProperties.HelpText="{Binding LoadError}"
                                     ToolTipService.InitialShowDelay="500"
                                     ToolTipService.ShowDuration="60000">
                                 <Border.ToolTip>
@@ -343,16 +363,21 @@
                                                  Margin="0,0,0,10">
                                         <Button Content="Delete"
                                                 Style="{StaticResource CompactActionButtonStyle}"
+                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Delete prompt: {0}'}"
                                                 Click="DeletePromptButton_Click"/>
                                         <Button Content="Edit"
                                                 Style="{StaticResource CompactActionButtonStyle}"
+                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Edit prompt: {0}'}"
                                                 IsEnabled="{Binding IsContentAvailable}"
                                                 Click="EditPromptButton_Click"/>
                                         <Button Content="Move"
                                                 Style="{StaticResource CompactActionButtonStyle}"
+                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Move prompt: {0}'}"
                                                 Click="MovePromptButton_Click"/>
                                         <Button Content="{Binding CopyButtonText}"
                                                 Style="{StaticResource CompactActionButtonStyle}"
+                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Copy prompt: {0}'}"
+                                                AutomationProperties.LiveSetting="Polite"
                                                 IsEnabled="{Binding IsContentAvailable}"
                                                 Click="CopyPromptButton_Click"/>
                                     </UniformGrid>

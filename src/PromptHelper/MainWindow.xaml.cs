@@ -2,6 +2,7 @@ using System.IO;
 using System.Security;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using PromptHelper.Services;
 using PromptHelper.ViewModels;
 using PromptHelper.Views;
@@ -73,6 +74,40 @@ public partial class MainWindow : Window
         };
         bool? result = dialog.ShowDialog();
         CompleteSettingsDialog(result, dialog.RestartRequired);
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        ModifierKeys modifiers = Keyboard.Modifiers;
+
+        if (key == Key.N && modifiers == ModifierKeys.Control)
+        {
+            AddPromptButton_Click(this, new RoutedEventArgs());
+            e.Handled = true;
+            return;
+        }
+
+        if (key == Key.N && modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            AddCategoryButton_Click(this, new RoutedEventArgs());
+            e.Handled = true;
+            return;
+        }
+
+        if (key == Key.OemComma && modifiers == ModifierKeys.Control)
+        {
+            SettingsButton_Click(this, new RoutedEventArgs());
+            e.Handled = true;
+            return;
+        }
+
+        if (key == Key.Left && modifiers == ModifierKeys.Alt && _viewModel.Breadcrumbs.Count > 1)
+        {
+            BreadcrumbItemViewModel parent = _viewModel.Breadcrumbs[^2];
+            _viewModel.NavigateTo(parent.CategoryId);
+            e.Handled = true;
+        }
     }
 
     internal void CompleteSettingsDialog(
