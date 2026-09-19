@@ -228,6 +228,26 @@ public sealed class MainViewModelTests
         Assert.IsTrue(vm.Prompts.Any(p => p.Id == dup.Id));
     }
 
+    [TestMethod]
+    public void Prompt_rows_preserve_three_column_layout_without_duplicating_cards()
+    {
+        using var testDir = new TestDirectory();
+        var (vm, _, _) = CreateTestContext(testDir.Root);
+
+        for (int i = 0; i < 7; i++)
+        {
+            vm.CreatePrompt($"Prompt {i}");
+        }
+
+        CollectionAssert.AreEqual(
+            new[] { 3, 3, 1 },
+            vm.PromptRows.Select(row => row.Prompts.Count).ToArray());
+
+        CollectionAssert.AreEqual(
+            vm.Prompts.Select(prompt => prompt.Id).ToArray(),
+            vm.PromptRows.SelectMany(row => row.Prompts).Select(prompt => prompt.Id).ToArray());
+    }
+
     #endregion
 
     #region Recent Prompts Tests

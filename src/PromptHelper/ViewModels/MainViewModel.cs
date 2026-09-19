@@ -12,6 +12,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly PromptLibraryService _service;
     private readonly PromptRepository _promptRepo;
     private Guid? _currentCategoryId;
+    private int _promptCollectionVersion;
 
     public MainViewModel(
         PromptLibraryService service,
@@ -25,6 +26,7 @@ public sealed class MainViewModel : ObservableObject
         Breadcrumbs = new ObservableCollection<BreadcrumbItemViewModel>();
         ChildCategories = new ObservableCollection<CategoryItemViewModel>();
         Prompts = new ObservableCollection<PromptCardViewModel>();
+        PromptRows = new ObservableCollection<PromptRowViewModel>();
 
         Refresh();
     }
@@ -40,6 +42,7 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<BreadcrumbItemViewModel> Breadcrumbs { get; }
     public ObservableCollection<CategoryItemViewModel> ChildCategories { get; }
     public ObservableCollection<PromptCardViewModel> Prompts { get; }
+    public ObservableCollection<PromptRowViewModel> PromptRows { get; }
     public ObservableCollection<RecentPromptViewModel> RecentPrompts { get; } = new();
     public event EventHandler? PromptsChanged;
 
@@ -55,6 +58,11 @@ public sealed class MainViewModel : ObservableObject
 
     public void Refresh()
     {
+        // Invalidate in-flight preview work before replacing any cards. The version also
+        // gives preview completion an O(1) stale-result check instead of scanning the entire
+        // ObservableCollection once for every prompt.
+        Interlocked.Increment(ref _promptCollectionVersion);
+
         // Breadcrumbs
         var breadcrumbsData = _service.GetBreadcrumbs(CurrentCategoryId);
         Breadcrumbs.Clear();
@@ -86,6 +94,12 @@ public sealed class MainViewModel : ObservableObject
                 () => _promptRepo.Read(prompt.Id)));
         }
 
+        PromptRows.Clear();
+        for (int i = 0; i < Prompts.Count; i += 3)
+        {
+            PromptRows.Add(new PromptRowViewModel(Prompts.Skip(i).Take(3).ToArray()));
+        }
+
         OnPropertyChanged(nameof(HasPrompts));
         OnPropertyChanged(nameof(HasNoPrompts));
         OnPropertyChanged(nameof(HasChildCategories));
@@ -94,31 +108,40 @@ public sealed class MainViewModel : ObservableObject
 
     public async Task LoadPromptPreviewsAsync(CancellationToken cancellationToken = default)
     {
+        int collectionVersion = Volatile.Read(ref _promptCollectionVersion);
         PromptCardViewModel[] cards = Prompts.ToArray();
-        using var concurrencyGate = new SemaphoreSlim(4, 4);
 
-        Task[] tasks = cards.Select(async card =>
+        // Process at most four cards at a time. Creating one suspended Task per prompt can
+        // consume substantial memory for very large libraries even though only four reads
+        // are active. Batching keeps both I/O and task allocation strictly bounded.
+        foreach (PromptCardViewModel[] batch in cards.Chunk(4))
         {
-            await concurrencyGate.WaitAsync(cancellationToken);
-            try
-            {
-                PromptPreviewResult preview = await _service.LoadPromptPreviewAsync(
-                    card.Id,
-                    maxCharacters: 4000,
-                    cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
-                if (Prompts.Contains(card))
+            Task<(PromptCardViewModel Card, PromptPreviewResult Preview)>[] loads = batch
+                .Select(async card =>
                 {
-                    card.ApplyPreview(preview);
-                }
-            }
-            finally
-            {
-                concurrencyGate.Release();
-            }
-        }).ToArray();
+                    PromptPreviewResult preview = await _service.LoadPromptPreviewAsync(
+                        card.Id,
+                        maxCharacters: 4000,
+                        cancellationToken);
+                    return (card, preview);
+                })
+                .ToArray();
 
-        await Task.WhenAll(tasks);
+            (PromptCardViewModel Card, PromptPreviewResult Preview)[] results =
+                await Task.WhenAll(loads);
+
+            if (collectionVersion != Volatile.Read(ref _promptCollectionVersion))
+            {
+                return;
+            }
+
+            foreach ((PromptCardViewModel card, PromptPreviewResult preview) in results)
+            {
+                card.ApplyPreview(preview);
+            }
+        }
     }
 
     public void RecordSuccessfulPromptCopy(

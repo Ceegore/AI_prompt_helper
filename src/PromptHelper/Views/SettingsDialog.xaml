@@ -7,6 +7,7 @@
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
+        AutomationProperties.Name="Prompt Helper tools and settings"
         Background="{StaticResource AppBackgroundBrush}">
     <Border Background="{StaticResource SurfaceBrush}" Padding="28" CornerRadius="12" Margin="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
         <StackPanel>
@@ -15,7 +16,7 @@
                 <Border Width="36" Height="36" Background="{StaticResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
                     <TextBlock Text="P" Foreground="{StaticResource SurfaceBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
-                <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" AutomationProperties.HeadingLevel="Level1"/>
             </StackPanel>
 
             <!-- Usage Hints -->
@@ -29,7 +30,7 @@
                        FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,16"/>
 
             <!-- Data Folder -->
-            <TextBlock Text="Data folder:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+            <TextBlock x:Name="DataFolderLabel" Text="Data folder:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
             <Grid Margin="0,0,0,14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -39,12 +40,14 @@
                          Grid.Column="0"
                          Style="{StaticResource ModernTextBoxStyle}"
                          IsReadOnly="True"
+                         AutomationProperties.LabeledBy="{Binding ElementName=DataFolderLabel}"
                          FontSize="12"
                          Margin="0,0,8,0"/>
                 <Button Grid.Column="1"
                         Content="Browse…"
                         Style="{StaticResource SecondaryButtonStyle}"
                         Click="BrowseButton_Click"
+                        AutomationProperties.Name="Browse for data folder"
                         ToolTip="Select a different folder for Prompt Helper data"/>
             </Grid>
 

@@ -412,7 +412,8 @@ public sealed class PromptLibraryService
         catch (Exception ex) when (
             ex is IOException or
             UnauthorizedAccessException or
-            SecurityException)
+            SecurityException or
+            InvalidDataException)
         {
             throw new InvalidOperationException(
                 "The prompt content file could not be read for duplication.",

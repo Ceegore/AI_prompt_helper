@@ -17,7 +17,8 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        ApplyHighContrastResources();
+        ApplyAccessibilityPalette();
+        SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
 
         DispatcherUnhandledException += App_DispatcherUnhandledException;
 
@@ -272,10 +273,35 @@ public partial class App : Application
         }
     }
 
-    private void ApplyHighContrastResources()
+    private void SystemParameters_StaticPropertyChanged(
+        object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SystemParameters.HighContrast))
+        {
+            Dispatcher.Invoke(ApplyAccessibilityPalette);
+        }
+    }
+
+    private void ApplyAccessibilityPalette()
     {
         if (!SystemParameters.HighContrast)
         {
+            RestoreThemeBrush("AppBackgroundBrush", "AppBackgroundColor");
+            RestoreThemeBrush("SurfaceBrush", "SurfaceColor");
+            RestoreThemeBrush("TextPrimaryBrush", "TextPrimaryColor");
+            RestoreThemeBrush("TextSecondaryBrush", "TextSecondaryColor");
+            RestoreThemeBrush("SubtleTextBrush", "SubtleTextColor");
+            RestoreThemeBrush("BorderBrush", "BorderColor");
+            RestoreThemeBrush("BorderHoverBrush", "BorderHoverColor");
+            RestoreThemeBrush("AccentBrush", "AccentColor");
+            RestoreThemeBrush("AccentHoverBrush", "AccentHoverColor");
+            RestoreThemeBrush("AccentPressedBrush", "AccentPressedColor");
+            RestoreThemeBrush("AccentLightBrush", "AccentLightColor");
+            RestoreThemeBrush("SecondaryHoverBrush", "SecondaryHoverColor");
+            RestoreThemeBrush("DangerBrush", "DangerColor");
+            RestoreThemeBrush("DangerLightBrush", "DangerLightColor");
+            RestoreThemeBrush("DangerBorderBrush", "DangerBorderColor");
             return;
         }
 
@@ -297,6 +323,14 @@ public partial class App : Application
         OverrideThemeBrush("DangerBrush", SystemColors.WindowTextColor);
         OverrideThemeBrush("DangerLightBrush", SystemColors.WindowColor);
         OverrideThemeBrush("DangerBorderBrush", SystemColors.WindowTextColor);
+    }
+
+    private void RestoreThemeBrush(string brushKey, string colorKey)
+    {
+        if (TryFindResource(colorKey) is System.Windows.Media.Color color)
+        {
+            OverrideThemeBrush(brushKey, color);
+        }
     }
 
     private void OverrideThemeBrush(string resourceKey, System.Windows.Media.Color color)
@@ -338,6 +372,8 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
+
         _managedTreeLease?.Dispose();
         _managedTreeLease = null;
 

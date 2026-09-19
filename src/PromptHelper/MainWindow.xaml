@@ -292,8 +292,8 @@
                     </TextBlock.Style>
                 </TextBlock>
 
-                <!-- Prompt Grid ListBox -->
-                <ListBox ItemsSource="{Binding Prompts}"
+                <!-- Virtualized prompt rows; each realized row contains up to three cards. -->
+                <ListBox ItemsSource="{Binding PromptRows}"
                          ItemContainerStyle="{StaticResource PromptGridListBoxItemStyle}"
                          AutomationProperties.Name="Prompts in current category"
                          Background="Transparent"
@@ -319,85 +319,98 @@
                         </ItemsPanelTemplate>
                     </ListBox.ItemsPanel>
                     <ListBox.ItemTemplate>
-                        <DataTemplate DataType="{x:Type vm:PromptCardViewModel}">
-                            <Border Style="{StaticResource CardBorderStyle}"
-                                    AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Prompt: {0}'}"
-                                    AutomationProperties.HelpText="{Binding LoadError}"
-                                    ToolTipService.InitialShowDelay="500"
-                                    ToolTipService.ShowDuration="60000">
-                                <Border.ToolTip>
-                                    <ToolTip MaxWidth="700"
-                                             MaxHeight="480"
-                                             Padding="0">
-                                        <Border Background="{StaticResource SurfaceBrush}"
-                                                BorderBrush="{StaticResource BorderBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="8"
-                                                Padding="14">
-                                            <ScrollViewer MaxHeight="440"
-                                                          VerticalScrollBarVisibility="Auto"
-                                                          HorizontalScrollBarVisibility="Disabled">
-                                                <TextBlock Text="{Binding DisplayText}"
-                                                           FontFamily="{StaticResource MonospaceFontFamily}"
-                                                           FontSize="13"
+                        <DataTemplate DataType="{x:Type vm:PromptRowViewModel}">
+                            <ItemsControl ItemsSource="{Binding Prompts}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="3"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemContainerStyle>
+                                    <Style TargetType="ContentPresenter">
+                                        <Setter Property="Margin" Value="0,0,12,12"/>
+                                    </Style>
+                                </ItemsControl.ItemContainerStyle>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:PromptCardViewModel}">
+                                        <Border Style="{StaticResource CardBorderStyle}"
+                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Prompt: {0}'}"
+                                                AutomationProperties.HelpText="{Binding LoadError}"
+                                                ToolTipService.InitialShowDelay="500"
+                                                ToolTipService.ShowDuration="60000">
+                                            <Border.ToolTip>
+                                                <ToolTip MaxWidth="700"
+                                                         MaxHeight="480"
+                                                         Padding="0">
+                                                    <Border Background="{StaticResource SurfaceBrush}"
+                                                            BorderBrush="{StaticResource BorderBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="8"
+                                                            Padding="14">
+                                                        <ScrollViewer MaxHeight="440"
+                                                                      VerticalScrollBarVisibility="Auto"
+                                                                      HorizontalScrollBarVisibility="Disabled">
+                                                            <TextBlock Text="{Binding DisplayText}"
+                                                                       FontFamily="{StaticResource MonospaceFontFamily}"
+                                                                       FontSize="13"
+                                                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                                                       TextWrapping="Wrap"/>
+                                                        </ScrollViewer>
+                                                    </Border>
+                                                </ToolTip>
+                                            </Border.ToolTip>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+
+                                                <TextBlock Grid.Row="0"
+                                                           Text="{Binding PreviewTitle}"
+                                                           FontSize="14"
+                                                           FontWeight="Bold"
                                                            Foreground="{StaticResource TextPrimaryBrush}"
-                                                           TextWrapping="Wrap"/>
-                                            </ScrollViewer>
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Margin="0,0,0,10"/>
+
+                                                <UniformGrid Grid.Row="1"
+                                                             Columns="4"
+                                                             Margin="0,0,0,10">
+                                                    <Button Content="Delete"
+                                                            Style="{StaticResource CompactActionButtonStyle}"
+                                                            AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Delete prompt: {0}'}"
+                                                            Click="DeletePromptButton_Click"/>
+                                                    <Button Content="Edit"
+                                                            Style="{StaticResource CompactActionButtonStyle}"
+                                                            AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Edit prompt: {0}'}"
+                                                            IsEnabled="{Binding IsContentAvailable}"
+                                                            Click="EditPromptButton_Click"/>
+                                                    <Button Content="Move"
+                                                            Style="{StaticResource CompactActionButtonStyle}"
+                                                            AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Move prompt: {0}'}"
+                                                            Click="MovePromptButton_Click"/>
+                                                    <Button Content="{Binding CopyButtonText}"
+                                                            Style="{StaticResource CompactActionButtonStyle}"
+                                                            AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Copy prompt: {0}'}"
+                                                            AutomationProperties.LiveSetting="Polite"
+                                                            IsEnabled="{Binding IsContentAvailable}"
+                                                            Click="CopyPromptButton_Click"/>
+                                                </UniformGrid>
+
+                                                <TextBlock Grid.Row="2"
+                                                           Text="{Binding DisplayText}"
+                                                           FontFamily="{StaticResource MonospaceFontFamily}"
+                                                           FontSize="12"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                                           TextWrapping="Wrap"
+                                                           MaxHeight="110"
+                                                           ClipToBounds="True"/>
+                                            </Grid>
                                         </Border>
-                                    </ToolTip>
-                                </Border.ToolTip>
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-
-                                    <!-- Headline -->
-                                    <TextBlock Grid.Row="0"
-                                               Text="{Binding PreviewTitle}"
-                                               FontSize="14"
-                                               FontWeight="Bold"
-                                               Foreground="{StaticResource TextPrimaryBrush}"
-                                               TextTrimming="CharacterEllipsis"
-                                               Margin="0,0,0,10"/>
-
-                                    <!-- Action Buttons -->
-                                    <UniformGrid Grid.Row="1"
-                                                 Columns="4"
-                                                 Margin="0,0,0,10">
-                                        <Button Content="Delete"
-                                                Style="{StaticResource CompactActionButtonStyle}"
-                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Delete prompt: {0}'}"
-                                                Click="DeletePromptButton_Click"/>
-                                        <Button Content="Edit"
-                                                Style="{StaticResource CompactActionButtonStyle}"
-                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Edit prompt: {0}'}"
-                                                IsEnabled="{Binding IsContentAvailable}"
-                                                Click="EditPromptButton_Click"/>
-                                        <Button Content="Move"
-                                                Style="{StaticResource CompactActionButtonStyle}"
-                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Move prompt: {0}'}"
-                                                Click="MovePromptButton_Click"/>
-                                        <Button Content="{Binding CopyButtonText}"
-                                                Style="{StaticResource CompactActionButtonStyle}"
-                                                AutomationProperties.Name="{Binding PreviewTitle, StringFormat='Copy prompt: {0}'}"
-                                                AutomationProperties.LiveSetting="Polite"
-                                                IsEnabled="{Binding IsContentAvailable}"
-                                                Click="CopyPromptButton_Click"/>
-                                    </UniformGrid>
-
-                                    <!-- Short Prompt Preview -->
-                                    <TextBlock Grid.Row="2"
-                                               Text="{Binding DisplayText}"
-                                               FontFamily="{StaticResource MonospaceFontFamily}"
-                                               FontSize="12"
-                                               Foreground="{StaticResource TextPrimaryBrush}"
-                                               TextWrapping="Wrap"
-                                               MaxHeight="110"
-                                               ClipToBounds="True"/>
-                                </Grid>
-                            </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
