@@ -8,6 +8,6 @@
     "generate": "node ../GenerateAppIconNative.js ../../src/PromptHelper/Assets/PromptHelperLogo.svg ../../src/PromptHelper/Assets/PromptHelper.ico"
   },
   "dependencies": {
-    "sharp": "0.34.4"
+    "sharp": "0.35.4"
   }
 }

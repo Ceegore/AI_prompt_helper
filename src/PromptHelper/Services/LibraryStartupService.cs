@@ -81,6 +81,52 @@ public sealed class LibraryStartupService
         // 2. Inspect Backup
         MetadataReadResult backupResult = ReadMetadataState(_paths.LibraryBackupPath);
 
+        // A structurally valid primary remains usable even when one or more prompt bodies
+        // are missing or unreadable. The backup is consulted opportunistically first: a
+        // complete backup can still restore the last fully consistent state, but an unusable
+        // backup must not make the otherwise navigable primary metadata unavailable.
+        //
+        // This branch also deliberately precedes the future-schema/unreadable-backup errors.
+        // Those backup states are fatal only when recovery actually depends on the backup.
+        if (primaryPackage != null && primaryPackage is not LibraryPackageState.Healthy)
+        {
+            LibraryPackageState? candidateBackupPackage = null;
+            if (backupResult is MetadataReadResult.Valid candidateBackupValid)
+            {
+                candidateBackupPackage = inspector.Inspect(candidateBackupValid.Document);
+            }
+
+            if (candidateBackupPackage is LibraryPackageState.Healthy candidateBackupHealthy)
+            {
+                if (primaryResult is MetadataReadResult.Valid primaryValidForRecovery)
+                {
+                    _libraryRepo.TryCreateIncompleteRecoveryCopy(primaryValidForRecovery.Document);
+                }
+
+                var commitResult = _libraryRepo.Commit(candidateBackupHealthy.Document);
+                TryRemoveStaleMarker();
+
+                string warning = RecoveryWarning;
+                if (!commitResult.BackupSynchronized && commitResult.Warning != null)
+                {
+                    warning += "\r\n\r\n" + commitResult.Warning;
+                }
+
+                return new StartupResult(candidateBackupHealthy.Document, true, warning);
+            }
+
+            TryRemoveStaleMarker();
+            string degradedWarning = BuildDegradedModeWarning(
+                primaryPackage,
+                backupResult,
+                candidateBackupPackage);
+
+            return new StartupResult(
+                ((MetadataReadResult.Valid)primaryResult).Document,
+                false,
+                degradedWarning);
+        }
+
         if (backupResult is MetadataReadResult.FutureSchema backupFuture)
         {
             throw new UnsupportedLibrarySchemaException(backupFuture.Version);
@@ -97,33 +143,6 @@ public sealed class LibraryStartupService
         if (backupResult is MetadataReadResult.Valid backupValid)
         {
             backupPackage = inspector.Inspect(backupValid.Document);
-        }
-
-        // Primary is metadata current, package incomplete
-        if (primaryPackage != null && primaryPackage is not LibraryPackageState.Healthy)
-        {
-            if (backupPackage is LibraryPackageState.Healthy backupHealthy1)
-            {
-                // recover metadata from complete backup; warn
-                if (primaryResult is MetadataReadResult.Valid pv)
-                {
-                    _libraryRepo.TryCreateIncompleteRecoveryCopy(pv.Document);
-                }
-                var commitResult = _libraryRepo.Commit(backupHealthy1.Document);
-                TryRemoveStaleMarker();
-
-                string warning = RecoveryWarning;
-                if (!commitResult.BackupSynchronized && commitResult.Warning != null)
-                {
-                    warning += "\r\n\r\n" + commitResult.Warning;
-                }
-                return new StartupResult(backupHealthy1.Document, true, warning);
-            }
-            else
-            {
-                // backup incomplete/missing/corrupt
-                throw new InvalidDataException("Primary library is incomplete and no complete backup is available.");
-            }
         }
 
         // Primary is Corrupt
@@ -180,6 +199,44 @@ public sealed class LibraryStartupService
 
         throw new InvalidOperationException("Unexpected startup state.");
     }
+
+    private static string BuildDegradedModeWarning(
+        LibraryPackageState primaryPackage,
+        MetadataReadResult backupResult,
+        LibraryPackageState? backupPackage)
+    {
+        string primaryProblem = DescribePackageProblem(primaryPackage);
+        string backupProblem = backupResult switch
+        {
+            MetadataReadResult.Missing => "No safety backup metadata is available.",
+            MetadataReadResult.Corrupt => "The safety backup metadata is corrupt.",
+            MetadataReadResult.Unreadable unreadable =>
+                $"The safety backup metadata could not be read: {unreadable.Error.Message}",
+            MetadataReadResult.FutureSchema future =>
+                $"The safety backup uses newer schema version {future.Version} and was preserved unchanged.",
+            MetadataReadResult.Valid when backupPackage != null =>
+                "The safety backup is also incomplete: " + DescribePackageProblem(backupPackage),
+            _ => "No complete safety backup is available."
+        };
+
+        return
+            "Prompt Helper started in degraded mode because at least one prompt body is unavailable. " +
+            "All intact prompts remain usable; unavailable prompts are marked and cannot be copied or edited.\r\n\r\n" +
+            primaryProblem + "\r\n\r\n" + backupProblem + "\r\n\r\n" +
+            "Restore the affected .md file from an external backup, or remove the unavailable prompt from the library.";
+    }
+
+    private static string DescribePackageProblem(LibraryPackageState package) => package switch
+    {
+        LibraryPackageState.BodyMissing missing =>
+            $"Prompt {missing.PromptId:N} is missing ({missing.Path}).",
+        LibraryPackageState.BodyUnreadable unreadable =>
+            $"Prompt {unreadable.PromptId:N} cannot be read ({unreadable.Path}): {unreadable.Error.Message}",
+        LibraryPackageState.MetadataInvalid invalid =>
+            $"The library metadata is invalid: {invalid.Error.Message}",
+        LibraryPackageState.Healthy => "The library package is healthy.",
+        _ => "The library package is incomplete."
+    };
 
     private StartupResult HandleFirstRunOrInterruptedInit()
     {

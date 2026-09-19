@@ -231,7 +231,8 @@ public sealed class PromptLibraryService
             catch (Exception ex) when (
                 ex is IOException or
                 UnauthorizedAccessException or
-                SecurityException)
+                SecurityException or
+                InvalidDataException)
             {
                 loadError = ex.Message;
             }
