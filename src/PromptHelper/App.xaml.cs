@@ -17,6 +17,8 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        ApplyHighContrastResources();
+
         DispatcherUnhandledException += App_DispatcherUnhandledException;
 
         var diagnostics = new StartupDiagnosticCollector();
@@ -267,6 +269,53 @@ public partial class App : Application
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             Shutdown();
+        }
+    }
+
+    private void ApplyHighContrastResources()
+    {
+        if (!SystemParameters.HighContrast)
+        {
+            return;
+        }
+
+        // Override the application-level keys before any window is created. StaticResource
+        // lookups in the merged theme then resolve to the user's Windows high-contrast
+        // palette instead of the normal light palette.
+        OverrideThemeBrush("AppBackgroundBrush", SystemColors.WindowColor);
+        OverrideThemeBrush("SurfaceBrush", SystemColors.WindowColor);
+        OverrideThemeBrush("TextPrimaryBrush", SystemColors.WindowTextColor);
+        OverrideThemeBrush("TextSecondaryBrush", SystemColors.WindowTextColor);
+        OverrideThemeBrush("SubtleTextBrush", SystemColors.WindowTextColor);
+        OverrideThemeBrush("BorderBrush", SystemColors.WindowTextColor);
+        OverrideThemeBrush("BorderHoverBrush", SystemColors.HighlightColor);
+        OverrideThemeBrush("AccentBrush", SystemColors.HighlightColor);
+        OverrideThemeBrush("AccentHoverBrush", SystemColors.HotTrackColor);
+        OverrideThemeBrush("AccentPressedBrush", SystemColors.HighlightColor);
+        OverrideThemeBrush("AccentLightBrush", SystemColors.WindowColor);
+        OverrideThemeBrush("SecondaryHoverBrush", SystemColors.ControlColor);
+        OverrideThemeBrush("DangerBrush", SystemColors.WindowTextColor);
+        OverrideThemeBrush("DangerLightBrush", SystemColors.WindowColor);
+        OverrideThemeBrush("DangerBorderBrush", SystemColors.WindowTextColor);
+    }
+
+    private void OverrideThemeBrush(string resourceKey, System.Windows.Media.Color color)
+    {
+        if (TryFindResource(resourceKey) is not System.Windows.Media.SolidColorBrush brush)
+        {
+            return;
+        }
+
+        // This runs before the first window consumes/seals the theme styles, so the shared
+        // brush instances are normally still mutable and every StaticResource reference sees
+        // the system color. The replacement is a defensive fallback for a pre-frozen brush.
+        if (brush.IsFrozen)
+        {
+            Resources[resourceKey] = new System.Windows.Media.SolidColorBrush(color);
+        }
+        else
+        {
+            brush.Color = color;
         }
     }
 
