@@ -1,5 +1,6 @@
 using System.IO;
 using PromptHelper.Infrastructure;
+using PromptHelper.Models;
 
 namespace PromptHelper.ViewModels;
 
