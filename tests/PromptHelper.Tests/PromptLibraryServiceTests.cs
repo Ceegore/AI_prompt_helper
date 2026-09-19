@@ -673,6 +673,22 @@ public sealed class PromptLibraryServiceTests
     }
 
     [TestMethod]
+    public void Duplicate_invalid_utf8_prompt_reports_an_ordinary_unavailable_content_error()
+    {
+        using var testDir = new TestDirectory();
+        var (service, paths, _, _, _, _) = CreateTestContext(testDir.Root);
+        var prompt = service.CreatePrompt(null, "Initially valid", "Broken duplicate").Value;
+        File.WriteAllBytes(paths.GetPromptPath(prompt.Id), [0xC3, 0x28]);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => service.DuplicatePrompt(prompt.Id, null));
+
+        StringAssert.Contains(error.Message, "could not be read");
+        Assert.IsInstanceOfType<InvalidDataException>(error.InnerException);
+        Assert.AreEqual(1, service.CurrentDocument.Prompts.Count);
+    }
+
+    [TestMethod]
     public void Deep_hierarchy_test()
     {
         using var testDir = new TestDirectory();

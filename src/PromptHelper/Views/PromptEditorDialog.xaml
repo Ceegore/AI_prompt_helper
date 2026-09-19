@@ -7,6 +7,7 @@
         MinWidth="640"
         MinHeight="450"
         WindowStartupLocation="CenterOwner"
+        AutomationProperties.Name="Prompt editor"
         Background="{StaticResource AppBackgroundBrush}">
     <Grid Margin="20">
         <Grid.RowDefinitions>
@@ -18,6 +19,7 @@
         </Grid.RowDefinitions>
 
         <TextBlock x:Name="TitleTextBlock"
+                   AutomationProperties.HeadingLevel="Level1"
                    FontSize="18"
                    FontWeight="Bold"
                    Foreground="{StaticResource TextPrimaryBrush}"
@@ -30,7 +32,8 @@
             </Grid.RowDefinitions>
 
             <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
-                <TextBlock Text="Headline"
+                <TextBlock x:Name="HeadlineLabel"
+                           Text="Headline"
                            FontWeight="SemiBold"
                            Foreground="{StaticResource TextPrimaryBrush}"/>
                 <TextBlock Text=" &lt;optional&gt;"
@@ -44,6 +47,7 @@
                      AcceptsReturn="False"
                      AcceptsTab="False"
                      MaxLines="1"
+                     AutomationProperties.LabeledBy="{Binding ElementName=HeadlineLabel}"
                      TextChanged="HeadlineTextBox_TextChanged"/>
         </Grid>
 
@@ -59,6 +63,7 @@
         <TextBox x:Name="EditorTextBox"
                  Grid.Row="3"
                  Style="{StaticResource PromptEditorTextBoxStyle}"
+                 AutomationProperties.Name="Prompt text"
                  Margin="0,0,0,16"/>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">

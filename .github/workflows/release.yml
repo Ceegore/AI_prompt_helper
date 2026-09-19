@@ -48,6 +48,9 @@ jobs:
         shell: pwsh
         run: ./tools/VerifyIconGeneration.ps1
 
+      - name: Audit icon generator dependencies
+        run: npm audit --package-lock-only --audit-level=high --prefix tools/icon-generator
+
       - name: Restore
         run: dotnet restore PromptHelper.slnx
 

@@ -7,22 +7,27 @@
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
+        AutomationProperties.Name="Category name dialog"
         Background="{StaticResource AppBackgroundBrush}">
     <Border Background="{StaticResource SurfaceBrush}" Padding="24" CornerRadius="12" Margin="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
         <StackPanel>
             <TextBlock x:Name="TitleTextBlock"
+                       AutomationProperties.HeadingLevel="Level1"
                        FontSize="18"
                        FontWeight="Bold"
                        Foreground="{StaticResource TextPrimaryBrush}"
                        Margin="0,0,0,16"/>
             <TextBox x:Name="NameInputTextBox"
                      Style="{StaticResource ModernTextBoxStyle}"
+                     AutomationProperties.Name="Category name"
+                     AutomationProperties.HelpText="Enter a unique category name."
                      KeyDown="NameInputTextBox_KeyDown"
                      Margin="0,0,0,8"/>
             <TextBlock x:Name="ErrorTextBlock"
                        FontSize="13"
                        Foreground="{StaticResource DangerBrush}"
                        TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Assertive"
                        Visibility="Collapsed"
                        Margin="0,0,0,16"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">

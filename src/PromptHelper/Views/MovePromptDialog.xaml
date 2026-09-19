@@ -7,12 +7,14 @@
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
+        AutomationProperties.Name="Move or duplicate prompt"
         Background="{StaticResource AppBackgroundBrush}">
     <Border Background="{StaticResource SurfaceBrush}" Padding="24" CornerRadius="12" Margin="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
         <StackPanel>
             <TextBlock Text="Move Prompt"
                        FontSize="18"
                        FontWeight="Bold"
+                       AutomationProperties.HeadingLevel="Level1"
                        Foreground="{StaticResource TextPrimaryBrush}"
                        Margin="0,0,0,12"/>
 
@@ -29,7 +31,8 @@
                            TextTrimming="CharacterEllipsis"/>
             </Border>
 
-            <TextBlock Text="Destination"
+            <TextBlock x:Name="DestinationLabel"
+                       Text="Destination"
                        FontSize="13"
                        FontWeight="SemiBold"
                        Foreground="{StaticResource TextPrimaryBrush}"
@@ -39,6 +42,7 @@
                       Style="{StaticResource ModernComboBoxStyle}"
                       DisplayMemberPath="DisplayPath"
                       SelectedValuePath="CategoryId"
+                      AutomationProperties.LabeledBy="{Binding ElementName=DestinationLabel}"
                       Margin="0,0,0,16"/>
 
             <CheckBox x:Name="CopyInsteadOfMoveCheckBox"
@@ -52,6 +56,7 @@
                        Text="Unavailable prompts can be moved but cannot be duplicated."
                        FontSize="12"
                        Foreground="{StaticResource SubtleTextBrush}"
+                       AutomationProperties.LiveSetting="Polite"
                        Visibility="Collapsed"
                        Margin="0,0,0,16"/>
 

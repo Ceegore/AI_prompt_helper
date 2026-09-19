@@ -81,17 +81,26 @@ public partial class MainWindow : Window
 
     private async void StartPromptPreviewLoad()
     {
-        _promptPreviewCancellation?.Cancel();
-        _promptPreviewCancellation?.Dispose();
-        _promptPreviewCancellation = new CancellationTokenSource();
+        var current = new CancellationTokenSource();
+        CancellationTokenSource? previous = _promptPreviewCancellation;
+        _promptPreviewCancellation = current;
+        previous?.Cancel();
 
         try
         {
-            await _viewModel.LoadPromptPreviewsAsync(_promptPreviewCancellation.Token);
+            await _viewModel.LoadPromptPreviewsAsync(current.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (current.IsCancellationRequested)
         {
             // Window closed or a newer preview request replaced this one.
+        }
+        finally
+        {
+            current.Dispose();
+            if (ReferenceEquals(_promptPreviewCancellation, current))
+            {
+                _promptPreviewCancellation = null;
+            }
         }
     }
 
@@ -99,7 +108,6 @@ public partial class MainWindow : Window
     {
         _viewModel.PromptsChanged -= ViewModel_PromptsChanged;
         _promptPreviewCancellation?.Cancel();
-        _promptPreviewCancellation?.Dispose();
         _promptPreviewCancellation = null;
     }
 

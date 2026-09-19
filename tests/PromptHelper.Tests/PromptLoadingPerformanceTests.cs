@@ -89,5 +89,7 @@ public sealed class PromptLoadingPerformanceTests
         StringAssert.Contains(xaml, "VirtualizingPanel.IsVirtualizing=\"True\"");
         StringAssert.Contains(xaml, "VirtualizingPanel.VirtualizationMode=\"Recycling\"");
         StringAssert.Contains(xaml, "<VirtualizingStackPanel/>");
+        StringAssert.Contains(xaml, "ItemsSource=\"{Binding PromptRows}\"");
+        StringAssert.Contains(xaml, "<UniformGrid Columns=\"3\"/>");
     }
 }

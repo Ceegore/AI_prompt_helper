@@ -48,5 +48,33 @@ public sealed class AccessibilityRegressionTests
         StringAssert.Contains(code, "SystemColors.WindowColor");
         StringAssert.Contains(code, "SystemColors.WindowTextColor");
         StringAssert.Contains(code, "SystemColors.HighlightColor");
+        StringAssert.Contains(code, "SystemParameters.StaticPropertyChanged +=");
+        StringAssert.Contains(code, "RestoreThemeBrush");
+    }
+
+    [TestMethod]
+    public void Dialogs_expose_headings_labels_and_live_validation_to_assistive_technology()
+    {
+        string editor = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Views", "PromptEditorDialog.xaml"));
+        string name = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Views", "NameDialog.xaml"));
+        string settings = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Views", "SettingsDialog.xaml"));
+        string move = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Views", "MovePromptDialog.xaml"));
+        string delete = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Views", "ConfirmDeleteDialog.xaml"));
+
+        StringAssert.Contains(editor, "AutomationProperties.LabeledBy=\"{Binding ElementName=HeadlineLabel}\"");
+        StringAssert.Contains(editor, "AutomationProperties.Name=\"Prompt text\"");
+        StringAssert.Contains(name, "AutomationProperties.LiveSetting=\"Assertive\"");
+        StringAssert.Contains(settings, "AutomationProperties.LabeledBy=\"{Binding ElementName=DataFolderLabel}\"");
+        StringAssert.Contains(move, "AutomationProperties.LabeledBy=\"{Binding ElementName=DestinationLabel}\"");
+
+        foreach (string dialog in new[] { editor, name, settings, move, delete })
+        {
+            StringAssert.Contains(dialog, "AutomationProperties.HeadingLevel=\"Level1\"");
+        }
     }
 }
