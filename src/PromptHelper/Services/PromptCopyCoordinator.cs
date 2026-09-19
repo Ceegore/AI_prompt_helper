@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using PromptHelper.ViewModels;
 
 namespace PromptHelper.Services;
@@ -24,6 +26,17 @@ public sealed class PromptCopyCoordinator
             promptId,
             effectiveHeadline,
             text);
+        return text;
+    }
+
+    public async Task<string> CopyAsync(
+        Guid promptId,
+        string effectiveHeadline,
+        CancellationToken cancellationToken = default)
+    {
+        string text = await _viewModel.GetPromptContentAsync(promptId, cancellationToken);
+        _clipboard.CopyText(text);
+        _viewModel.RecordSuccessfulPromptCopy(promptId, effectiveHeadline, text);
         return text;
     }
 }

@@ -8,6 +8,8 @@
         MinWidth="900"
         MinHeight="600"
         WindowStartupLocation="CenterScreen"
+        Loaded="MainWindow_Loaded"
+        Closed="MainWindow_Closed"
         Background="{StaticResource AppBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
@@ -278,8 +280,11 @@
                          ItemContainerStyle="{StaticResource PromptGridListBoxItemStyle}"
                          Background="Transparent"
                          BorderThickness="0"
+                         ScrollViewer.CanContentScroll="True"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling">
                     <ListBox.Style>
                         <Style TargetType="ListBox">
                             <Setter Property="Visibility" Value="Visible"/>
@@ -292,7 +297,7 @@
                     </ListBox.Style>
                     <ListBox.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <UniformGrid Columns="3"/>
+                            <VirtualizingStackPanel/>
                         </ItemsPanelTemplate>
                     </ListBox.ItemsPanel>
                     <ListBox.ItemTemplate>

@@ -27,6 +27,17 @@ public sealed record PromptDisplayRecord(
     bool IsContentAvailable,
     string? LoadError);
 
+public sealed record PromptSummaryRecord(
+    Guid Id,
+    string? Title);
+
+public sealed record PromptPreviewResult(
+    string PreviewText,
+    bool IsContentAvailable,
+    string? LoadError,
+    bool IsTruncated,
+    long FileSizeBytes);
+
 public sealed record DataFolderChangeResult(
     string NormalizedTargetRoot,
     bool ExistingLibraryFound,

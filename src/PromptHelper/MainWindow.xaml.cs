@@ -1,5 +1,6 @@
 using System.IO;
 using System.Security;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using PromptHelper.Services;
@@ -25,6 +26,7 @@ public partial class MainWindow : Window
     private readonly IApplicationLifetime _applicationLifetime;
     private readonly Action<string, string>? _showRestartMessage;
     private bool _fatalMutationShutdownRequested;
+    private CancellationTokenSource? _promptPreviewCancellation;
 
     public MainWindow(
         MainViewModel viewModel,
@@ -43,6 +45,7 @@ public partial class MainWindow : Window
         _applicationLifetime = applicationLifetime ?? new WpfApplicationLifetime();
         _showRestartMessage = showRestartMessage;
         DataContext = _viewModel;
+        _viewModel.PromptsChanged += ViewModel_PromptsChanged;
 
         TryApplyApplicationIcon();
     }
@@ -63,6 +66,40 @@ public partial class MainWindow : Window
         {
             // Optional icon resource if not yet packaged
         }
+    }
+
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        StartPromptPreviewLoad();
+    }
+
+    private void ViewModel_PromptsChanged(object? sender, EventArgs e)
+    {
+        StartPromptPreviewLoad();
+    }
+
+    private async void StartPromptPreviewLoad()
+    {
+        _promptPreviewCancellation?.Cancel();
+        _promptPreviewCancellation?.Dispose();
+        _promptPreviewCancellation = new CancellationTokenSource();
+
+        try
+        {
+            await _viewModel.LoadPromptPreviewsAsync(_promptPreviewCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Window closed or a newer preview request replaced this one.
+        }
+    }
+
+    private void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        _viewModel.PromptsChanged -= ViewModel_PromptsChanged;
+        _promptPreviewCancellation?.Cancel();
+        _promptPreviewCancellation?.Dispose();
+        _promptPreviewCancellation = null;
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -323,7 +360,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void EditPromptButton_Click(object sender, RoutedEventArgs e)
+    private async void EditPromptButton_Click(object sender, RoutedEventArgs e)
     {
         if (_fatalMutationShutdownRequested)
         {
@@ -335,9 +372,9 @@ public partial class MainWindow : Window
             string promptText;
             try
             {
-                promptText = _viewModel.GetPromptContent(card.Id);
+                promptText = await _viewModel.GetPromptContentAsync(card.Id);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException or InvalidDataException)
             {
                 MessageBox.Show(
                     this,
@@ -485,7 +522,7 @@ public partial class MainWindow : Window
             try
             {
                 card.IsCopying = true;
-                CopyPromptToClipboard(card.Id, card.PreviewTitle);
+                await _copyCoordinator.CopyAsync(card.Id, card.PreviewTitle);
                 card.CopyButtonText = "Copied ✓";
 
                 await Task.Delay(900);
@@ -493,7 +530,7 @@ public partial class MainWindow : Window
                 card.CopyButtonText = "Copy";
                 card.IsCopying = false;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException or InvalidDataException)
             {
                 card.CopyButtonText = "Copy";
                 card.IsCopying = false;
@@ -520,7 +557,7 @@ public partial class MainWindow : Window
             try
             {
                 recent.IsCopying = true;
-                CopyPromptToClipboard(recent.Id, recent.Headline);
+                await _copyCoordinator.CopyAsync(recent.Id, recent.Headline);
                 recent.CopyButtonText = "Copied ✓";
 
                 await Task.Delay(900);
@@ -528,7 +565,7 @@ public partial class MainWindow : Window
                 recent.CopyButtonText = "Copy";
                 recent.IsCopying = false;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or SecurityException or InvalidDataException)
             {
                 recent.CopyButtonText = "Copy";
                 recent.IsCopying = false;

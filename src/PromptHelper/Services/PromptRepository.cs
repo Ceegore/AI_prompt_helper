@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using PromptHelper.Infrastructure;
 
 namespace PromptHelper.Services;
@@ -59,6 +62,67 @@ public sealed class PromptRepository
         catch (DirectoryNotFoundException)
         {
             throw new FileNotFoundException("Prompt file does not exist.", path);
+        }
+    }
+
+    public async Task<string> ReadAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        string path = _paths.GetPromptPath(id);
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+            return StrictUtf8Text.Decode(bytes, $"prompt body '{id}'");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new FileNotFoundException("Prompt file does not exist.", path);
+        }
+    }
+
+    public async Task<(string Text, bool IsTruncated, long FileSizeBytes)> ReadPreviewAsync(
+        Guid id,
+        int maxCharacters,
+        CancellationToken cancellationToken = default)
+    {
+        if (maxCharacters <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxCharacters));
+        }
+
+        string path = _paths.GetPromptPath(id);
+        try
+        {
+            await using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite,
+                bufferSize: 4096,
+                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            long fileSizeBytes = stream.Length;
+            using var reader = new StreamReader(
+                stream,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+                detectEncodingFromByteOrderMarks: false,
+                bufferSize: 4096,
+                leaveOpen: false);
+
+            char[] buffer = new char[maxCharacters + 1];
+            int read = await reader.ReadBlockAsync(buffer.AsMemory(), cancellationToken);
+            bool truncated = read > maxCharacters;
+            int length = Math.Min(read, maxCharacters);
+            int start = length > 0 && buffer[0] == '\uFEFF' ? 1 : 0;
+
+            return (new string(buffer, start, length - start), truncated, fileSizeBytes);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new FileNotFoundException("Prompt file does not exist.", path);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException($"Invalid UTF-8 in prompt body '{id}'.", ex);
         }
     }
 
