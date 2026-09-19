@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security;
+using System.Threading;
+using System.Threading.Tasks;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 
@@ -239,6 +241,41 @@ public sealed class PromptLibraryService
         }
 
         return results;
+    }
+
+    public IReadOnlyList<PromptSummaryRecord> GetPromptSummaries(Guid? categoryId)
+    {
+        return _document.Prompts
+            .Where(p => p.CategoryId == categoryId)
+            .OrderBy(p => p.SortOrder)
+            .ThenBy(p => p.Id)
+            .Select(p => new PromptSummaryRecord(p.Id, p.Title))
+            .ToList();
+    }
+
+    public async Task<PromptPreviewResult> LoadPromptPreviewAsync(
+        Guid promptId,
+        int maxCharacters = 4000,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var preview = await _promptRepo.ReadPreviewAsync(promptId, maxCharacters, cancellationToken);
+            return new PromptPreviewResult(
+                preview.Text,
+                true,
+                null,
+                preview.IsTruncated,
+                preview.FileSizeBytes);
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            SecurityException or
+            InvalidDataException)
+        {
+            return new PromptPreviewResult(string.Empty, false, ex.Message, false, 0);
+        }
     }
 
     public OperationResult<PromptRecord> CreatePrompt(Guid? categoryId, string content, string? title)

@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Threading;
+using System.Threading.Tasks;
 using PromptHelper.Infrastructure;
 using PromptHelper.Models;
 using PromptHelper.Services;
@@ -39,6 +41,7 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<CategoryItemViewModel> ChildCategories { get; }
     public ObservableCollection<PromptCardViewModel> Prompts { get; }
     public ObservableCollection<RecentPromptViewModel> RecentPrompts { get; } = new();
+    public event EventHandler? PromptsChanged;
 
     public bool HasPrompts => Prompts.Count > 0;
     public bool HasNoPrompts => Prompts.Count == 0;
@@ -73,21 +76,49 @@ public sealed class MainViewModel : ObservableObject
         }
 
         // Prompts
-        var promptsData = _service.GetPrompts(CurrentCategoryId);
+        var promptsData = _service.GetPromptSummaries(CurrentCategoryId);
         Prompts.Clear();
         foreach (var prompt in promptsData)
         {
             Prompts.Add(new PromptCardViewModel(
                 prompt.Id,
                 prompt.Title,
-                prompt.Content,
-                prompt.IsContentAvailable,
-                prompt.LoadError));
+                () => _promptRepo.Read(prompt.Id)));
         }
 
         OnPropertyChanged(nameof(HasPrompts));
         OnPropertyChanged(nameof(HasNoPrompts));
         OnPropertyChanged(nameof(HasChildCategories));
+        PromptsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task LoadPromptPreviewsAsync(CancellationToken cancellationToken = default)
+    {
+        PromptCardViewModel[] cards = Prompts.ToArray();
+        using var concurrencyGate = new SemaphoreSlim(4, 4);
+
+        Task[] tasks = cards.Select(async card =>
+        {
+            await concurrencyGate.WaitAsync(cancellationToken);
+            try
+            {
+                PromptPreviewResult preview = await _service.LoadPromptPreviewAsync(
+                    card.Id,
+                    maxCharacters: 4000,
+                    cancellationToken);
+
+                if (Prompts.Contains(card))
+                {
+                    card.ApplyPreview(preview);
+                }
+            }
+            finally
+            {
+                concurrencyGate.Release();
+            }
+        }).ToArray();
+
+        await Task.WhenAll(tasks);
     }
 
     public void RecordSuccessfulPromptCopy(
@@ -233,5 +264,10 @@ public sealed class MainViewModel : ObservableObject
     public string GetPromptContent(Guid promptId)
     {
         return _promptRepo.Read(promptId);
+    }
+
+    public Task<string> GetPromptContentAsync(Guid promptId, CancellationToken cancellationToken = default)
+    {
+        return _promptRepo.ReadAsync(promptId, cancellationToken);
     }
 }
