@@ -174,7 +174,7 @@ public sealed class Cruu17RegressionTests
 
         Assert.ThrowsExactly<CommittedAtomicReplacementRequiresRestartException>(() =>
             repo.SaveIfUnchanged(
-                new AppSettings { SchemaVersion = 1, DataRootPath = temp.Root },
+                new AppSettings { SchemaVersion = AppSettings.CurrentSchemaVersion, DataRootPath = temp.Root },
                 expected));
         Assert.AreEqual(Path.GetFullPath(temp.Root), repo.GetEffectiveDataRoot());
     }

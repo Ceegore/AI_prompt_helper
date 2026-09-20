@@ -617,7 +617,7 @@ public sealed class Cruu15HistoricalCoverageTests
         byte[] theirs = File.ReadAllBytes(settingsPath);
 
         Assert.ThrowsExactly<InvalidOperationException>(() => repo.SaveIfUnchanged(
-            new AppSettings { SchemaVersion = 1, DataRootPath = temp.Root },
+            new AppSettings { SchemaVersion = AppSettings.CurrentSchemaVersion, DataRootPath = temp.Root },
             precondition));
 
         CollectionAssert.AreEqual(theirs, File.ReadAllBytes(settingsPath));

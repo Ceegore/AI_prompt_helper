@@ -12,12 +12,14 @@ public partial class App : Application
 {
     private AppInstanceLock? _appLock;
     private ManagedDataRootSessionLease? _managedTreeLease;
+    private WpfThemeService? _themeService;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        ApplyAccessibilityPalette();
+        _themeService = new WpfThemeService(this);
+        _themeService.ApplyPreferredTheme(useDarkMode: false);
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
 
         DispatcherUnhandledException += App_DispatcherUnhandledException;
@@ -31,6 +33,7 @@ public partial class App : Application
             var settingsRepo = new AppSettingsRepository();
             var settingsResult = settingsRepo.LoadOrRecover();
             var settings = settingsResult.Settings;
+            _themeService.ApplyPreferredTheme(settings.UseDarkMode);
 
             string effectiveDataRoot = settingsRepo.GetEffectiveDataRoot(settings);
 
@@ -214,7 +217,12 @@ public partial class App : Application
             var migrationService = new DataFolderMigrationService();
             var mainViewModel = new MainViewModel(libraryService, promptRepo, paths.RootDirectory);
 
-            var mainWindow = new MainWindow(mainViewModel, clipboardService, settingsRepo, migrationService);
+            var mainWindow = new MainWindow(
+                mainViewModel,
+                clipboardService,
+                settingsRepo,
+                migrationService,
+                themeService: _themeService);
             MainWindow = mainWindow;
             mainWindow.Show();
 
@@ -279,77 +287,19 @@ public partial class App : Application
     {
         if (e.PropertyName == nameof(SystemParameters.HighContrast))
         {
-            Dispatcher.Invoke(ApplyAccessibilityPalette);
-        }
-    }
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
 
-    private void ApplyAccessibilityPalette()
-    {
-        if (!SystemParameters.HighContrast)
-        {
-            RestoreThemeBrush("AppBackgroundBrush", "AppBackgroundColor");
-            RestoreThemeBrush("SurfaceBrush", "SurfaceColor");
-            RestoreThemeBrush("TextPrimaryBrush", "TextPrimaryColor");
-            RestoreThemeBrush("TextSecondaryBrush", "TextSecondaryColor");
-            RestoreThemeBrush("SubtleTextBrush", "SubtleTextColor");
-            RestoreThemeBrush("BorderBrush", "BorderColor");
-            RestoreThemeBrush("BorderHoverBrush", "BorderHoverColor");
-            RestoreThemeBrush("AccentBrush", "AccentColor");
-            RestoreThemeBrush("AccentHoverBrush", "AccentHoverColor");
-            RestoreThemeBrush("AccentPressedBrush", "AccentPressedColor");
-            RestoreThemeBrush("AccentLightBrush", "AccentLightColor");
-            RestoreThemeBrush("SecondaryHoverBrush", "SecondaryHoverColor");
-            RestoreThemeBrush("DangerBrush", "DangerColor");
-            RestoreThemeBrush("DangerLightBrush", "DangerLightColor");
-            RestoreThemeBrush("DangerBorderBrush", "DangerBorderColor");
-            return;
-        }
-
-        // Override the application-level keys before any window is created. StaticResource
-        // lookups in the merged theme then resolve to the user's Windows high-contrast
-        // palette instead of the normal light palette.
-        OverrideThemeBrush("AppBackgroundBrush", SystemColors.WindowColor);
-        OverrideThemeBrush("SurfaceBrush", SystemColors.WindowColor);
-        OverrideThemeBrush("TextPrimaryBrush", SystemColors.WindowTextColor);
-        OverrideThemeBrush("TextSecondaryBrush", SystemColors.WindowTextColor);
-        OverrideThemeBrush("SubtleTextBrush", SystemColors.WindowTextColor);
-        OverrideThemeBrush("BorderBrush", SystemColors.WindowTextColor);
-        OverrideThemeBrush("BorderHoverBrush", SystemColors.HighlightColor);
-        OverrideThemeBrush("AccentBrush", SystemColors.HighlightColor);
-        OverrideThemeBrush("AccentHoverBrush", SystemColors.HotTrackColor);
-        OverrideThemeBrush("AccentPressedBrush", SystemColors.HighlightColor);
-        OverrideThemeBrush("AccentLightBrush", SystemColors.WindowColor);
-        OverrideThemeBrush("SecondaryHoverBrush", SystemColors.ControlColor);
-        OverrideThemeBrush("DangerBrush", SystemColors.WindowTextColor);
-        OverrideThemeBrush("DangerLightBrush", SystemColors.WindowColor);
-        OverrideThemeBrush("DangerBorderBrush", SystemColors.WindowTextColor);
-    }
-
-    private void RestoreThemeBrush(string brushKey, string colorKey)
-    {
-        if (TryFindResource(colorKey) is System.Windows.Media.Color color)
-        {
-            OverrideThemeBrush(brushKey, color);
-        }
-    }
-
-    private void OverrideThemeBrush(string resourceKey, System.Windows.Media.Color color)
-    {
-        if (TryFindResource(resourceKey) is not System.Windows.Media.SolidColorBrush brush)
-        {
-            return;
-        }
-
-        // This runs before the first window consumes/seals the theme styles, so the shared
-        // brush instances are normally still mutable and every StaticResource reference sees
-        // the system color. The replacement is a defensive fallback for a pre-frozen brush.
-        if (brush.IsFrozen)
-        {
-            Resources[resourceKey] = new System.Windows.Media.SolidColorBrush(color);
-        }
-        else
-        {
-            brush.Color = color;
+            if (Dispatcher.CheckAccess())
+            {
+                _themeService?.RefreshSystemContrast();
+            }
+            else
+            {
+                _ = Dispatcher.BeginInvoke(() => _themeService?.RefreshSystemContrast());
+            }
         }
     }
 

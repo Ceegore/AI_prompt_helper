@@ -78,6 +78,16 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
 
     public DataFolderTransitionResult RequestTransition(string candidateRoot)
     {
+        return RequestTransitionCore(candidateRoot, requestedDarkMode: null);
+    }
+
+    public DataFolderTransitionResult RequestTransition(string candidateRoot, bool useDarkMode)
+    {
+        return RequestTransitionCore(candidateRoot, useDarkMode);
+    }
+
+    private DataFolderTransitionResult RequestTransitionCore(string candidateRoot, bool? requestedDarkMode)
+    {
         ProductionRuntimeEvidence.Hit("DataFolderTransitionCoordinator.RequestTransition");
         if (string.IsNullOrWhiteSpace(candidateRoot))
         {
@@ -124,15 +134,47 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
             cleanTarget,
             bootstrapRoot);
 
-        // Same physical root is a clean no-op
+        // A theme-only update still needs the same settings CAS guarantees as a data-root
+        // transition. It does not require a restart unless the durable writer reports that
+        // publication committed but its recovery bookkeeping needs a fresh process.
         if (relationship.SamePhysicalRoot)
         {
+            if (requestedDarkMode.HasValue &&
+                requestedDarkMode.Value != settingsSnapshot.Settings.UseDarkMode)
+            {
+                var updatedSettings = new AppSettings
+                {
+                    SchemaVersion = AppSettings.CurrentSchemaVersion,
+                    DataRootPath = settingsSnapshot.Settings.DataRootPath,
+                    UseDarkMode = requestedDarkMode.Value
+                };
+
+                SettingsSaveResult saveResult;
+                bool restartRequired = false;
+                try
+                {
+                    saveResult = _settingsRepo.SaveIfUnchanged(updatedSettings, settingsSnapshot.Precondition);
+                }
+                catch (CommittedAtomicReplacementRequiresRestartException ex)
+                {
+                    saveResult = new SettingsSaveResult(ex.Message);
+                    restartRequired = true;
+                }
+
+                return new DataFolderTransitionResult(
+                    Changed: false,
+                    RestartRequired: restartRequired,
+                    ExistingLibrarySelected: false,
+                    NormalizedTargetRoot: relationship.LexicalTarget,
+                    Warning: WarningCombiner.Combine(settingsSnapshot.Warning, saveResult.Warning));
+            }
+
             return new DataFolderTransitionResult(
                 Changed: false,
                 RestartRequired: false,
                 ExistingLibrarySelected: false,
                 NormalizedTargetRoot: relationship.LexicalTarget,
-                Warning: null);
+                Warning: settingsSnapshot.Warning);
         }
 
         if (new StrictPathAuthority().Probe(relationship.LexicalTarget).Kind == StrictPathKind.File)
@@ -155,6 +197,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                     runtimeContext,
                     bound,
                     settingsSnapshot,
+                    requestedDarkMode,
                     isInterruptedRecovery: true);
 
             case DataFolderMigrationService.TargetLibraryKind.CorruptPrimaryWithValidBackup:
@@ -185,13 +228,15 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                     runtimeContext,
                     bound,
                     initialInspection,
-                    settingsSnapshot);
+                    settingsSnapshot,
+                    requestedDarkMode);
 
             case DataFolderMigrationService.TargetLibraryKind.Empty:
                 return HandleEmptyTargetTransition(
                     runtimeContext,
                     bound,
                     settingsSnapshot,
+                    requestedDarkMode,
                     isInterruptedRecovery: false);
 
             default:
@@ -222,7 +267,8 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         DataRootRuntimeContext runtime,
         BoundTargetRoot bound,
         DataFolderMigrationService.TargetInspection initialInspection,
-        SettingsTransitionSnapshot settingsSnapshot)
+        SettingsTransitionSnapshot settingsSnapshot,
+        bool? requestedDarkMode)
     {
         // 1. User Confirmation BEFORE mutating or probing target
         bool confirmed = _confirmationService.ConfirmExistingLibrarySwitch(
@@ -355,7 +401,8 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         var newSettings = new AppSettings
         {
             SchemaVersion = AppSettings.CurrentSchemaVersion,
-            DataRootPath = bound.LexicalRoot
+            DataRootPath = bound.LexicalRoot,
+            UseDarkMode = requestedDarkMode ?? settingsSnapshot.Settings.UseDarkMode
         };
 
         SettingsSaveResult saveResult;
@@ -427,6 +474,7 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
         DataRootRuntimeContext runtime,
         BoundTargetRoot bound,
         SettingsTransitionSnapshot settingsSnapshot,
+        bool? requestedDarkMode,
         bool isInterruptedRecovery)
     {
         // 1. Capture snapshot of source FIRST before any target mutation
@@ -622,7 +670,8 @@ public sealed class DataFolderTransitionCoordinator : IDataFolderTransitionServi
                 var newSettings = new AppSettings
                 {
                     SchemaVersion = AppSettings.CurrentSchemaVersion,
-                    DataRootPath = bound.LexicalRoot
+                    DataRootPath = bound.LexicalRoot,
+                    UseDarkMode = requestedDarkMode ?? settingsSnapshot.Settings.UseDarkMode
                 };
 
                 try

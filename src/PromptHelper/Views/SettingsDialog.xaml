@@ -8,29 +8,29 @@
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         AutomationProperties.Name="Prompt Helper tools and settings"
-        Background="{StaticResource AppBackgroundBrush}">
-    <Border Background="{StaticResource SurfaceBrush}" Padding="28" CornerRadius="12" Margin="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+        Background="{DynamicResource AppBackgroundBrush}">
+    <Border Background="{DynamicResource SurfaceBrush}" Padding="28" CornerRadius="12" Margin="16" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
         <StackPanel>
             <!-- Header -->
             <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                <Border Width="36" Height="36" Background="{StaticResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
-                    <TextBlock Text="P" Foreground="{StaticResource SurfaceBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border Width="36" Height="36" Background="{DynamicResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
+                    <TextBlock Text="P" Foreground="{DynamicResource AccentForegroundBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
-                <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" AutomationProperties.HeadingLevel="Level1"/>
+                <TextBlock Text="Prompt Helper" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" AutomationProperties.HeadingLevel="Level1"/>
             </StackPanel>
 
             <!-- Usage Hints -->
             <TextBlock Text="Choose a category to browse your prompt library."
-                       FontSize="14" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
+                       FontSize="14" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,6"/>
             <TextBlock Text="• Use + Add to create categories."
-                       FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                       FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4"/>
             <TextBlock Text="• Use + Prompt to create prompts."
-                       FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                       FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4"/>
             <TextBlock Text="• Use Copy to copy a prompt to the Windows clipboard."
-                       FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,16"/>
+                       FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,16"/>
 
             <!-- Data Folder -->
-            <TextBlock x:Name="DataFolderLabel" Text="Data folder:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+            <TextBlock x:Name="DataFolderLabel" Text="Data folder:" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,4"/>
             <Grid Margin="0,0,0,14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -51,10 +51,33 @@
                         ToolTip="Select a different folder for Prompt Helper data"/>
             </Grid>
 
+            <!-- Appearance -->
+            <Border Background="{DynamicResource AppBackgroundBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="14,10"
+                    Margin="0,0,0,14">
+                <StackPanel>
+                    <CheckBox x:Name="DarkModeToggle"
+                              Content="Dark mode"
+                              Style="{StaticResource ToggleSwitchStyle}"
+                              Checked="DarkModeToggle_Changed"
+                              Unchecked="DarkModeToggle_Changed"
+                              AutomationProperties.Name="Dark mode"
+                              AutomationProperties.HelpText="Switch between the light and dark appearance. Windows high contrast always takes priority."/>
+                    <TextBlock Text="Applies immediately. Windows high contrast takes priority."
+                               Margin="54,2,0,0"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
             <!-- Version -->
-            <TextBlock Text="Version:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,2"/>
+            <TextBlock Text="Version:" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,2"/>
             <TextBlock x:Name="VersionTextBlock"
-                       FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+                       FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,20"/>
 
             <!-- Buttons -->
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -72,7 +95,7 @@
             <!-- Subtle Author Footer -->
             <TextBlock Text="Made by CeeGore"
                        HorizontalAlignment="Center"
-                       Foreground="{StaticResource SubtleTextBrush}"
+                       Foreground="{DynamicResource SubtleTextBrush}"
                        Opacity="0.75"
                        FontSize="12"
                        Margin="0,18,0,0"/>

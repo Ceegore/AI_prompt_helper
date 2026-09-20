@@ -431,7 +431,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
         string settingsFile = Path.Combine(temp.Root, "settings.json");
 
         var repo = new AppSettingsRepository(settingsPathOverride: settingsFile);
-        var settings = new AppSettings { SchemaVersion = 1, DataRootPath = @"C:\Data" };
+        var settings = new AppSettings { SchemaVersion = AppSettings.CurrentSchemaVersion, DataRootPath = @"C:\Data" };
 
         var snapshot = repo.LoadForTransitionAndCapturePrecondition();
         var result = repo.SaveIfUnchanged(settings, snapshot.Precondition);
@@ -451,7 +451,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
         // Mutate settings externally to invalidate precondition
         File.WriteAllText(settingsFile, "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\ChangedByOther\"}");
 
-        var newSettings = new AppSettings { SchemaVersion = 1, DataRootPath = @"C:\MyNewRoot" };
+        var newSettings = new AppSettings { SchemaVersion = AppSettings.CurrentSchemaVersion, DataRootPath = @"C:\MyNewRoot" };
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(newSettings, snapshot.Precondition));
     }
