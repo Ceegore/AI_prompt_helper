@@ -16,14 +16,19 @@ public partial class SettingsDialog : Window
     private readonly DataFolderMigrationService _migrationService;
     private readonly IUserConfirmationService _confirmationService;
     private readonly IDataFolderTransitionService _transitionService;
+    private readonly IThemeService? _themeService;
+    private readonly bool _initialDarkMode;
     private string _selectedDataFolder;
+    private bool _themeCommitted;
+    private bool _isInitializingTheme;
 
     public SettingsDialog(
         string currentDataFolder,
         AppSettingsRepository settingsRepo,
         DataFolderMigrationService migrationService,
         IUserConfirmationService? confirmationService = null,
-        IDataFolderTransitionService? transitionService = null)
+        IDataFolderTransitionService? transitionService = null,
+        IThemeService? themeService = null)
     {
         InitializeComponent();
         _currentDataFolder = currentDataFolder ?? throw new ArgumentNullException(nameof(currentDataFolder));
@@ -35,6 +40,12 @@ public partial class SettingsDialog : Window
             _settingsRepo,
             _migrationService,
             _confirmationService);
+        _themeService = themeService;
+
+        _initialDarkMode = _themeService?.PreferredDarkMode ?? _settingsRepo.Load().UseDarkMode;
+        _isInitializingTheme = true;
+        DarkModeToggle.IsChecked = _initialDarkMode;
+        _isInitializingTheme = false;
 
         _selectedDataFolder = _currentDataFolder;
         DataFolderTextBox.Text = _selectedDataFolder;
@@ -49,7 +60,7 @@ public partial class SettingsDialog : Window
         DataFolderMigrationService migrationService,
         IUserConfirmationService? confirmationService,
         DataFolderTransitionCoordinator? coordinator)
-        : this(currentDataFolder, settingsRepo, migrationService, confirmationService, (IDataFolderTransitionService?)coordinator)
+        : this(currentDataFolder, settingsRepo, migrationService, confirmationService, (IDataFolderTransitionService?)coordinator, themeService: null)
     {
     }
 
@@ -91,7 +102,10 @@ public partial class SettingsDialog : Window
                 ? DataFolderTextBox.Text
                 : _selectedDataFolder;
 
-            DataFolderTransitionResult result = _transitionService.RequestTransition(targetInput ?? string.Empty);
+            bool requestedDarkMode = DarkModeToggle.IsChecked == true;
+            DataFolderTransitionResult result = _transitionService.RequestTransition(
+                targetInput ?? string.Empty,
+                requestedDarkMode);
 
             if (!result.Changed)
             {
@@ -101,8 +115,25 @@ public partial class SettingsDialog : Window
                     return;
                 }
 
-                // Same directory selected, no-op
-                RestartRequired = false;
+                _themeCommitted = true;
+                _themeService?.ApplyPreferredTheme(requestedDarkMode);
+                RestartRequired = result.RestartRequired;
+
+                if (!string.IsNullOrEmpty(result.Warning))
+                {
+                    try
+                    {
+                        _confirmationService.ShowWarning(
+                            $"The settings were saved, but a warning occurred:\r\n\r\n{result.Warning}",
+                            "Settings Warning");
+                    }
+                    catch
+                    {
+                        // The settings commit is already durable. Notification failures must
+                        // not turn a committed update into an apparent retryable operation.
+                    }
+                }
+
                 try
                 {
                     DialogResult = true;
@@ -116,7 +147,9 @@ public partial class SettingsDialog : Window
 
             // CRUU8-013: Monotonic postcommit boundary.
             // Establish RestartRequired BEFORE showing notification UI!
-            RestartRequired = true;
+            RestartRequired = result.RestartRequired;
+            _themeCommitted = true;
+            _themeService?.ApplyPreferredTheme(requestedDarkMode);
 
             try
             {
@@ -202,5 +235,23 @@ public partial class SettingsDialog : Window
         {
         }
         Close();
+    }
+
+    private void DarkModeToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_isInitializingTheme)
+        {
+            _themeService?.ApplyPreferredTheme(DarkModeToggle.IsChecked == true);
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        if (!_themeCommitted)
+        {
+            _themeService?.ApplyPreferredTheme(_initialDarkMode);
+        }
+
+        base.OnClosed(e);
     }
 }

@@ -255,7 +255,8 @@ public sealed class AppSettingsRepository
         var defaultSettings = new AppSettings
         {
             SchemaVersion = AppSettings.CurrentSchemaVersion,
-            DataRootPath = null
+            DataRootPath = null,
+            UseDarkMode = false
         };
 
         if (primaryState is SettingsReadState.Missing && backupState is SettingsReadState.Missing)
@@ -359,7 +360,8 @@ public sealed class AppSettingsRepository
         AppSettings normalized = new()
         {
             SchemaVersion = AppSettings.CurrentSchemaVersion,
-            DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+            DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath),
+            UseDarkMode = settings.UseDarkMode
         };
 
         string json = JsonSerializer.Serialize(normalized, JsonOptions);
@@ -395,7 +397,8 @@ public sealed class AppSettingsRepository
         AppSettings normalized = new()
         {
             SchemaVersion = AppSettings.CurrentSchemaVersion,
-            DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+            DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath),
+            UseDarkMode = settings.UseDarkMode
         };
 
         string json = JsonSerializer.Serialize(normalized, JsonOptions);
@@ -444,7 +447,8 @@ public sealed class AppSettingsRepository
             AppSettings normalized = new()
             {
                 SchemaVersion = AppSettings.CurrentSchemaVersion,
-                DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+                DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath),
+                UseDarkMode = settings.UseDarkMode
             };
 
             string json = JsonSerializer.Serialize(normalized, JsonOptions);
@@ -499,7 +503,8 @@ public sealed class AppSettingsRepository
             AppSettings normalized = new()
             {
                 SchemaVersion = AppSettings.CurrentSchemaVersion,
-                DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath)
+                DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath),
+                UseDarkMode = settings.UseDarkMode
             };
 
             string json = JsonSerializer.Serialize(normalized, JsonOptions);
@@ -576,14 +581,21 @@ public sealed class AppSettingsRepository
                 return new SettingsReadState.FutureSchema(schemaVersion.Value);
             }
 
-            if (schemaVersion.Value <= 0 || schemaVersion.Value < AppSettings.CurrentSchemaVersion)
+            if (schemaVersion.Value <= 0 || schemaVersion.Value < 1)
             {
-                return new SettingsReadState.Corrupt(new InvalidDataException($"Unsupported settings schema version: {schemaVersion.Value}. Expected {AppSettings.CurrentSchemaVersion}."));
+                return new SettingsReadState.Corrupt(new InvalidDataException($"Unsupported settings schema version: {schemaVersion.Value}."));
             }
+
+            string[] allowedMembers = schemaVersion.Value switch
+            {
+                1 => ["schemaVersion", "dataRootPath"],
+                AppSettings.CurrentSchemaVersion => ["schemaVersion", "dataRootPath", "useDarkMode"],
+                _ => throw new InvalidDataException($"Unsupported settings schema version: {schemaVersion.Value}.")
+            };
 
             StrictJsonObjectAuthority.ValidateExactObject(
                 doc.RootElement,
-                allowedMembers: ["schemaVersion", "dataRootPath"],
+                allowedMembers: allowedMembers,
                 requiredMembers: ["schemaVersion"],
                 description: $"settings file '{path}'");
 
@@ -594,6 +606,14 @@ public sealed class AppSettingsRepository
             }
 
             settings.DataRootPath = NormalizeAndValidateDataRoot(settings.DataRootPath);
+            // Schema 1 predates theme preferences. Upgrade it in memory without rewriting
+            // the authoritative primary merely by reading it; the next explicit settings
+            // save persists schema 2 atomically.
+            if (settings.SchemaVersion == 1)
+            {
+                settings.SchemaVersion = AppSettings.CurrentSchemaVersion;
+                settings.UseDarkMode = false;
+            }
 
             return new SettingsReadState.Valid(settings);
         }

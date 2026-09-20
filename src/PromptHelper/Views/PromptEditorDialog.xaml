@@ -8,7 +8,7 @@
         MinHeight="450"
         WindowStartupLocation="CenterOwner"
         AutomationProperties.Name="Prompt editor"
-        Background="{StaticResource AppBackgroundBrush}">
+        Background="{DynamicResource AppBackgroundBrush}">
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -22,7 +22,7 @@
                    AutomationProperties.HeadingLevel="Level1"
                    FontSize="18"
                    FontWeight="Bold"
-                   Foreground="{StaticResource TextPrimaryBrush}"
+                   Foreground="{DynamicResource TextPrimaryBrush}"
                    Margin="0,0,0,12"/>
 
         <Grid Grid.Row="1" Margin="0,0,0,10">
@@ -35,9 +35,9 @@
                 <TextBlock x:Name="HeadlineLabel"
                            Text="Headline"
                            FontWeight="SemiBold"
-                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                           Foreground="{DynamicResource TextPrimaryBrush}"/>
                 <TextBlock Text=" &lt;optional&gt;"
-                           Foreground="{StaticResource TextPrimaryBrush}"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
                            Opacity="0.5"/>
             </StackPanel>
 

@@ -20,8 +20,9 @@ public sealed class AppSettingsRepositoryTests
         var settings = repo.Load();
 
         Assert.IsNotNull(settings);
-        Assert.AreEqual(1, settings.SchemaVersion);
+        Assert.AreEqual(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
         Assert.IsNull(settings.DataRootPath);
+        Assert.IsFalse(settings.UseDarkMode);
     }
 
     [TestMethod]
@@ -35,7 +36,7 @@ public sealed class AppSettingsRepositoryTests
 
         Assert.AreEqual(Path.GetFullPath(expectedDefault), repo.GetEffectiveDataRoot());
 
-        repo.Save(new AppSettings { SchemaVersion = 1, DataRootPath = "   " });
+        repo.Save(new AppSettings { SchemaVersion = AppSettings.CurrentSchemaVersion, DataRootPath = "   " });
         Assert.AreEqual(Path.GetFullPath(expectedDefault), repo.GetEffectiveDataRoot());
     }
 
@@ -60,13 +61,15 @@ public sealed class AppSettingsRepositoryTests
         string customPath = Path.Combine(testDir.Root, "CustomData");
         repo.Save(new AppSettings
         {
-            SchemaVersion = 1,
-            DataRootPath = customPath
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            DataRootPath = customPath,
+            UseDarkMode = true
         });
 
         var loaded = repo.Load();
-        Assert.AreEqual(1, loaded.SchemaVersion);
+        Assert.AreEqual(AppSettings.CurrentSchemaVersion, loaded.SchemaVersion);
         Assert.AreEqual(Path.GetFullPath(customPath), loaded.DataRootPath);
+        Assert.IsTrue(loaded.UseDarkMode);
         Assert.AreEqual(Path.GetFullPath(customPath), repo.GetEffectiveDataRoot(loaded));
     }
 
@@ -158,7 +161,7 @@ public sealed class AppSettingsRepositoryTests
         string settingsPath = Path.Combine(testDir.Root, "settings.json");
         string backupPath = Path.Combine(testDir.Root, "settings.backup.json");
 
-        File.WriteAllText(settingsPath, "{\"schemaVersion\": 2, \"dataRootPath\": \"C:\\\\Future\"}");
+        File.WriteAllText(settingsPath, "{\"schemaVersion\": 3, \"dataRootPath\": \"C:\\\\Future\"}");
         File.WriteAllText(backupPath, "{\"schemaVersion\": 1, \"dataRootPath\": \"C:\\\\Old\"}");
 
         byte[] primaryBefore = File.ReadAllBytes(settingsPath);
@@ -167,7 +170,7 @@ public sealed class AppSettingsRepositoryTests
         var repo = new AppSettingsRepository(settingsPathOverride: settingsPath, backupPathOverride: backupPath);
 
         var ex = Assert.Throws<UnsupportedSettingsSchemaException>(() => repo.LoadOrRecover());
-        Assert.AreEqual(2, ex.SchemaVersion);
+        Assert.AreEqual(3, ex.SchemaVersion);
 
         // Verify neither primary nor backup was modified
         CollectionAssert.AreEqual(primaryBefore, File.ReadAllBytes(settingsPath));
@@ -337,7 +340,7 @@ public sealed class AppSettingsRepositoryTests
 
         var saveResult = repo.Save(new AppSettings
         {
-            SchemaVersion = 1,
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
             DataRootPath = Path.Combine(testDir.Root, "Target")
         });
 
@@ -360,7 +363,7 @@ public sealed class AppSettingsRepositoryTests
 
         File.WriteAllText(
             backup,
-            "{\"schemaVersion\":2,\"dataRootPath\":\"C:\\\\Newer\"}");
+            "{\"schemaVersion\":3,\"dataRootPath\":\"C:\\\\Newer\"}");
 
         byte[] backupBefore = File.ReadAllBytes(backup);
 
@@ -419,7 +422,7 @@ public sealed class AppSettingsRepositoryTests
 
         File.WriteAllText(
             backup,
-            "{\"schemaVersion\":2,\"dataRootPath\":\"C:\\\\Newer\"}");
+            "{\"schemaVersion\":3,\"dataRootPath\":\"C:\\\\Newer\"}");
 
         byte[] backupBefore = File.ReadAllBytes(backup);
 
@@ -448,7 +451,7 @@ public sealed class AppSettingsRepositoryTests
 
         File.WriteAllText(
             primary,
-            "{\"schemaVersion\":2,\"dataRootPath\":\"C:\\\\Future\"}");
+            "{\"schemaVersion\":3,\"dataRootPath\":\"C:\\\\Future\"}");
         File.WriteAllText(
             backup,
             "{\"schemaVersion\":1,\"dataRootPath\":\"C:\\\\Old\"}");
@@ -463,7 +466,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<UnsupportedSettingsSchemaException>(() =>
             repo.Save(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\AttemptedOverwrite"
             }));
 
@@ -490,7 +493,7 @@ public sealed class AppSettingsRepositoryTests
 
             var result = repo.Save(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\NewRoot"
             });
 
@@ -520,7 +523,7 @@ public sealed class AppSettingsRepositoryTests
             Assert.Throws<SettingsReadException>(() =>
                 repo.Save(new AppSettings
                 {
-                    SchemaVersion = 1,
+                    SchemaVersion = AppSettings.CurrentSchemaVersion,
                     DataRootPath = @"C:\NewRoot"
                 }));
 
@@ -606,7 +609,7 @@ public sealed class AppSettingsRepositoryTests
 
         var result = repo.SaveIfUnchanged(new AppSettings
         {
-            SchemaVersion = 1,
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
             DataRootPath = @"C:\New"
         }, snapshot.Precondition);
 
@@ -630,7 +633,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\New"
             }, snapshot.Precondition));
 
@@ -653,7 +656,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\New"
             }, snapshot.Precondition));
     }
@@ -675,7 +678,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\New"
             }, snapshot.Precondition));
     }
@@ -698,7 +701,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\Third"
             }, snapshot.Precondition));
     }
@@ -724,7 +727,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\Third"
             }, tokenWithoutBackup));
     }
@@ -747,7 +750,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\Third"
             }, snapshot.Precondition));
     }
@@ -769,7 +772,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\Third"
             }, snapshot.Precondition));
 
@@ -796,7 +799,7 @@ public sealed class AppSettingsRepositoryTests
         Assert.Throws<InvalidOperationException>(() =>
             repo.SaveIfUnchanged(new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = AppSettings.CurrentSchemaVersion,
                 DataRootPath = @"C:\Third"
             }, snapshot.Precondition));
     }
@@ -824,7 +827,7 @@ public sealed class AppSettingsRepositoryTests
         // Commit new settings with the captured token - should succeed without false CAS mismatch
         var saveResult = repo.SaveIfUnchanged(new AppSettings
         {
-            SchemaVersion = 1,
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
             DataRootPath = Path.Combine(temp.Root, "NewData")
         }, snapshot.Precondition);
 

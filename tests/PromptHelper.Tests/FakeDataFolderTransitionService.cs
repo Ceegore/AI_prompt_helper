@@ -6,6 +6,7 @@ namespace PromptHelper.Tests;
 internal sealed class FakeDataFolderTransitionService : IDataFolderTransitionService
 {
     public Func<string, DataFolderTransitionResult>? OnRequestTransition { get; set; }
+    public Func<string, bool, DataFolderTransitionResult>? OnRequestTransitionWithTheme { get; set; }
 
     public DataFolderTransitionResult RequestTransition(string candidateRoot)
     {
@@ -20,5 +21,15 @@ internal sealed class FakeDataFolderTransitionService : IDataFolderTransitionSer
             ExistingLibrarySelected: false,
             NormalizedTargetRoot: candidateRoot,
             Warning: null);
+    }
+
+    public DataFolderTransitionResult RequestTransition(string candidateRoot, bool useDarkMode)
+    {
+        if (OnRequestTransitionWithTheme != null)
+        {
+            return OnRequestTransitionWithTheme(candidateRoot, useDarkMode);
+        }
+
+        return RequestTransition(candidateRoot);
     }
 }

@@ -49,7 +49,12 @@ public sealed class AccessibilityRegressionTests
         StringAssert.Contains(code, "SystemColors.WindowTextColor");
         StringAssert.Contains(code, "SystemColors.HighlightColor");
         StringAssert.Contains(code, "SystemParameters.StaticPropertyChanged +=");
-        StringAssert.Contains(code, "RestoreThemeBrush");
+        StringAssert.Contains(code, "RefreshSystemContrast");
+
+        string themeService = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper", "Services", "WpfThemeService.cs"));
+        StringAssert.Contains(themeService, "DarkPalette");
+        StringAssert.Contains(themeService, "SystemParameters.HighContrast");
     }
 
     [TestMethod]
@@ -70,11 +75,40 @@ public sealed class AccessibilityRegressionTests
         StringAssert.Contains(editor, "AutomationProperties.Name=\"Prompt text\"");
         StringAssert.Contains(name, "AutomationProperties.LiveSetting=\"Assertive\"");
         StringAssert.Contains(settings, "AutomationProperties.LabeledBy=\"{Binding ElementName=DataFolderLabel}\"");
+        StringAssert.Contains(settings, "AutomationProperties.Name=\"Dark mode\"");
+        StringAssert.Contains(settings, "Style=\"{StaticResource ToggleSwitchStyle}\"");
         StringAssert.Contains(move, "AutomationProperties.LabeledBy=\"{Binding ElementName=DestinationLabel}\"");
 
         foreach (string dialog in new[] { editor, name, settings, move, delete })
         {
             StringAssert.Contains(dialog, "AutomationProperties.HeadingLevel=\"Level1\"");
+        }
+    }
+
+    [TestMethod]
+    public void Palette_consumers_use_dynamic_resources_for_live_theme_updates()
+    {
+        string sourceRoot = RepositoryTestPaths.RequireFile("src", "PromptHelper", "App.xaml");
+        string projectRoot = Path.GetDirectoryName(sourceRoot)!;
+        string[] xamlFiles = Directory.GetFiles(projectRoot, "*.xaml", SearchOption.AllDirectories);
+
+        string[] paletteKeys =
+        [
+            "AppBackgroundBrush", "SurfaceBrush", "TextPrimaryBrush", "TextSecondaryBrush",
+            "SubtleTextBrush", "BorderBrush", "BorderHoverBrush", "AccentBrush",
+            "AccentHoverBrush", "AccentPressedBrush", "AccentLightBrush", "SecondaryHoverBrush",
+            "DangerBrush", "DangerLightBrush", "DangerBorderBrush"
+        ];
+
+        foreach (string file in xamlFiles)
+        {
+            string xaml = File.ReadAllText(file);
+            foreach (string key in paletteKeys)
+            {
+                Assert.IsFalse(
+                    xaml.Contains($"{{StaticResource {key}}}", StringComparison.Ordinal),
+                    $"{file} still freezes live palette resource {key}.");
+            }
         }
     }
 }

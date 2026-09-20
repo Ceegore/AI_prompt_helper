@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly DataFolderMigrationService _migrationService;
     private readonly IApplicationLifetime _applicationLifetime;
     private readonly Action<string, string>? _showRestartMessage;
+    private readonly IThemeService? _themeService;
     private bool _fatalMutationShutdownRequested;
     private CancellationTokenSource? _promptPreviewCancellation;
 
@@ -35,7 +36,8 @@ public partial class MainWindow : Window
         AppSettingsRepository? settingsRepo = null,
         DataFolderMigrationService? migrationService = null,
         IApplicationLifetime? applicationLifetime = null,
-        Action<string, string>? showRestartMessage = null)
+        Action<string, string>? showRestartMessage = null,
+        IThemeService? themeService = null)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
@@ -45,6 +47,7 @@ public partial class MainWindow : Window
         _migrationService = migrationService ?? new DataFolderMigrationService();
         _applicationLifetime = applicationLifetime ?? new WpfApplicationLifetime();
         _showRestartMessage = showRestartMessage;
+        _themeService = themeService;
         DataContext = _viewModel;
         _viewModel.PromptsChanged += ViewModel_PromptsChanged;
 
@@ -113,7 +116,11 @@ public partial class MainWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new SettingsDialog(_viewModel.DataFolderPath, _settingsRepo, _migrationService)
+        var dialog = new SettingsDialog(
+            _viewModel.DataFolderPath,
+            _settingsRepo,
+            _migrationService,
+            themeService: _themeService)
         {
             Owner = this
         };
@@ -169,14 +176,14 @@ public partial class MainWindow : Window
             if (_showRestartMessage != null)
             {
                 _showRestartMessage(
-                    "Data folder changed\n\nPrompt Helper must close now so the previous data folder cannot be modified after the migration snapshot.\n\nOpen Prompt Helper again to use the selected data folder.",
+                    "Settings changed\n\nPrompt Helper must close now to finish the committed settings update safely.\n\nOpen Prompt Helper again to continue.",
                     "Restart Required");
             }
             else
             {
                 MessageBox.Show(
                     this,
-                    "Data folder changed\n\nPrompt Helper must close now so the previous data folder cannot be modified after the migration snapshot.\n\nOpen Prompt Helper again to use the selected data folder.",
+                    "Settings changed\n\nPrompt Helper must close now to finish the committed settings update safely.\n\nOpen Prompt Helper again to continue.",
                     "Restart Required",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

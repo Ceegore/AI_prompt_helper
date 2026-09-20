@@ -90,7 +90,7 @@ internal sealed class ExistingTargetCommitLease : IDisposable
         {
             long length = RandomAccess.GetLength(handle);
             byte[] bytes = new byte[length];
-            RandomAccess.Read(handle, bytes, 0);
+            ReadExactly(handle, bytes);
             _handles.Add(handle);
             return bytes;
         }
@@ -98,6 +98,21 @@ internal sealed class ExistingTargetCommitLease : IDisposable
         {
             handle.Dispose();
             throw;
+        }
+    }
+
+    private static void ReadExactly(SafeFileHandle handle, byte[] destination)
+    {
+        int read = 0;
+        while (read < destination.Length)
+        {
+            int count = RandomAccess.Read(handle, destination.AsSpan(read), read);
+            if (count == 0)
+            {
+                throw new EndOfStreamException("Target library file ended while acquiring its commit lease.");
+            }
+
+            read += count;
         }
     }
 

@@ -589,7 +589,7 @@ public sealed class Cruu15AtomicReplacementTests
         BarrierOutcome outcome = RunWithBarrierMutation(
             "settings.json",
             t => AtomicExternalReplace(t, external),
-            () => repo.SaveIfUnchanged(new AppSettings { SchemaVersion = 1, DataRootPath = temp.Root }, precondition));
+            () => repo.SaveIfUnchanged(new AppSettings { SchemaVersion = AppSettings.CurrentSchemaVersion, DataRootPath = temp.Root }, precondition));
 
         Assert.IsTrue(outcome.BarrierFired,
             "The pre-swap barrier never fired, so this test proved nothing about that window.");

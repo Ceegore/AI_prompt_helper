@@ -12,7 +12,7 @@
         Closed="MainWindow_Closed"
         PreviewKeyDown="Window_PreviewKeyDown"
         AutomationProperties.Name="Prompt Helper library"
-        Background="{StaticResource AppBackgroundBrush}">
+        Background="{DynamicResource AppBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="64"/>
@@ -22,19 +22,19 @@
 
         <!-- Header -->
         <Border Grid.Row="0"
-                Background="{StaticResource SurfaceBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
+                Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
                 BorderThickness="0,0,0,1"
                 Padding="32,0">
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="36" Height="36" Background="{StaticResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
-                        <TextBlock Text="P" Foreground="{StaticResource SurfaceBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border Width="36" Height="36" Background="{DynamicResource AccentBrush}" CornerRadius="10" Margin="0,0,12,0">
+                        <TextBlock Text="P" Foreground="{DynamicResource SurfaceBrush}" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <TextBlock Text="Prompt Helper"
                                FontSize="20"
                                FontWeight="Bold"
-                               Foreground="{StaticResource TextPrimaryBrush}"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
                                AutomationProperties.HeadingLevel="Level1"
                                VerticalAlignment="Center"/>
                 </StackPanel>
@@ -52,7 +52,7 @@
 
         <!-- Recent Copies Quick Bar (Session only) -->
         <Border Grid.Row="1"
-                Background="{StaticResource AppBackgroundBrush}"
+                Background="{DynamicResource AppBackgroundBrush}"
                 Padding="32,5">
             <ItemsControl ItemsSource="{Binding RecentPrompts}">
                 <ItemsControl.ItemsPanel>
@@ -81,14 +81,14 @@
                                                Text="{Binding Headline}"
                                                FontSize="12"
                                                FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               Foreground="{DynamicResource TextPrimaryBrush}"
                                                TextTrimming="CharacterEllipsis"
                                                VerticalAlignment="Center"/>
 
                                     <TextBlock Grid.Row="1"
                                                Text="{Binding Excerpt}"
                                                FontSize="10.5"
-                                               Foreground="{StaticResource SubtleTextBrush}"
+                                               Foreground="{DynamicResource SubtleTextBrush}"
                                                TextTrimming="CharacterEllipsis"
                                                VerticalAlignment="Center"/>
                                 </Grid>
@@ -144,7 +144,7 @@
                                 <TextBlock x:Name="AncestorSeparator"
                                            Text=" › "
                                            FontSize="14"
-                                           Foreground="{StaticResource SubtleTextBrush}"
+                                           Foreground="{DynamicResource SubtleTextBrush}"
                                            VerticalAlignment="Center"/>
                                 <!-- Non-clickable current item -->
                                 <TextBlock x:Name="CurrentText"
@@ -152,7 +152,7 @@
                                            ToolTip="{Binding Name}"
                                            FontSize="14"
                                            FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                            VerticalAlignment="Center"
                                            Visibility="Collapsed"/>
                             </StackPanel>
@@ -174,7 +174,7 @@
                            FontSize="18"
                            FontWeight="Bold"
                            AutomationProperties.HeadingLevel="Level2"
-                           Foreground="{StaticResource TextPrimaryBrush}"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
                            VerticalAlignment="Center"/>
                 <Button Content="+ _Add"
                         Style="{StaticResource SecondaryButtonStyle}"
@@ -250,7 +250,7 @@
 
             <!-- Divider -->
             <Border Grid.Row="3"
-                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="0,1,0,0"
                     VerticalAlignment="Center"/>
 
@@ -260,7 +260,7 @@
                            FontSize="18"
                            FontWeight="Bold"
                            AutomationProperties.HeadingLevel="Level2"
-                           Foreground="{StaticResource TextPrimaryBrush}"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
                            VerticalAlignment="Center"/>
                 <Button Content="+ _Prompt"
                         Style="{StaticResource PrimaryButtonStyle}"
@@ -276,7 +276,7 @@
                 <!-- Empty state message -->
                 <TextBlock Text="No prompts in this category."
                            FontSize="14"
-                           Foreground="{StaticResource SubtleTextBrush}"
+                           Foreground="{DynamicResource SubtleTextBrush}"
                            FontStyle="Italic"
                            AutomationProperties.LiveSetting="Polite"
                            Margin="0,16,0,0">
@@ -342,8 +342,8 @@
                                                 <ToolTip MaxWidth="700"
                                                          MaxHeight="480"
                                                          Padding="0">
-                                                    <Border Background="{StaticResource SurfaceBrush}"
-                                                            BorderBrush="{StaticResource BorderBrush}"
+                                                    <Border Background="{DynamicResource SurfaceBrush}"
+                                                            BorderBrush="{DynamicResource BorderBrush}"
                                                             BorderThickness="1"
                                                             CornerRadius="8"
                                                             Padding="14">
@@ -353,7 +353,7 @@
                                                             <TextBlock Text="{Binding DisplayText}"
                                                                        FontFamily="{StaticResource MonospaceFontFamily}"
                                                                        FontSize="13"
-                                                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                                                       Foreground="{DynamicResource TextPrimaryBrush}"
                                                                        TextWrapping="Wrap"/>
                                                         </ScrollViewer>
                                                     </Border>
@@ -370,7 +370,7 @@
                                                            Text="{Binding PreviewTitle}"
                                                            FontSize="14"
                                                            FontWeight="Bold"
-                                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                                            TextTrimming="CharacterEllipsis"
                                                            Margin="0,0,0,10"/>
 
@@ -402,7 +402,7 @@
                                                            Text="{Binding DisplayText}"
                                                            FontFamily="{StaticResource MonospaceFontFamily}"
                                                            FontSize="12"
-                                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                                            TextWrapping="Wrap"
                                                            MaxHeight="110"
                                                            ClipToBounds="True"/>
