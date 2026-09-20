@@ -44,10 +44,6 @@ public sealed class AccessibilityRegressionTests
         string code = File.ReadAllText(RepositoryTestPaths.RequireFile(
             "src", "PromptHelper", "App.xaml.cs"));
 
-        StringAssert.Contains(code, "SystemParameters.HighContrast");
-        StringAssert.Contains(code, "SystemColors.WindowColor");
-        StringAssert.Contains(code, "SystemColors.WindowTextColor");
-        StringAssert.Contains(code, "SystemColors.HighlightColor");
         StringAssert.Contains(code, "SystemParameters.StaticPropertyChanged +=");
         StringAssert.Contains(code, "RefreshSystemContrast");
 
@@ -55,6 +51,9 @@ public sealed class AccessibilityRegressionTests
             "src", "PromptHelper", "Services", "WpfThemeService.cs"));
         StringAssert.Contains(themeService, "DarkPalette");
         StringAssert.Contains(themeService, "SystemParameters.HighContrast");
+        StringAssert.Contains(themeService, "SystemColors.WindowColor");
+        StringAssert.Contains(themeService, "SystemColors.WindowTextColor");
+        StringAssert.Contains(themeService, "SystemColors.HighlightColor");
         StringAssert.Contains(themeService, "SystemColors.HighlightTextColor");
     }
 
