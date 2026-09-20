@@ -57,6 +57,10 @@ The active data folder can be changed from the top-right wrench icon (**Tools an
 - **Selecting an EMPTY folder**: The current library and all prompts are copied to the new folder while preserving the previous folder as an intact safety copy. Prompt Helper will close immediately; reopen the application to start using the new data folder.
 - **Selecting an EXISTING Prompt Helper library**: The current library is **not** copied, merged, or overwritten. Prompt Helper prompts for explicit confirmation, updates the data-folder setting, and closes immediately. Reopening the application opens the pre-existing library at the chosen location.
 
+## Appearance
+
+Open **Tools and settings** and use the **Dark mode** switch to change the appearance immediately. The choice is saved locally. Windows high-contrast mode always takes priority so the application continues to use the system accessibility colors.
+
 ### Target Folder Constraints
 
 A configured data folder must:
@@ -82,4 +86,7 @@ Prompt Helper operates strictly locally and offline. Prompt bodies remain local 
 
 ## Release Assets
 
-- Release asset pending: `PromptHelperLogo.svg`
+- Portable self-contained Windows x64 ZIP (no .NET installation required)
+- Separate SHA-256 checksum for verifying the downloaded ZIP
+- SPDX software bill of materials and per-file checksums inside the ZIP
+- Unsigned by default; optional Authenticode signing remains available for maintainers who already own a certificate
