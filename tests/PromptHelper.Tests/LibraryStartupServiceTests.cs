@@ -42,8 +42,8 @@ public sealed class LibraryStartupServiceTests
         Assert.IsNotNull(result.Document);
         Assert.IsFalse(result.RecoveredFromBackup);
         Assert.IsNull(result.Warning);
-        Assert.AreEqual(8, result.Document.Categories.Count);
-        Assert.AreEqual(2, result.Document.Prompts.Count);
+        Assert.AreEqual(24, result.Document.Categories.Count);
+        Assert.AreEqual(44, result.Document.Prompts.Count);
         Assert.IsTrue(File.Exists(paths.LibraryPath));
         Assert.IsTrue(File.Exists(paths.LibraryBackupPath));
         Assert.IsTrue(promptRepo.Exists(DefaultLibraryFactory.DefaultPrompt1Id));
@@ -61,8 +61,8 @@ public sealed class LibraryStartupServiceTests
         var (service2, _, _, _) = CreateTestContext(testDir.Root);
         var result = service2.LoadOrInitialize();
 
-        Assert.AreEqual(8, result.Document.Categories.Count);
-        Assert.AreEqual(2, result.Document.Prompts.Count);
+        Assert.AreEqual(24, result.Document.Categories.Count);
+        Assert.AreEqual(44, result.Document.Prompts.Count);
     }
 
     [TestMethod]
@@ -317,7 +317,7 @@ public sealed class LibraryStartupServiceTests
 
         var result = service.LoadOrInitialize();
 
-        Assert.AreEqual(8, result.Document.Categories.Count);
+        Assert.AreEqual(24, result.Document.Categories.Count);
         Assert.IsTrue(promptRepo.Exists(DefaultLibraryFactory.DefaultPrompt1Id));
         Assert.IsTrue(promptRepo.Exists(DefaultLibraryFactory.DefaultPrompt2Id));
         Assert.IsFalse(File.Exists(paths.InitializationMarkerPath));
@@ -334,7 +334,7 @@ public sealed class LibraryStartupServiceTests
 
         var result = service.LoadOrInitialize();
 
-        Assert.AreEqual(8, result.Document.Categories.Count);
+        Assert.AreEqual(24, result.Document.Categories.Count);
         Assert.IsTrue(promptRepo.Exists(DefaultLibraryFactory.DefaultPrompt1Id));
         Assert.IsTrue(promptRepo.Exists(DefaultLibraryFactory.DefaultPrompt2Id));
         Assert.IsFalse(File.Exists(paths.InitializationMarkerPath));

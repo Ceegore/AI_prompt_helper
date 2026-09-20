@@ -2,6 +2,12 @@
 
 Prompt Helper is a small, lightweight, local Windows desktop application for organizing and copying reusable AI prompts.
 
+## Bundled Premades
+
+The top-level **Premades** library mirrors the familiar **Games** and **Tools** hierarchy and contains reusable prompts for planning, implementation, bug hunting, regression testing, release gates, and security/data-loss reviews. Its test-focused subcategories include general game QA, Unity, Windows/WPF/.NET, Web/HTML/PWA, Capacitor/mobile, CLI, and CI workflows.
+
+The bundled pack is installed once for both new and existing libraries. Existing categories with the same path are reused, personal prompts are never overwritten, and deleting or editing a premade is respected on later starts.
+
 ## Development requirements
 
 - Windows

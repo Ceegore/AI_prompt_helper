@@ -9,6 +9,10 @@ public sealed class LibraryDocument
     [JsonRequired]
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
+    // Optional in schema v1 so existing libraries can be upgraded in place. Once written,
+    // this marker prevents user-deleted or user-edited premades from being reinstalled.
+    public int PremadePackVersion { get; set; }
+
     [JsonRequired]
     public List<CategoryRecord> Categories { get; set; } = [];
 
