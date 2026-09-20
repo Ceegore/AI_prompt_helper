@@ -1,19 +1,14 @@
 name: Release
 
-# CRUU15-011: the strict asset chain is a release *invariant*, not an opt-in workflow_dispatch
+# CRUU15-011: the strict asset chain is a release *invariant*, not an opt-in manual flag
 # input somebody has to remember to tick. Publishing a tag runs it unconditionally, and the
 # job fails the release rather than shipping an executable whose icon nobody verified.
 on:
   push:
     tags:
       - 'v*'
-  # Exercisable on demand as well. This does not weaken the tag path: every step below runs
-  # unconditionally either way, so there is no configuration in which a release is published
-  # without the strict asset chain having passed.
-  workflow_dispatch:
-
 permissions:
-  contents: read
+  contents: write
   id-token: write
   attestations: write
 
@@ -206,17 +201,90 @@ jobs:
             $lines,
             [Text.UTF8Encoding]::new($false))
 
+      - name: Package portable Windows release
+        id: package
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/PromptHelper/PromptHelper.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' does not match project version '$expectedTag'."
+          }
+
+          $archiveName = "PromptHelper-v$version-win-x64.zip"
+          $archivePath = Join-Path 'artifacts' $archiveName
+          $checksumPath = "$archivePath.sha256"
+
+          Compress-Archive -Path 'artifacts/release/*' -DestinationPath $archivePath -CompressionLevel Optimal
+          $hash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText(
+            $checksumPath,
+            "$hash  $archiveName`n",
+            [Text.UTF8Encoding]::new($false))
+
+          $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
+          try {
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+            $requiredEntries = @(
+              'PromptHelper.exe',
+              'LICENSE',
+              'THIRD_PARTY_NOTICES.md',
+              'SHA256SUMS.txt',
+              '_manifest/spdx_2.2/manifest.spdx.json'
+            )
+            foreach ($required in $requiredEntries) {
+              if ($entries -notcontains $required) {
+                throw "Release archive is missing required entry '$required'."
+              }
+            }
+          }
+          finally {
+            $zip.Dispose()
+          }
+
+          "archive=$archivePath" >> $env:GITHUB_OUTPUT
+          "checksum=$checksumPath" >> $env:GITHUB_OUTPUT
+
       - name: Attest release build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
-          subject-path: artifacts/release/**
+          subject-path: |
+            artifacts/release/**
+            ${{ steps.package.outputs.archive }}
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: PromptHelper-release
-          path: artifacts/release
+          path: |
+            artifacts/release
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
           if-no-files-found: error
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notesPath = Join-Path 'docs/releases' "$tag.md"
+          $notesArguments = if (Test-Path $notesPath) {
+            @('--notes-file', $notesPath)
+          }
+          else {
+            @('--generate-notes')
+          }
+
+          gh release create $tag `
+            '${{ steps.package.outputs.archive }}' `
+            '${{ steps.package.outputs.checksum }}' `
+            --verify-tag `
+            --title "Prompt Helper $tag" `
+            @notesArguments
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload test results
         if: always()

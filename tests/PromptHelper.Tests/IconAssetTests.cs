@@ -145,6 +145,23 @@ public sealed class IconAssetTests
     }
 
     [TestMethod]
+    public void Release_workflow_publishes_versioned_zip_and_checksum_from_tag()
+    {
+        string workflow = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            ".github", "workflows", "release.yml"));
+
+        StringAssert.Contains(workflow, "contents: write");
+        StringAssert.Contains(workflow, "Compress-Archive");
+        StringAssert.Contains(workflow, "PromptHelper-v$version-win-x64.zip");
+        StringAssert.Contains(workflow, "Get-FileHash");
+        StringAssert.Contains(workflow, "gh release create");
+        StringAssert.Contains(workflow, "--verify-tag");
+        StringAssert.Contains(workflow, "does not match project version");
+        StringAssert.Contains(workflow, "_manifest/spdx_2.2/manifest.spdx.json");
+        Assert.IsFalse(workflow.Contains("workflow_dispatch", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void PromptHelperIco_when_present_is_valid_and_contains_required_square_frames()
     {
         string root = RepositoryTestPaths.Root;
