@@ -1,6 +1,6 @@
 name: Release
 
-# CRUU15-011: the strict asset chain is a release *invariant*, not an opt-in workflow_dispatch
+# CRUU15-011: the strict asset chain is a release *invariant*, not an opt-in manual flag
 # input somebody has to remember to tick. Publishing a tag runs it unconditionally, and the
 # job fails the release rather than shipping an executable whose icon nobody verified.
 on:
