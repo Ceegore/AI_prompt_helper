@@ -494,7 +494,7 @@ public sealed class LibraryRepository
 
             StrictJsonObjectAuthority.ValidateExactObject(
                 doc.RootElement,
-                allowedMembers: ["schemaVersion", "categories", "prompts"],
+                allowedMembers: ["schemaVersion", "premadePackVersion", "categories", "prompts"],
                 requiredMembers: ["schemaVersion", "categories", "prompts"],
                 description: "library root");
 
@@ -571,7 +571,7 @@ public sealed class LibraryRepository
 
             StrictJsonObjectAuthority.ValidateExactObject(
                 doc.RootElement,
-                allowedMembers: ["schemaVersion", "categories", "prompts"],
+                allowedMembers: ["schemaVersion", "premadePackVersion", "categories", "prompts"],
                 requiredMembers: ["schemaVersion", "categories", "prompts"],
                 description: "library root");
 

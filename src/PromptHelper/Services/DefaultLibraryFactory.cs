@@ -67,9 +67,12 @@ Repair confirmed defects where permitted and run the relevant tests again.
 
     public static DefaultLibraryPackage CreateDefaults()
     {
+        DefaultLibraryPackage premades = PremadePromptCatalog.CreatePackage();
+
         var doc = new LibraryDocument
         {
             SchemaVersion = LibraryDocument.CurrentSchemaVersion,
+            PremadePackVersion = PremadePromptCatalog.CurrentPackVersion,
             Categories =
             [
                 new CategoryRecord
@@ -146,11 +149,19 @@ Repair confirmed defects where permitted and run the relevant tests again.
             ]
         };
 
+        doc.Categories.AddRange(premades.Document.Categories);
+        doc.Prompts.AddRange(premades.Document.Prompts);
+
         var contents = new Dictionary<Guid, string>
         {
             [DefaultPrompt1Id] = DefaultPrompt1Content,
             [DefaultPrompt2Id] = DefaultPrompt2Content
         };
+
+        foreach ((Guid id, string content) in premades.PromptContents)
+        {
+            contents.Add(id, content);
+        }
 
         return new DefaultLibraryPackage(doc, contents);
     }

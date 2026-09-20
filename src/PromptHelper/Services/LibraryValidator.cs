@@ -33,6 +33,11 @@ public static class LibraryValidator
                 $"Invalid schema version: {document.SchemaVersion}. Expected: {LibraryDocument.CurrentSchemaVersion}.");
         }
 
+        if (document.PremadePackVersion < 0)
+        {
+            throw new InvalidDataException("Premade pack version cannot be negative.");
+        }
+
         var categoryIds = new HashSet<Guid>();
         var categoriesById = new Dictionary<Guid, CategoryRecord>();
 

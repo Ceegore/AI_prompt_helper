@@ -11,6 +11,7 @@ public static class LibraryDocumentCloner
         return new LibraryDocument
         {
             SchemaVersion = source.SchemaVersion,
+            PremadePackVersion = source.PremadePackVersion,
 
             Categories = source.Categories
                 .Select(x => new CategoryRecord

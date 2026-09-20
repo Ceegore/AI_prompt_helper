@@ -173,6 +173,15 @@ public partial class App : Application
                 return;
             }
 
+            var inspector = new LibraryPackageInspector(paths);
+            var premadeInstaller = new PremadePackInstaller(libraryRepo, promptRepo, inspector);
+            PremadePackInstallResult premadeResult = premadeInstaller.InstallIfNeeded(startupResult.Document);
+            startupResult = startupResult with
+            {
+                Document = premadeResult.Document,
+                Warning = WarningCombiner.Combine(startupResult.Warning, premadeResult.Warning)
+            };
+
             // Reconcile unreferenced prompt body orphans if backup authority is current.
             // Only defer cleanup for expected "backup not usable as authority" conditions
             // (missing/unreadable/corrupt/future-schema backup, or an orphan the reconciler
@@ -201,7 +210,6 @@ public partial class App : Application
                     $"Deferred unreferenced prompt-body cleanup: safety backup is not usable as authority ({ex.Message}).");
             }
 
-            var inspector = new LibraryPackageInspector(paths);
             var coordinator = new PromptMutationCoordinator(
                 paths,
                 promptRepo,

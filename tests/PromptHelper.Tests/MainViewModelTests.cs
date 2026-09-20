@@ -90,7 +90,7 @@ public sealed class MainViewModelTests
         Assert.AreEqual("Home", vm.Breadcrumbs[0].Name);
         Assert.IsTrue(vm.Breadcrumbs[0].IsCurrent);
 
-        Assert.AreEqual(2, vm.ChildCategories.Count); // Games, Tools
+        Assert.AreEqual(3, vm.ChildCategories.Count); // Games, Tools, Premades
         Assert.AreEqual(0, vm.Prompts.Count); // Home has no prompts in defaults
         Assert.IsFalse(vm.HasPrompts);
         Assert.IsTrue(vm.HasNoPrompts);
@@ -124,7 +124,7 @@ public sealed class MainViewModelTests
 
         vm.CreateCategory("NewTopCategory");
 
-        Assert.AreEqual(3, vm.ChildCategories.Count);
+        Assert.AreEqual(4, vm.ChildCategories.Count);
         Assert.IsTrue(vm.ChildCategories.Any(c => c.Name == "NewTopCategory"));
     }
 
@@ -148,10 +148,10 @@ public sealed class MainViewModelTests
         var (vm, _, _) = CreateTestContext(testDir.Root);
 
         var cat = vm.CreateCategory("TempCategory").Value;
-        Assert.AreEqual(3, vm.ChildCategories.Count);
+        Assert.AreEqual(4, vm.ChildCategories.Count);
 
         vm.DeleteCategory(cat.Id);
-        Assert.AreEqual(2, vm.ChildCategories.Count);
+        Assert.AreEqual(3, vm.ChildCategories.Count);
     }
 
     [TestMethod]
