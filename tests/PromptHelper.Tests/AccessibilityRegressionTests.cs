@@ -55,6 +55,7 @@ public sealed class AccessibilityRegressionTests
             "src", "PromptHelper", "Services", "WpfThemeService.cs"));
         StringAssert.Contains(themeService, "DarkPalette");
         StringAssert.Contains(themeService, "SystemParameters.HighContrast");
+        StringAssert.Contains(themeService, "SystemColors.HighlightTextColor");
     }
 
     [TestMethod]
@@ -97,7 +98,7 @@ public sealed class AccessibilityRegressionTests
             "AppBackgroundBrush", "SurfaceBrush", "TextPrimaryBrush", "TextSecondaryBrush",
             "SubtleTextBrush", "BorderBrush", "BorderHoverBrush", "AccentBrush",
             "AccentHoverBrush", "AccentPressedBrush", "AccentLightBrush", "SecondaryHoverBrush",
-            "DangerBrush", "DangerLightBrush", "DangerBorderBrush"
+            "DangerBrush", "DangerLightBrush", "DangerBorderBrush", "AccentForegroundBrush"
         ];
 
         foreach (string file in xamlFiles)
