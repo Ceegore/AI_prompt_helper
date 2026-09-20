@@ -50,7 +50,7 @@ public partial class SettingsDialog : Window
         _selectedDataFolder = _currentDataFolder;
         DataFolderTextBox.Text = _selectedDataFolder;
 
-        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.3.0";
+        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.4.0";
         VersionTextBlock.Text = $"v{version}";
     }
 
