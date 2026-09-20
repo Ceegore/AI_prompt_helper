@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Models;
 using PromptHelper.Services;
+using System.IO;
 
 namespace PromptHelper.Tests;
 
