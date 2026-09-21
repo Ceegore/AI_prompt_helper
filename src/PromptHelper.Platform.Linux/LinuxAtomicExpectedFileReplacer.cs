@@ -4,18 +4,28 @@ using System.Security.Cryptography;
 namespace PromptHelper.Services;
 
 /// <summary>
-/// Linux compare-and-swap implementation.
+/// Linux compare-and-swap implementation with durable ownership bookkeeping.
 ///
-/// Linux does not provide the same deny-delete/deny-write handle semantics used by the Windows
-/// implementation. Instead, the target is first verified through a retained O_NOFOLLOW handle,
-/// then the pathname is moved aside with RENAME_NOREPLACE. The moved object is re-verified by
-/// inode identity and content before the candidate may publish. If another writer won the race,
-/// its object is restored or preserved rather than overwritten.
+/// Linux cannot hold a pathname under the same deny-delete/deny-write semantics used by the
+/// Windows implementation. The transaction therefore records enough exact-object and content
+/// authority before every durable cut to make restart recovery deterministic and fail-closed.
 /// </summary>
 internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileReplacer
 {
+    private readonly IOwnedArtifactJournal _ownedArtifacts;
+
     internal static Action<string>? PreSwapBarrierForTests;
+    internal static Action<string>? AfterPreparedRecordForTests;
+    internal static Action<string>? AfterSidelineBeforePhaseRecordForTests;
+    internal static Action<string>? BetweenRenamesForTests;
     internal static Action<string>? BeforeCandidatePromotionForTests;
+    internal static Action<string>? AfterCandidatePublishBeforePhaseRecordForTests;
+
+    public LinuxAtomicExpectedFileReplacer(
+        IOwnedArtifactJournal? ownedArtifacts = null)
+    {
+        _ownedArtifacts = ownedArtifacts ?? new LinuxOwnedArtifactJournal();
+    }
 
     public void ReplaceIfExpected(
         string physicalRoot,
@@ -44,6 +54,7 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
         if (expected.Kind == ExpectedFileStateKind.Missing)
         {
             ReplaceExpectingMissing(
+                fullRoot,
                 directory,
                 fullTarget,
                 candidateBytes,
@@ -60,7 +71,8 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
             fileClass);
     }
 
-    private static void ReplaceExpectingMissing(
+    private void ReplaceExpectingMissing(
+        string physicalRoot,
         string directory,
         string fullTarget,
         ReadOnlySpan<byte> candidateBytes,
@@ -69,6 +81,8 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
         string stagePath = CreateStagePath(directory, fileClass);
         using FileStream stage =
             LinuxNativeFileSystem.CreateExclusiveStage(stagePath);
+
+        RecordStageOwnership(physicalRoot, stagePath, stage);
 
         stage.Write(candidateBytes);
         stage.Flush(flushToDisk: true);
@@ -95,7 +109,7 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
         LinuxNativeFileSystem.FlushDirectory(directory);
     }
 
-    private static void ReplaceExpectingPresent(
+    private void ReplaceExpectingPresent(
         string physicalRoot,
         string directory,
         string fullTarget,
@@ -121,17 +135,47 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
         }
 
         LinuxFileIdentity expectedObject = authority.Identity;
+        FileObjectIdentity expectedObjectIdentity =
+            expectedObject.ToObjectIdentity();
+
         string stagePath = CreateStagePath(directory, fileClass);
         string preimagePath = Path.Combine(
             directory,
             $".prompthelper-preimage-{Path.GetFileName(fullTarget)}-{Guid.NewGuid():N}.tmp");
 
+        byte[] candidateCopy = candidateBytes.ToArray();
+        string candidateHash =
+            Convert.ToHexStringLower(SHA256.HashData(candidateCopy));
+        long candidateLength = candidateCopy.LongLength;
+        Guid operationId = Guid.NewGuid();
+
         using FileStream stage =
             LinuxNativeFileSystem.CreateExclusiveStage(stagePath);
-        stage.Write(candidateBytes);
+
+        RecordStageOwnership(physicalRoot, stagePath, stage);
+
+        stage.Write(candidateCopy);
         stage.Flush(flushToDisk: true);
 
         PreSwapBarrierForTests?.Invoke(fullTarget);
+
+        // Durable authority exists before the first rename. A crash from this point onward can
+        // distinguish "rename never started" from a sidelined pre-image.
+        _ownedArtifacts.Record(
+            physicalRoot,
+            new OwnedArtifactRecord(
+                operationId,
+                OwnedArtifactKind.CasPreimage,
+                OwnedArtifactPhase.Prepared,
+                Relative(physicalRoot, preimagePath),
+                expectedObjectIdentity,
+                Relative(physicalRoot, fullTarget),
+                candidateHash,
+                candidateLength,
+                MarkerAttemptId: null,
+                PreviousSha256Hex: expectedHash));
+
+        AfterPreparedRecordForTests?.Invoke(fullTarget);
 
         if (!LinuxNativeFileSystem.TryRenameNoReplace(
                 fullTarget,
@@ -152,10 +196,9 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
                 sidelineError);
         }
 
-        // Make the pre-image name durable before the candidate can be published. A crash here
-        // must leave the last committed bytes discoverable rather than only in volatile rename
-        // state.
         LinuxNativeFileSystem.FlushDirectory(directory);
+
+        AfterSidelineBeforePhaseRecordForTests?.Invoke(fullTarget);
 
         try
         {
@@ -175,11 +218,38 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
             throw;
         }
 
+        try
+        {
+            _ownedArtifacts.Record(
+                physicalRoot,
+                new OwnedArtifactRecord(
+                    operationId,
+                    OwnedArtifactKind.CasPreimage,
+                    OwnedArtifactPhase.PreimageSidelined,
+                    Relative(physicalRoot, preimagePath),
+                    expectedObjectIdentity,
+                    Relative(physicalRoot, fullTarget),
+                    candidateHash,
+                    candidateLength,
+                    MarkerAttemptId: null,
+                    PreviousSha256Hex: expectedHash));
+        }
+        catch
+        {
+            // Candidate was not published. Restore the same inode if the target is still free;
+            // otherwise keep both objects for restart diagnostics.
+            _ = LinuxNativeFileSystem.TryRenameNoReplace(
+                preimagePath,
+                fullTarget,
+                out _);
+            LinuxNativeFileSystem.FlushDirectory(directory);
+            throw;
+        }
+
+        BetweenRenamesForTests?.Invoke(fullTarget);
         BeforeCandidatePromotionForTests?.Invoke(fullTarget);
 
-        // Re-check immediately before publication. This catches in-place writers that wrote to
-        // the original inode after the first verification but before the final no-overwrite
-        // publish gate.
+        // Catch a writer that kept an fd to the old inode and changed it after the sideline.
         try
         {
             VerifySidelinedObject(
@@ -216,8 +286,6 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
                     new Win32Exception(promotionError));
             }
 
-            // A concurrent object now occupies the target. Never overwrite it just to roll
-            // back: the previous committed content remains under the pre-image name.
             throw new StaleExpectedFileException(
                 $"'{fullTarget}' changed while its replacement was being published. " +
                 $"The concurrent target was preserved and the previous content remains at '{preimagePath}'. " +
@@ -227,9 +295,24 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
 
         LinuxNativeFileSystem.FlushDirectory(directory);
 
-        Guid operationId = Guid.NewGuid();
+        AfterCandidatePublishBeforePhaseRecordForTests?.Invoke(fullTarget);
+
         try
         {
+            _ownedArtifacts.Record(
+                physicalRoot,
+                new OwnedArtifactRecord(
+                    operationId,
+                    OwnedArtifactKind.CasPreimage,
+                    OwnedArtifactPhase.CandidatePublished,
+                    Relative(physicalRoot, preimagePath),
+                    expectedObjectIdentity,
+                    Relative(physicalRoot, fullTarget),
+                    candidateHash,
+                    candidateLength,
+                    MarkerAttemptId: null,
+                    PreviousSha256Hex: expectedHash));
+
             RetireVerifiedPreimage(
                 preimagePath,
                 physicalRoot,
@@ -245,9 +328,27 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
             throw new CommittedAtomicReplacementRequiresRestartException(
                 operationId,
                 fullTarget,
-                $"The replacement of '{fullTarget}' was committed, but its verified Linux pre-image could not be safely retired. Restart before making another change.",
+                $"The replacement of '{fullTarget}' was committed, but durable Linux recovery bookkeeping or verified pre-image cleanup did not finish. Restart before making another change.",
                 cleanup);
         }
+    }
+
+    private void RecordStageOwnership(
+        string physicalRoot,
+        string stagePath,
+        FileStream stage)
+    {
+        LinuxFileIdentity identity =
+            LinuxFileIdentity.FromHandle(stage.SafeFileHandle);
+
+        _ownedArtifacts.Record(
+            physicalRoot,
+            new OwnedArtifactRecord(
+                Guid.NewGuid(),
+                OwnedArtifactKind.Stage,
+                OwnedArtifactPhase.Claimed,
+                Relative(physicalRoot, stagePath),
+                identity.ToObjectIdentity()));
     }
 
     private static void VerifySidelinedObject(
@@ -268,7 +369,7 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
         if (moved.Identity != expectedObject)
         {
             throw new StaleExpectedFileException(
-                $"A different filesystem object was moved aside from the target. It will not be overwritten.");
+                "A different filesystem object was moved aside from the target. It will not be overwritten.");
         }
 
         moved.AssertContentMatches(expectedHash);
@@ -302,27 +403,26 @@ internal sealed class LinuxAtomicExpectedFileReplacer : IAtomicExpectedFileRepla
         LinuxFileIdentity expectedObject,
         string expectedHash)
     {
-        using LinuxExpectedTargetAuthority? preimage =
-            LinuxExpectedTargetAuthority.Open(preimagePath, physicalRoot);
+        LinuxExactRetirementOutcome outcome =
+            LinuxExactFileRetirement.Retire(
+                physicalRoot,
+                preimagePath,
+                expectedObject.ToObjectIdentity(),
+                expectedHash);
 
-        if (preimage is null)
+        if (outcome is
+            LinuxExactRetirementOutcome.Retired or
+            LinuxExactRetirementOutcome.Missing)
         {
             return;
         }
 
-        if (preimage.Identity != expectedObject)
-        {
-            throw new StaleExpectedFileException(
-                $"Refusing to delete replaced pre-image object at '{preimagePath}'.");
-        }
-
-        preimage.AssertContentMatches(expectedHash);
-
-        // Linux has no fd-bound unlink equivalent. The pathname is a random app-owned name,
-        // identity and bytes were re-proven immediately above, and this implementation is not
-        // wired into the desktop composition until the Linux recovery ledger is added.
-        File.Delete(preimagePath);
+        throw new StaleExpectedFileException(
+            $"The verified Linux pre-image at '{preimagePath}' could not be retired without risking a foreign replacement.");
     }
+
+    private static string Relative(string root, string path) =>
+        Path.GetRelativePath(root, path);
 
     private static string CreateStagePath(
         string directory,
