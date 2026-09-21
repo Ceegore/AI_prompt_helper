@@ -1,4 +1,5 @@
 name: Release Package Validation
+# Acceptance branch: force full package validation for cross-platform final audit.
 
 on:
   pull_request:
