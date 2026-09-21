@@ -47,7 +47,8 @@ internal sealed record OwnedArtifactRecord(
     string? RestoreRelativePath = null,
     string? CandidateSha256Hex = null,
     long CandidateLength = -1,
-    Guid? MarkerAttemptId = null);
+    Guid? MarkerAttemptId = null,
+    string? PreviousSha256Hex = null);
 
 internal sealed class OwnedArtifactJournalCorruptException : IOException
 {
