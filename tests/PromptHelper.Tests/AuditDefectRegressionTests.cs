@@ -462,13 +462,13 @@ public sealed class AuditDefectRegressionTests
     }
 
     [TestMethod]
-    public void PLH2004_Assembly_version_is_0_4_0()
+    public void PLH2004_Assembly_version_is_0_5_0()
     {
         var asm = typeof(PromptHelper.App).Assembly;
         var version = asm.GetName().Version;
         Assert.IsNotNull(version);
         Assert.AreEqual(0, version.Major);
-        Assert.AreEqual(4, version.Minor);
+        Assert.AreEqual(5, version.Minor);
         Assert.AreEqual(0, version.Build);
     }
 
