@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/PromptHelper.Core/PromptHelper.Core.csproj" />
     <Project Path="src/PromptHelper/PromptHelper.csproj" />
   </Folder>
   <Folder Name="/tests/">
