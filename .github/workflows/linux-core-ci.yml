@@ -1,4 +1,4 @@
-name: Linux Core CI
+name: Linux CI
 
 on:
   push:
@@ -31,10 +31,21 @@ jobs:
       - name: Test cross-platform core
         run: dotnet test tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj -c Release --no-build --logger "trx;LogFileName=linux-core.trx"
 
+      - name: Restore Linux platform tests
+        run: dotnet restore tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj
+
+      - name: Build Linux platform
+        run: dotnet build tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release --no-restore
+
+      - name: Test Linux platform
+        run: dotnet test tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release --no-build --logger "trx;LogFileName=linux-platform.trx"
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: linux-core-test-results
-          path: tests/PromptHelper.Core.Tests/TestResults/**/*.trx
+          name: linux-test-results
+          path: |
+            tests/PromptHelper.Core.Tests/TestResults/**/*.trx
+            tests/PromptHelper.Platform.Linux.Tests/TestResults/**/*.trx
           if-no-files-found: error
