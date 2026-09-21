@@ -21,7 +21,7 @@ public sealed class ExpectedFileState
     private ExpectedFileState(
         ExpectedFileStateKind kind,
         string? expectedSha256Hex,
-        WindowsFileIdentity? expectedIdentity)
+        FileObjectIdentity? expectedIdentity)
     {
         Kind = kind;
         ExpectedSha256Hex = expectedSha256Hex;
@@ -37,7 +37,7 @@ public sealed class ExpectedFileState
     /// Optional exact-object authority. When present, byte-equivalent replacement objects are
     /// stale rather than interchangeable with the object the caller originally read.
     /// </summary>
-    internal WindowsFileIdentity? ExpectedIdentity { get; }
+    internal FileObjectIdentity? ExpectedIdentity { get; }
 
     public static ExpectedFileState Present(string expectedSha256Hex)
     {
@@ -47,7 +47,7 @@ public sealed class ExpectedFileState
 
     internal static ExpectedFileState Present(
         string expectedSha256Hex,
-        WindowsFileIdentity expectedIdentity)
+        FileObjectIdentity expectedIdentity)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSha256Hex);
         return new ExpectedFileState(
@@ -60,11 +60,11 @@ public sealed class ExpectedFileState
 }
 
 /// <summary>
-/// A genuine compare-and-swap over a file: the expected current state is proven and then
-/// held under OS-enforced exclusion until the atomic replacement *consumes* that exclusion.
-/// This replaces the CRUU14 "verify, close the handle, then call a separate durable writer"
-/// pair, which was a strictly stronger last-moment check but still left a window in which a
-/// concurrent update could be silently overwritten (CRUU15-003/CRUU15-004).
+/// A genuine compare-and-swap over a file: the expected current state is proven and the
+/// implementation must keep that proof bound to the exact object until publication either
+/// consumes it or fails closed. Platforms may enforce this with a retained exclusion or with
+/// a reversible identity-verified rename protocol; a detached "verify, then later replace"
+/// sequence is not sufficient.
 /// </summary>
 /// <remarks>
 /// <para>Both expectations fail *closed*: if the expectation no longer holds, the operation

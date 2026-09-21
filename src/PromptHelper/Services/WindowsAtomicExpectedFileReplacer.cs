@@ -184,7 +184,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
         string directory,
         string fullTarget,
         string expectedSha256Hex,
-        WindowsFileIdentity? expectedIdentity,
+        FileObjectIdentity? expectedIdentity,
         ReadOnlySpan<byte> candidateBytes,
         DurableFileClass fileClass)
     {
@@ -198,7 +198,7 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
         }
 
         authority.AssertContentMatches(expectedSha256Hex);
-        if (expectedIdentity is WindowsFileIdentity identity)
+        if (expectedIdentity is FileObjectIdentity identity)
         {
             authority.AssertIdentityMatches(identity);
         }

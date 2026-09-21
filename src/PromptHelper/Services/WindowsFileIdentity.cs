@@ -58,6 +58,12 @@ internal readonly record struct WindowsFileIdentity(uint VolumeSerialNumber, ulo
     /// <summary>Round-trippable textual form used in durable provenance records.</summary>
     public string ToToken() => $"{VolumeSerialNumber:x8}:{FileIdLow:x16}:{FileIdHigh:x16}";
 
+    public FileObjectIdentity ToObjectIdentity() =>
+        new("windows-file-id-v1", ToToken());
+
+    public static implicit operator FileObjectIdentity(WindowsFileIdentity identity) =>
+        identity.ToObjectIdentity();
+
     public static bool TryParseToken(string? token, out WindowsFileIdentity identity)
     {
         identity = default;
