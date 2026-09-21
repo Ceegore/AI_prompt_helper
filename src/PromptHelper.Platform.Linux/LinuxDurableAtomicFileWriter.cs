@@ -1,16 +1,23 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
 
 internal sealed class LinuxDurableAtomicFileWriter : IDurableAtomicFileWriter
 {
+    internal static Action<string>? BeforeCreatePromotionForTests;
     private const int AtFdcwd = -100;
     private const uint RenameNoReplace = 1;
 
     private const int OpenReadOnly = 0;
+    private const int OpenWriteOnly = 0x0001;
+    private const int OpenCreate = 0x0040;
+    private const int OpenExclusive = 0x0080;
     private const int OpenDirectory = 0x10000;
+    private const int OpenNoFollow = 0x20000;
     private const int OpenCloseOnExec = 0x80000;
+    private const uint OwnerReadWrite = 0x180; // 0600
 
     private const int ErrorExists = 17;
 
@@ -31,6 +38,12 @@ internal sealed class LinuxDurableAtomicFileWriter : IDurableAtomicFileWriter
     private static extern int openDirectory(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
         int flags);
+
+    [DllImport("libc", SetLastError = true, EntryPoint = "open")]
+    private static extern int openStage(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        int flags,
+        uint mode);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int fsync(int fd);
@@ -104,6 +117,8 @@ internal sealed class LinuxDurableAtomicFileWriter : IDurableAtomicFileWriter
         stage.Write(bytes);
         stage.Flush(flushToDisk: true);
 
+        BeforeCreatePromotionForTests?.Invoke(fullTarget);
+
         int result;
         try
         {
@@ -141,13 +156,33 @@ internal sealed class LinuxDurableAtomicFileWriter : IDurableAtomicFileWriter
 
     private static FileStream CreateStage(string stagePath)
     {
-        return new FileStream(
+        int fd = openStage(
             stagePath,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            bufferSize: 16 * 1024,
-            options: FileOptions.WriteThrough);
+            OpenWriteOnly | OpenCreate | OpenExclusive | OpenNoFollow | OpenCloseOnExec,
+            OwnerReadWrite);
+
+        if (fd < 0)
+        {
+            int error = Marshal.GetLastPInvokeError();
+            throw NativeIOException(
+                $"Unable to create exclusive Linux durable stage '{stagePath}'.",
+                error);
+        }
+
+        var handle = new SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+        try
+        {
+            return new FileStream(
+                handle,
+                FileAccess.Write,
+                bufferSize: 16 * 1024,
+                isAsync: false);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
     }
 
     private static string CreateStagePath(
