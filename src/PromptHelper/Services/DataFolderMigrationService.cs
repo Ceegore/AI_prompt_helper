@@ -166,13 +166,15 @@ public sealed class DataFolderMigrationService
         public void TrackCreatedFile(string path) { }
         public void TrackCreatedDirectory(string path, string identityToken)
         {
-            if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
+            if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity windowsIdentity))
             {
                 throw new InvalidOperationException(
                     $"Attempt-created directory produced an invalid identity token for '{path}'.");
             }
 
-            _createdDirectories.Add(new OwnedDirectoryClaim(Path.GetFullPath(path), identity));
+            _createdDirectories.Add(new OwnedDirectoryClaim(
+                Path.GetFullPath(path),
+                windowsIdentity.ToObjectIdentity()));
         }
         public void Commit() => _committed = true;
 
@@ -346,7 +348,7 @@ public sealed class DataFolderMigrationService
                     return;
                 }
 
-                if (handle.Identity != claim.Identity)
+                if (handle.Identity.ToObjectIdentity() != claim.Identity)
                 {
                     failures.Add(new MigrationRollbackFailure(
                         claim.Path,
