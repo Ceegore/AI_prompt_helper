@@ -12,7 +12,7 @@ namespace PromptHelper.Services;
 
 internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 {
-    internal const string JournalFileName = ".prompthelper-owned.log";
+    internal const string JournalFileName = OwnedArtifactJournalPaths.JournalFileName;
     private const string RecordVersion = "4";
 
     private const uint GENERIC_READ = 0x80000000;
@@ -59,7 +59,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         out FILE_ATTRIBUTE_TAG_INFO fileInformation,
         uint bufferSize);
 
-    public static string GetJournalPath(string root) => Path.Combine(root, JournalFileName);
+    public static string GetJournalPath(string root) => OwnedArtifactJournalPaths.GetJournalPath(root);
 
     public void Record(string root, OwnedArtifactRecord record)
     {
@@ -161,7 +161,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 
             return new OwnedArtifactJournalSnapshot(
                 Parse(raw, journalPath),
-                WindowsFileIdentity.FromHandle(handle),
+                WindowsFileIdentity.FromHandle(handle).ToObjectIdentity(),
                 Convert.ToHexStringLower(SHA256.HashData(raw)));
         }
     }
@@ -246,7 +246,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             using WindowsExpectedTargetAuthority? authority =
                 WindowsExpectedTargetAuthority.Open(journalPath, fullRoot);
 
-            if (authority is null || authority.Identity != expected.Identity)
+            if (authority is null || authority.Identity.ToObjectIdentity() != expected.Identity)
             {
                 return;
             }
@@ -267,7 +267,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         using WindowsExpectedTargetAuthority? retained =
             WindowsExpectedTargetAuthority.Open(journalPath, fullRoot);
 
-        if (retained is null || retained.Identity != expected.Identity)
+        if (retained is null || retained.Identity.ToObjectIdentity() != expected.Identity)
         {
             throw new StaleExpectedFileException(
                 $"The ownership journal '{journalPath}' was replaced after it was read. The replacement was preserved.");
@@ -350,7 +350,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactPhase.MarkerRetirePrepared => "marker-retire",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
-            record.Identity.ToToken(),
+            SerializeWindowsIdentity(record.Identity),
             Convert.ToBase64String(Encoding.UTF8.GetBytes(record.RelativePath)),
             record.RestoreRelativePath is null
                 ? string.Empty
@@ -367,6 +367,24 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         string body = string.Join('|', fields);
 
         return body + "|" + Checksum(body);
+    }
+
+    private static string SerializeWindowsIdentity(FileObjectIdentity identity)
+    {
+        const string scheme = "windows-file-id-v1";
+        if (!string.Equals(identity.Scheme, scheme, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Windows ownership journal cannot serialize identity scheme '{identity.Scheme}'.");
+        }
+
+        if (!WindowsFileIdentity.TryParseToken(identity.Value, out WindowsFileIdentity parsed))
+        {
+            throw new InvalidOperationException(
+                "Windows ownership journal received an invalid Windows file identity.");
+        }
+
+        return parsed.ToToken();
     }
 
     private static string Checksum(string body) =>
@@ -435,7 +453,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 
         if (!Enum.IsDefined(kind) ||
             !Enum.IsDefined(phase) ||
-            !WindowsFileIdentity.TryParseToken(parts[4], out WindowsFileIdentity identity))
+            !WindowsFileIdentity.TryParseToken(parts[4], out WindowsFileIdentity windowsIdentity))
         {
             return false;
         }
@@ -494,7 +512,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             kind,
             phase,
             relativePath,
-            identity,
+            windowsIdentity.ToObjectIdentity(),
             restoreRelativePath,
             candidateSha,
             candidateLength,
