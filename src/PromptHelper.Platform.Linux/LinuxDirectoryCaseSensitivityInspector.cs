@@ -25,6 +25,7 @@ public sealed class LinuxDirectoryCaseSensitivityInspector : IDirectoryCaseSensi
         string probePath = Path.Combine(directory, probeName);
         string alternatePath = Path.Combine(directory, alternateName);
 
+        DirectoryCaseSensitivityState state;
         try
         {
             using (new FileStream(
@@ -35,28 +36,44 @@ public sealed class LinuxDirectoryCaseSensitivityInspector : IDirectoryCaseSensi
             {
             }
 
-            return File.Exists(alternatePath)
+            state = File.Exists(alternatePath)
                 ? DirectoryCaseSensitivityState.CaseInsensitive
                 : DirectoryCaseSensitivityState.CaseSensitive;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            TryDeleteAfterFailure(probePath);
             throw new DirectoryCaseSensitivityInspectionException(
                 directory,
                 ex.Message,
                 ex);
         }
-        finally
+
+        try
         {
-            try
-            {
-                File.Delete(probePath);
-            }
-            catch
-            {
-                // The original inspection failure remains authoritative. A later capability
-                // probe will reject an unwritable data root if cleanup could not complete.
-            }
+            File.Delete(probePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new DirectoryCaseSensitivityInspectionException(
+                directory,
+                $"The case-sensitivity probe succeeded but its temporary file could not be removed: {ex.Message}",
+                ex);
+        }
+
+        return state;
+    }
+
+    private static void TryDeleteAfterFailure(string probePath)
+    {
+        try
+        {
+            File.Delete(probePath);
+        }
+        catch
+        {
+            // Preserve the original inspection exception. The probe uses an unguessable,
+            // app-owned name, so cleanup must never delete anything except that exact path.
         }
     }
 }
