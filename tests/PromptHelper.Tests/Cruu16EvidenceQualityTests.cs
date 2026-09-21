@@ -31,8 +31,13 @@ public sealed class Cruu16EvidenceQualityTests
     }
 
     private static readonly Lazy<IReadOnlySet<string>> ProductionTypeNames = new(() =>
-        typeof(AppPaths).Assembly
-            .GetTypes()
+        new[]
+        {
+            typeof(AppPaths).Assembly,
+            typeof(DataFolderMigrationService).Assembly
+        }
+            .Distinct()
+            .SelectMany(assembly => assembly.GetTypes())
             .Where(t => t.Namespace is not null && t.Namespace.StartsWith("PromptHelper", StringComparison.Ordinal))
             .Select(t => t.Name)
             .Where(n => n.Length > 4 && !n.Contains('<'))
