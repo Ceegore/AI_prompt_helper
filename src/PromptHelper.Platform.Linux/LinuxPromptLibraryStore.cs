@@ -810,7 +810,20 @@ public sealed class LinuxPromptLibraryStore
         string json =
             StrictUtf8Text.Decode(raw, $"library metadata '{path}'");
 
-        using JsonDocument inspection = JsonDocument.Parse(json);
+        JsonDocument inspection;
+        try
+        {
+            inspection = JsonDocument.Parse(json);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException(
+                $"Library '{path}' is not valid JSON.",
+                ex);
+        }
+
+        using (inspection)
+        {
         if (!inspection.RootElement.TryGetProperty(
                 "schemaVersion",
                 out JsonElement schemaElement) ||
@@ -836,6 +849,7 @@ public sealed class LinuxPromptLibraryStore
 
         LibraryValidator.Validate(document);
         return document;
+        }
     }
 
     private static bool IsFutureSchema(string path)
