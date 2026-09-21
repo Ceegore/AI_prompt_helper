@@ -36,12 +36,12 @@ public sealed class LinuxDesktopSettingsStore
     {
         Directory.CreateDirectory(_root);
 
-        if (TryLoad(_settingsPath, out AppSettings? settings))
+        if (TryLoad(_settingsPath, out AppSettings settings))
         {
             return settings;
         }
 
-        if (TryLoad(_backupPath, out AppSettings? backup))
+        if (TryLoad(_backupPath, out AppSettings backup))
         {
             Save(backup);
             return backup;
@@ -110,9 +110,9 @@ public sealed class LinuxDesktopSettingsStore
 
     private static bool TryLoad(
         string path,
-        out AppSettings? settings)
+        out AppSettings settings)
     {
-        settings = null;
+        settings = null!;
         if (!File.Exists(path))
         {
             return false;
