@@ -5,11 +5,16 @@ namespace PromptHelper.Services;
 
 public static class PathIdentity
 {
+    private static StringComparison PlatformComparison =>
+        OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
     public static bool Equals(string left, string right)
         => string.Equals(
             NormalizeForComparison(left),
             NormalizeForComparison(right),
-            StringComparison.OrdinalIgnoreCase);
+            PlatformComparison);
 
     public static bool IsStrictDescendant(
         string candidate,
@@ -27,7 +32,7 @@ public static class PathIdentity
 
         return child.StartsWith(
             prefix,
-            StringComparison.OrdinalIgnoreCase);
+            PlatformComparison);
     }
 
     public static string NormalizeForComparison(string path)
@@ -39,9 +44,8 @@ public static class PathIdentity
             string.Equals(
                 full,
                 root,
-                StringComparison.OrdinalIgnoreCase))
+                PlatformComparison))
         {
-            // Preserve C:\ and UNC share-root syntax.
             return root;
         }
 

@@ -1,10 +1,5 @@
 namespace PromptHelper.Services;
 
-public interface IApplicationLifetime
-{
-    void RequestShutdown();
-}
-
 public sealed class WpfApplicationLifetime : IApplicationLifetime
 {
     public void RequestShutdown()
