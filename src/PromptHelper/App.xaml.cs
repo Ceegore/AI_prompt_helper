@@ -37,9 +37,7 @@ public partial class App : Application
 
             string effectiveDataRoot = settingsRepo.GetEffectiveDataRoot(settings);
 
-            string bootstrapRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PromptHelper");
+            string bootstrapRoot = DefaultDataRoot.Path;
 
             var physicalResolver = new WindowsPhysicalPathResolver();
             var rootPolicy = new ManagedDataRootPolicy(physicalResolver);
