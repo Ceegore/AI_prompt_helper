@@ -366,6 +366,159 @@ public sealed class CoreCoverageCompletionTests
         }
     }
 
+    [TestMethod]
+    public void Remaining_core_value_objects_and_exceptions_roundtrip()
+    {
+        var document = new LibraryDocument();
+        byte[] raw = [1, 2];
+        byte[] canonical = [3, 4];
+        var snapshot = new LibraryPrimarySnapshot(
+            raw,
+            document,
+            canonical,
+            "raw-hash",
+            "canonical-hash");
+
+        CollectionAssert.AreEqual(raw, snapshot.RawBytes);
+        Assert.AreSame(document, snapshot.Document);
+        CollectionAssert.AreEqual(canonical, snapshot.CanonicalBytes);
+        Assert.AreEqual("raw-hash", snapshot.RawSha256Hex);
+        Assert.AreEqual("canonical-hash", snapshot.CanonicalSha256Hex);
+
+        var identity = new FileObjectIdentity("scheme", "value");
+        Assert.AreEqual("scheme", identity.Scheme);
+        Assert.AreEqual("value", identity.Value);
+        Assert.AreEqual("scheme:value", identity.ToString());
+        Assert.Throws<ArgumentException>(() =>
+            new FileObjectIdentity("", "value"));
+        Assert.Throws<ArgumentException>(() =>
+            new FileObjectIdentity("scheme", " "));
+
+        var native = new DirectoryCaseSensitivityInspectionException(
+            "/tmp/example",
+            5);
+        Assert.AreEqual("/tmp/example", native.DirectoryPath);
+        Assert.AreEqual(5, native.NativeErrorCode);
+        Assert.AreEqual(5, native.Win32ErrorCode);
+        Assert.IsNotNull(native.InnerException);
+
+        var inner = new IOException("inner");
+        var textual = new DirectoryCaseSensitivityInspectionException(
+            "/tmp/example",
+            "reason",
+            inner);
+        Assert.AreEqual("/tmp/example", textual.DirectoryPath);
+        Assert.AreEqual(0, textual.NativeErrorCode);
+        Assert.AreSame(inner, textual.InnerException);
+        StringAssert.Contains(textual.Message, "reason");
+
+        Guid operation = Guid.NewGuid();
+        var committed = new CommittedMutationRequiresRestartException(
+            operation,
+            "restart",
+            inner);
+        Assert.AreEqual(operation, committed.OperationId);
+        Assert.AreSame(inner, committed.InnerException);
+
+        var atomic =
+            new CommittedAtomicReplacementRequiresRestartException(
+                operation,
+                "/tmp/target",
+                "restart atomic",
+                inner);
+        Assert.AreEqual(operation, atomic.OperationId);
+        Assert.AreEqual("/tmp/target", atomic.TargetPath);
+        Assert.AreSame(inner, atomic.InnerException);
+    }
+
+    [TestMethod]
+    public void StrictUtf8Text_handles_bom_files_and_invalid_bytes()
+    {
+        byte[] plain = StrictUtf8Text.Encode("hello 😀");
+        Assert.AreEqual("hello 😀", StrictUtf8Text.Decode(plain, "plain"));
+
+        byte[] bom =
+        [
+            0xEF, 0xBB, 0xBF,
+            .. StrictUtf8Text.Encode("with bom")
+        ];
+        Assert.AreEqual(
+            "with bom",
+            StrictUtf8Text.Decode(bom, "bom"));
+
+        InvalidDataException invalid =
+            Assert.Throws<InvalidDataException>(() =>
+                StrictUtf8Text.Decode(
+                    new byte[] { 0xC3, 0x28 },
+                    "invalid payload"));
+        StringAssert.Contains(invalid.Message, "invalid payload");
+
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "PromptHelper-CoreUtf8-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string file = Path.Combine(root, "text.txt");
+            File.WriteAllBytes(file, bom);
+            Assert.AreEqual(
+                "with bom",
+                StrictUtf8Text.ReadAllText(file, "file"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void Canonical_package_rejects_null_and_clones_valid_document()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            CanonicalLibraryPackage.Create(null!));
+
+        var document = new LibraryDocument
+        {
+            PremadePackVersion = 7
+        };
+        CanonicalLibraryPackage package =
+            CanonicalLibraryPackage.Create(document);
+
+        Assert.AreNotSame(document, package.Document);
+        Assert.AreEqual(7, package.Document.PremadePackVersion);
+        Assert.IsTrue(package.CanonicalBytes.Length > 0);
+        Assert.AreEqual(64, package.Sha256Hex.Length);
+    }
+
+    [TestMethod]
+    public void PathIdentity_covers_root_trailing_separator_and_descendant_cases()
+    {
+        string root = Path.GetPathRoot(Path.GetFullPath(Path.GetTempPath()))!;
+        Assert.AreEqual(root, PathIdentity.NormalizeForComparison(root));
+
+        string parent = Path.Combine(
+            Path.GetTempPath(),
+            "PromptHelper-PathParent");
+        string child = Path.Combine(parent, "child");
+
+        Assert.IsTrue(PathIdentity.Equals(parent + Path.DirectorySeparatorChar, parent));
+        Assert.IsFalse(PathIdentity.IsStrictDescendant(parent, parent));
+        Assert.IsTrue(PathIdentity.IsStrictDescendant(child, parent));
+        Assert.IsFalse(
+            PathIdentity.IsStrictDescendant(
+                Path.Combine(Path.GetTempPath(), "different"),
+                parent));
+    }
+
+    [TestMethod]
+    public void DefaultDataRoot_resolves_to_prompt_helper_child()
+    {
+        string path = DefaultDataRoot.Path;
+        Assert.IsFalse(string.IsNullOrWhiteSpace(path));
+        Assert.AreEqual("PromptHelper", Path.GetFileName(path));
+        Assert.IsTrue(Path.IsPathFullyQualified(path));
+    }
+
     private static CategoryRecord Category(
         Guid id,
         Guid? parentId,
