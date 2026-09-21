@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Models;
