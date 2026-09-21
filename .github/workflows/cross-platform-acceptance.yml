@@ -1,0 +1,188 @@
+name: Cross-Platform Acceptance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-seed:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore Windows tests
+        run: dotnet restore tests/PromptHelper.Tests/PromptHelper.Tests.csproj
+      - name: Build Windows tests
+        run: dotnet build tests/PromptHelper.Tests/PromptHelper.Tests.csproj -c Release --no-restore
+      - name: Create Windows seed library
+        shell: pwsh
+        env:
+          PROMPTHELPER_CROSS_PLATFORM_ROOT: ${{ runner.temp }}\roundtrip
+          PROMPTHELPER_CROSS_PLATFORM_PHASE: windows-seed
+        run: >
+          dotnet test tests/PromptHelper.Tests/PromptHelper.Tests.csproj
+          -c Release
+          --no-build
+          --filter "FullyQualifiedName~CrossPlatformRoundtripAcceptanceTests.CrossPlatform_roundtrip_phase"
+          --logger "trx;LogFileName=cross-platform-windows-seed.trx"
+      - name: Upload Windows seed library
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-platform-windows-seed
+          path: ${{ runner.temp }}\roundtrip
+          if-no-files-found: error
+
+  linux-roundtrip:
+    needs: windows-seed
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Download Windows seed library
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: cross-platform-windows-seed
+          path: ${{ runner.temp }}/roundtrip
+      - name: Restore Linux tests
+        run: dotnet restore tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj
+      - name: Build Linux tests
+        run: dotnet build tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release --no-restore
+      - name: Open and mutate Windows library on Linux
+        env:
+          PROMPTHELPER_CROSS_PLATFORM_ROOT: ${{ runner.temp }}/roundtrip
+        run: >
+          dotnet test tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj
+          -c Release
+          --no-build
+          --filter "FullyQualifiedName~CrossPlatformRoundtripAcceptanceTests.Windows_library_opens_mutates_and_remains_canonical_on_Linux"
+          --logger "trx;LogFileName=cross-platform-linux.trx"
+      - name: Upload Linux-mutated library
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-platform-linux-mutated
+          path: ${{ runner.temp }}/roundtrip
+          if-no-files-found: error
+
+  windows-final:
+    needs: linux-roundtrip
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Download Linux-mutated library
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: cross-platform-linux-mutated
+          path: ${{ runner.temp }}\roundtrip
+      - name: Restore Windows tests
+        run: dotnet restore tests/PromptHelper.Tests/PromptHelper.Tests.csproj
+      - name: Build Windows tests
+        run: dotnet build tests/PromptHelper.Tests/PromptHelper.Tests.csproj -c Release --no-restore
+      - name: Reopen Linux-mutated library on Windows
+        shell: pwsh
+        env:
+          PROMPTHELPER_CROSS_PLATFORM_ROOT: ${{ runner.temp }}\roundtrip
+          PROMPTHELPER_CROSS_PLATFORM_PHASE: windows-final
+        run: >
+          dotnet test tests/PromptHelper.Tests/PromptHelper.Tests.csproj
+          -c Release
+          --no-build
+          --filter "FullyQualifiedName~CrossPlatformRoundtripAcceptanceTests.CrossPlatform_roundtrip_phase"
+          --logger "trx;LogFileName=cross-platform-windows-final.trx"
+
+  windows-coverage:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore PromptHelper.slnx
+      - name: Build
+        run: dotnet build PromptHelper.slnx -c Release --no-restore
+      - name: Collect Windows coverage
+        shell: pwsh
+        run: |
+          dotnet test tests/PromptHelper.Tests/PromptHelper.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --results-directory artifacts/coverage/windows-main
+          dotnet test tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --results-directory artifacts/coverage/windows-core
+      - name: Install pinned ReportGenerator
+        run: dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.5.11
+      - name: Merge Windows coverage
+        shell: pwsh
+        run: >
+          reportgenerator
+          "-reports:artifacts/coverage/**/coverage.cobertura.xml"
+          "-targetdir:artifacts/coverage/windows-report"
+          "-reporttypes:Cobertura;TextSummary"
+          "-assemblyfilters:+PromptHelper;+PromptHelper.Core;-PromptHelper.Platform.Linux"
+      - name: Print Windows coverage summary
+        shell: pwsh
+        run: Get-Content artifacts/coverage/windows-report/Summary.txt
+      - name: Upload Windows coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-coverage
+          path: artifacts/coverage/windows-report
+          if-no-files-found: error
+
+  linux-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore Linux tests
+        run: |
+          dotnet restore tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj
+          dotnet restore tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj
+      - name: Build Linux tests
+        run: |
+          dotnet build tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj -c Release --no-restore
+          dotnet build tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release --no-restore
+      - name: Collect Linux coverage
+        run: |
+          dotnet test tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --results-directory artifacts/coverage/linux-core
+          dotnet test tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --results-directory artifacts/coverage/linux-platform
+      - name: Install pinned ReportGenerator
+        run: dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.5.11
+      - name: Merge Linux coverage
+        run: >
+          reportgenerator
+          "-reports:artifacts/coverage/**/coverage.cobertura.xml"
+          "-targetdir:artifacts/coverage/linux-report"
+          "-reporttypes:Cobertura;TextSummary"
+          "-assemblyfilters:+PromptHelper;+PromptHelper.Core;+PromptHelper.Platform.Linux"
+      - name: Print Linux coverage summary
+        run: cat artifacts/coverage/linux-report/Summary.txt
+      - name: Upload Linux coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-coverage
+          path: artifacts/coverage/linux-report
+          if-no-files-found: error
