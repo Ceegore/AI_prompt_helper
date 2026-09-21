@@ -7,9 +7,7 @@ public sealed class AppPaths
 {
     public AppPaths(string? rootOverride = null)
     {
-        RootDirectory = rootOverride ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PromptHelper");
+        RootDirectory = rootOverride ?? DefaultDataRoot.Path;
     }
 
     public string RootDirectory { get; }

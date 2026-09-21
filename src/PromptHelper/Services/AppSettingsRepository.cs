@@ -78,9 +78,7 @@ public sealed class AppSettingsRepository
         }
         else
         {
-            string root = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PromptHelper");
+            string root = DefaultDataRoot.Path;
             _settingsPath = Path.Combine(root, "settings.json");
             _backupPath = backupPathOverride ?? Path.Combine(root, "settings.backup.json");
             _lockPath = Path.Combine(root, ".settings.lock");
