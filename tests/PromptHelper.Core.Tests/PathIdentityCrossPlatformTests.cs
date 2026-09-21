@@ -39,7 +39,7 @@ public sealed class PathIdentityCrossPlatformTests
         string sameLettersDifferentCase = Path.Combine(Path.GetTempPath(), "prompthelperparent", "child");
 
         Assert.AreEqual(
-            !OperatingSystem.IsWindows(),
+            OperatingSystem.IsWindows(),
             PathIdentity.IsStrictDescendant(sameLettersDifferentCase, parent),
             "On Linux the differently-cased parent is a different path; on Windows it is the same parent.");
     }
