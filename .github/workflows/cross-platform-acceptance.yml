@@ -38,6 +38,7 @@ jobs:
         with:
           name: cross-platform-windows-seed
           path: ${{ runner.temp }}\roundtrip
+          include-hidden-files: true
           if-no-files-found: error
 
   linux-roundtrip:
