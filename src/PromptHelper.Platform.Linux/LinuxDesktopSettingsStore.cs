@@ -22,10 +22,16 @@ public sealed class LinuxDesktopSettingsStore
     private readonly LinuxDurableAtomicFileWriter _writer = new();
 
     public LinuxDesktopSettingsStore()
+        : this(DefaultDataRoot.Path)
+    {
+    }
+
+    internal LinuxDesktopSettingsStore(string root)
     {
         LinuxNativeFileSystem.EnsureLinux();
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
 
-        _root = DefaultDataRoot.Path;
+        _root = Path.GetFullPath(root);
         _settingsPath = Path.Combine(_root, "settings.json");
         _backupPath = Path.Combine(_root, "settings.backup.json");
     }
@@ -130,11 +136,15 @@ public sealed class LinuxDesktopSettingsStore
                     json,
                     JsonOptions);
 
-            if (parsed is null ||
-                parsed.SchemaVersion <= 0 ||
-                parsed.SchemaVersion > AppSettings.CurrentSchemaVersion)
+            if (parsed is null || parsed.SchemaVersion <= 0)
             {
                 return false;
+            }
+
+            if (parsed.SchemaVersion > AppSettings.CurrentSchemaVersion)
+            {
+                throw new UnsupportedSettingsSchemaException(
+                    parsed.SchemaVersion);
             }
 
             if (parsed.SchemaVersion == 1)
