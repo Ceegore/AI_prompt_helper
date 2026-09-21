@@ -23,6 +23,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="PromptHelper.Platform.Linux.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <AvaloniaResource Include="../PromptHelper/Assets/PromptHelperLogo.svg"
                       Link="Assets/PromptHelperLogo.svg" />
     <Content Include="../../LICENSE" Link="LICENSE">
