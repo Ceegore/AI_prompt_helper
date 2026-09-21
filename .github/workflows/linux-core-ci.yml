@@ -40,6 +40,41 @@ jobs:
       - name: Test Linux platform
         run: dotnet test tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release --no-build --logger "trx;LogFileName=linux-platform.trx"
 
+      - name: Restore Avalonia desktop
+        run: dotnet restore src/PromptHelper.Desktop/PromptHelper.Desktop.csproj
+
+      - name: Build Avalonia desktop
+        run: dotnet build src/PromptHelper.Desktop/PromptHelper.Desktop.csproj -c Release --no-restore
+
+      - name: Publish self-contained linux-x64
+        run: >
+          dotnet publish src/PromptHelper.Desktop/PromptHelper.Desktop.csproj
+          -c Release
+          -r linux-x64
+          --self-contained true
+          -o artifacts/linux-publish
+
+      - name: Verify Linux publish payload
+        shell: bash
+        run: |
+          test -x artifacts/linux-publish/PromptHelper
+          test -f artifacts/linux-publish/LICENSE
+          test -f artifacts/linux-publish/THIRD_PARTY_NOTICES.md
+          test -f artifacts/linux-publish/PromptHelper.dll
+          test -f artifacts/linux-publish/Avalonia.Desktop.dll
+          test -f artifacts/linux-publish/libcoreclr.so
+          timeout 5s ./artifacts/linux-publish/PromptHelper --help >/dev/null 2>&1 || status=$?
+          if [ "${status:-0}" -eq 126 ] || [ "${status:-0}" -eq 127 ]; then
+            exit "${status}"
+          fi
+
+      - name: Upload Linux publish smoke artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: PromptHelper-linux-publish-check
+          path: artifacts/linux-publish
+          if-no-files-found: error
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

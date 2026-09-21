@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/PromptHelper.Core/PromptHelper.Core.csproj" />
+    <Project Path="src/PromptHelper.Desktop/PromptHelper.Desktop.csproj" />
     <Project Path="src/PromptHelper.Platform.Linux/PromptHelper.Platform.Linux.csproj" />
     <Project Path="src/PromptHelper/PromptHelper.csproj" />
   </Folder>

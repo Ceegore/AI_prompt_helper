@@ -1,0 +1,212 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:PromptHelper.Desktop"
+        x:Class="PromptHelper.Desktop.MainWindow"
+        Title="Prompt Helper"
+        Width="1120"
+        Height="780"
+        MinWidth="880"
+        MinHeight="620"
+        WindowStartupLocation="CenterScreen">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+        Margin="26">
+
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,14">
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <Border Width="38" Height="38" CornerRadius="9" Background="#5B6CF8">
+          <TextBlock Text="P"
+                     Foreground="White"
+                     FontSize="20"
+                     FontWeight="Bold"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"/>
+        </Border>
+        <StackPanel>
+          <TextBlock Text="Prompt Helper" FontSize="22" FontWeight="Bold"/>
+          <TextBlock x:Name="DataRootText" FontSize="11" Opacity="0.65"
+                     TextTrimming="CharacterEllipsis" MaxWidth="760"/>
+        </StackPanel>
+      </StackPanel>
+      <Button Grid.Column="1"
+              Content="Settings"
+              Click="Settings_Click"
+              MinWidth="100"/>
+    </Grid>
+
+    <Border x:Name="WarningBorder"
+            Grid.Row="1"
+            IsVisible="False"
+            BorderBrush="#D89A28"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="10"
+            Margin="0,0,0,12">
+      <TextBlock x:Name="WarningText"
+                 TextWrapping="Wrap"/>
+    </Border>
+
+    <StackPanel Grid.Row="2" Margin="0,0,0,12">
+      <TextBlock Text="Recent copies"
+                 FontSize="13"
+                 FontWeight="SemiBold"
+                 Margin="0,0,0,6"/>
+      <ItemsControl x:Name="RecentItems">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="8"/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="local:RecentPromptDisplay">
+            <Button Click="RecentCopy_Click"
+                    MinWidth="180"
+                    MaxWidth="300"
+                    HorizontalContentAlignment="Left">
+              <StackPanel>
+                <TextBlock Text="{Binding Title}"
+                           FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding Preview}"
+                           FontSize="10"
+                           Opacity="0.65"
+                           TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+
+    <ScrollViewer Grid.Row="3"
+                  HorizontalScrollBarVisibility="Auto"
+                  VerticalScrollBarVisibility="Disabled"
+                  Margin="0,0,0,14">
+      <ItemsControl x:Name="BreadcrumbItems">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="6"/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="local:BreadcrumbDisplay">
+            <Button Content="{Binding Name}"
+                    Click="Breadcrumb_Click"
+                    Padding="8,4"/>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+      <TextBlock Text="Categories" FontSize="18" FontWeight="Bold"/>
+      <Button Grid.Column="1"
+              Content="+ Category"
+              Click="AddCategory_Click"
+              MinWidth="110"/>
+    </Grid>
+
+    <ScrollViewer Grid.Row="5"
+                  MaxHeight="185"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  Margin="0,0,0,14">
+      <ItemsControl x:Name="CategoryItems">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <WrapPanel/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="local:CategoryDisplay">
+            <Border Width="250"
+                    Padding="10"
+                    Margin="0,0,10,10"
+                    BorderBrush="#50000000"
+                    BorderThickness="1"
+                    CornerRadius="8">
+              <StackPanel Spacing="8">
+                <Button Content="{Binding Name}"
+                        Click="OpenCategory_Click"
+                        HorizontalContentAlignment="Left"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Content="Rename"
+                          Click="RenameCategory_Click"
+                          FontSize="11"/>
+                  <Button Content="Delete"
+                          Click="DeleteCategory_Click"
+                          FontSize="11"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <Grid Grid.Row="6" ColumnDefinitions="*,Auto" Margin="0,0,0,10">
+      <TextBlock Text="Prompts" FontSize="18" FontWeight="Bold"/>
+      <Button Grid.Column="1"
+              Content="+ Prompt"
+              Click="AddPrompt_Click"
+              MinWidth="110"/>
+    </Grid>
+
+    <ScrollViewer Grid.Row="7"
+                  VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl x:Name="PromptItems">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <WrapPanel/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="local:PromptDisplay">
+            <Border Width="330"
+                    MinHeight="240"
+                    Padding="12"
+                    Margin="0,0,12,12"
+                    BorderBrush="#50000000"
+                    BorderThickness="1"
+                    CornerRadius="10">
+              <StackPanel Spacing="9">
+                <TextBlock Text="{Binding Title}"
+                           FontWeight="Bold"
+                           FontSize="15"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding Preview}"
+                           TextWrapping="Wrap"
+                           MaxHeight="125"
+                           Opacity="0.78"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Content="Copy"
+                          Click="CopyPrompt_Click"
+                          FontSize="11"/>
+                  <Button Content="Edit"
+                          Click="EditPrompt_Click"
+                          FontSize="11"/>
+                  <Button Content="Move"
+                          Click="MovePrompt_Click"
+                          FontSize="11"/>
+                  <Button Content="Duplicate"
+                          Click="DuplicatePrompt_Click"
+                          FontSize="11"/>
+                  <Button Content="Delete"
+                          Click="DeletePrompt_Click"
+                          FontSize="11"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <TextBlock x:Name="StatusText"
+               Grid.Row="8"
+               Margin="0,10,0,0"
+               FontSize="11"
+               Opacity="0.65"
+               Text="Ready"/>
+  </Grid>
+</Window>
