@@ -137,9 +137,7 @@ public sealed class ManagedDataRootPolicy
         string targetRoot,
         string? bootstrapRoot = null)
     {
-        string bootstrap = bootstrapRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PromptHelper");
+        string bootstrap = bootstrapRoot ?? DefaultDataRoot.Path;
 
         return DataRootTopologyValidator.ValidateTransition(
             currentRoot,
