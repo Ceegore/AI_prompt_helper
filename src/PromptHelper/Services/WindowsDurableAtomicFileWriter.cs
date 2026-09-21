@@ -82,20 +82,11 @@ internal sealed class WindowsDurableAtomicFileWriter : IDurableAtomicFileWriter
 
         Directory.CreateDirectory(dir);
 
-        string tag = GetClassTag(fileClass);
+        string tag = DurableFileNaming.GetClassTag(fileClass);
         string name = $".prompthelper-tmp-{tag}-{Guid.NewGuid():N}.tmp";
         return Path.Combine(dir, name);
     }
 
-    public static string GetClassTag(DurableFileClass fileClass) => fileClass switch
-    {
-        DurableFileClass.Settings => "settings",
-        DurableFileClass.LibraryMetadata => "library",
-        DurableFileClass.PromptBody => "prompt",
-        DurableFileClass.RecoveryArtifact => "recovery",
-        DurableFileClass.InitializationControl => "init",
-        DurableFileClass.MigrationControl => "migration",
-        DurableFileClass.MutationControl => "mutation",
-        _ => throw new ArgumentOutOfRangeException(nameof(fileClass), fileClass, "Unknown durable file class.")
-    };
+    public static string GetClassTag(DurableFileClass fileClass) =>
+        DurableFileNaming.GetClassTag(fileClass);
 }
