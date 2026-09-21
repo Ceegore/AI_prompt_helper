@@ -73,37 +73,69 @@ internal static class DurableTempReconciler
             return false;
         }
 
-        if (fileName.StartsWith(".library.json.", StringComparison.OrdinalIgnoreCase))
+        if (TryParseLegacyGuidSuffix(
+                fileName,
+                ".library.json.",
+                out _))
         {
-            string guidPart = fileName.Substring(".library.json.".Length, fileName.Length - ".library.json.".Length - ".tmp".Length);
-            if (guidPart.Length == 32 && Guid.TryParseExact(guidPart, "N", out _))
-            {
-                description = "legacy library metadata temp";
-                return true;
-            }
+            description = "legacy library metadata temp";
+            return true;
         }
 
-        if (fileName.StartsWith(".library.backup.json.", StringComparison.OrdinalIgnoreCase))
+        if (TryParseLegacyGuidSuffix(
+                fileName,
+                ".library.backup.json.",
+                out _))
         {
-            string guidPart = fileName.Substring(".library.backup.json.".Length, fileName.Length - ".library.backup.json.".Length - ".tmp".Length);
-            if (guidPart.Length == 32 && Guid.TryParseExact(guidPart, "N", out _))
-            {
-                description = "legacy library backup temp";
-                return true;
-            }
+            description = "legacy library backup temp";
+            return true;
         }
 
-        if (fileName.StartsWith(".initializing.marker.", StringComparison.OrdinalIgnoreCase))
+        if (TryParseLegacyGuidSuffix(
+                fileName,
+                ".initializing.marker.",
+                out _))
         {
-            string guidPart = fileName.Substring(".initializing.marker.".Length, fileName.Length - ".initializing.marker.".Length - ".tmp".Length);
-            if (guidPart.Length == 32 && Guid.TryParseExact(guidPart, "N", out _))
-            {
-                description = "legacy initializing marker temp";
-                return true;
-            }
+            description = "legacy initializing marker temp";
+            return true;
         }
 
         return false;
+    }
+
+    private static bool TryParseLegacyGuidSuffix(
+        string fileName,
+        string prefix,
+        out Guid id)
+    {
+        id = Guid.Empty;
+
+        if (!fileName.StartsWith(
+                prefix,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        int guidLength =
+            fileName.Length -
+            prefix.Length -
+            ".tmp".Length;
+
+        if (guidLength != 32)
+        {
+            return false;
+        }
+
+        string guidPart =
+            fileName.Substring(
+                prefix.Length,
+                guidLength);
+
+        return Guid.TryParseExact(
+            guidPart,
+            "N",
+            out id);
     }
 
     public static bool TryParseLegacyPromptTemp(string fileName)
