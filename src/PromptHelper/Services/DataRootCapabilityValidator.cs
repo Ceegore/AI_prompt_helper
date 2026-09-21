@@ -52,7 +52,7 @@ public sealed class DataRootCapabilityValidator
                 using WindowsRetirableDirectory createdRoot =
                     WindowsRetirableDirectory.OpenExistingOrNull(root, parent)
                     ?? throw new IOException($"Created data root disappeared before it could be claimed: '{root}'.");
-                journal.TrackCreatedDirectory(root, createdRoot.Identity.ToToken());
+                journal.TrackCreatedDirectory(root, createdRoot.Identity.ToObjectIdentity());
             }
         }
 

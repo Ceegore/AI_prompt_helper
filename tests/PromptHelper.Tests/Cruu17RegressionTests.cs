@@ -308,11 +308,11 @@ public sealed class Cruu17RegressionTests
         OwnedArtifactJournalSnapshot snapshot = journal.Read(temp.Root);
         string ledger = WindowsOwnedArtifactJournal.GetJournalPath(temp.Root);
         byte[] originalBytes = File.ReadAllBytes(ledger);
-        WindowsFileIdentity originalIdentity = snapshot.Identity!.Value;
+        FileObjectIdentity originalIdentity = snapshot.Identity!.Value;
         string displaced = ledger + ".displaced";
         File.Move(ledger, displaced);
         File.WriteAllBytes(ledger, originalBytes);
-        Assert.AreNotEqual(originalIdentity, IdentityOf(ledger));
+        Assert.AreNotEqual(originalIdentity, IdentityOf(ledger).ToObjectIdentity());
 
         Assert.ThrowsExactly<StaleExpectedFileException>(() =>
             journal.Rewrite(temp.Root, snapshot, snapshot.Records));

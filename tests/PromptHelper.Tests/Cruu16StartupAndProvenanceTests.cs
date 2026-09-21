@@ -204,7 +204,7 @@ public sealed class Cruu16StartupAndProvenanceTests
             .First();
 
         Assert.AreEqual("payload.md", record.RestoreRelativePath);
-        Assert.AreEqual(identity, record.Identity.ToToken(),
+        Assert.AreEqual(identity, record.Identity.Value,
             "The promoted object keeps the identity it was created with, so provenance survives the rename.");
     }
 
@@ -302,7 +302,7 @@ public sealed class Cruu16StartupAndProvenanceTests
             .Single(r => r.Kind == OwnedArtifactKind.MigrationFinal);
 
         bool deleted = deleter.TryVerifyIdentityContentAndDelete(
-            temp.Root, finalPath, payload.Length, Hash(payload), record.Identity.ToToken());
+            temp.Root, finalPath, payload.Length, Hash(payload), record.Identity.Value);
 
         Assert.IsFalse(deleted, "Matching length and hash must not be enough.");
         Assert.IsTrue(File.Exists(finalPath));
@@ -325,7 +325,7 @@ public sealed class Cruu16StartupAndProvenanceTests
         owned.Dispose();
 
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction(temp.Root);
-        tx.TrackCreatedDirectory(dir, identity.ToToken());
+        tx.TrackCreatedDirectory(dir, identity.ToObjectIdentity());
 
         // Same type, same empty state, different object identity at the same pathname.
         Directory.Move(dir, displaced);

@@ -31,7 +31,7 @@ internal sealed record MigrationArtifactClaim(
     Guid OperationId,
     string TempPath,
     string FinalPath,
-    WindowsFileIdentity Identity,
+    FileObjectIdentity Identity,
     long ExpectedLength,
     string ExpectedSha256Hex);
 
@@ -219,7 +219,7 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
         string fullTemp = Path.GetFullPath(tempPath);
         string fullFinal = Path.GetFullPath(finalPath);
 
-        if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
+        if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity windowsIdentity))
         {
             throw new InvalidOperationException(
                 $"Migration stage produced an unparsable identity token for '{tempPath}'.");
@@ -229,7 +229,7 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             Guid.NewGuid(),
             fullTemp,
             fullFinal,
-            identity,
+            windowsIdentity.ToObjectIdentity(),
             expectedLength,
             expectedSha256Hex);
 
@@ -300,7 +300,7 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
 
         string root = ResolveJournalRoot(directory);
 
-        if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity identity))
+        if (!WindowsFileIdentity.TryParseToken(identityToken, out WindowsFileIdentity windowsIdentity))
         {
             throw new InvalidOperationException($"Owned stage produced an unparsable identity token for '{path}'.");
         }
@@ -310,7 +310,7 @@ internal sealed class DefaultMigrationFileOps : IMigrationFileOps
             OwnedArtifactKind.Stage,
             OwnedArtifactPhase.Claimed,
             Path.GetRelativePath(root, full),
-            identity));
+            windowsIdentity.ToObjectIdentity()));
     }
 
     internal static string ResolveJournalRoot(string directory)

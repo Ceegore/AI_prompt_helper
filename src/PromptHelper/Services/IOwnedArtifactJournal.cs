@@ -10,190 +10,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace PromptHelper.Services;
 
-/// <summary>What a durably-recorded artifact is, and therefore how recovery may treat it.</summary>
-internal enum OwnedArtifactKind
-{
-    /// <summary>A staging file for a durable write. Safe to destroy once identity is proven.</summary>
-    Stage,
-
-    /// <summary>
-    /// The previous committed content of a compare-and-swap target, renamed aside so the staged
-    /// replacement could take its name. Never destroyed without proof that the candidate
-    /// replacement actually reached the target (CRUU16-001).
-    /// </summary>
-    CasPreimage,
-
-    /// <summary>
-    /// A migration payload object under its final name. Carries the identity it was created
-    /// with, so rollback and retry can destroy it only if it is still that exact object
-    /// (CRUU16-005).
-    /// </summary>
-    MigrationFinal,
-
-    /// <summary>
-    /// One migration payload object whose exact identity may be found at either its staging
-    /// path or final path. Both locations are recorded before publication.
-    /// </summary>
-    MigrationArtifact,
-
-    /// <summary>
-    /// A directory created by the current migration attempt. Its NTFS identity, rather than
-    /// its pathname or emptiness, is the authority for rollback and retry deletion.
-    /// </summary>
-    MigrationDirectory,
-
-    /// <summary>
-    /// An ephemeral capability probe whose exact identity may move between two paths that
-    /// were both durably declared before the first rename.
-    /// </summary>
-    CapabilityProbe,
-
-    /// <summary>
-    /// The authoritative migration marker object. Unlike semantic marker validation, this
-    /// claim binds Copying publication, Ready replacement, restart recovery, and retirement
-    /// to the exact NTFS object created by the attempt.
-    /// </summary>
-    MigrationMarker
-}
-
-/// <summary>How far a durable operation had got when the record was appended.</summary>
-internal enum OwnedArtifactPhase
-{
-    /// <summary>The artifact has been created and claimed; nothing has been published yet.</summary>
-    Claimed,
-
-    /// <summary>
-    /// All authority needed for a compare-and-swap is durable, but the old target has not yet
-    /// been moved. Recovery must inspect the recorded old identity to determine whether the
-    /// rename happened before the next phase record landed.
-    /// </summary>
-    Prepared,
-
-    /// <summary>A compare-and-swap has moved the previous committed object aside.</summary>
-    PreimageSidelined,
-
-    /// <summary>A compare-and-swap has published its candidate under the target name.</summary>
-    CandidatePublished,
-
-    /// <summary>The probe identity and every legal recovery path are durable; bytes may be partial.</summary>
-    ProbeCreatedClaimed = 10,
-
-    /// <summary>The complete expected probe bytes have crossed a durable flush barrier.</summary>
-    ProbeContentDurable = 11,
-
-    /// <summary>A rename is about to occur; both its source and destination are already declared.</summary>
-    ProbeRenamePrepared = 12,
-
-    /// <summary>The exact probe handle completed its rename.</summary>
-    ProbeRenamed = 13,
-
-    /// <summary>The exact probe handle was marked for deletion.</summary>
-    ProbeRetired = 14,
-
-    /// <summary>A complete durable marker candidate exists off-path, before publication.</summary>
-    MarkerPrepared = 20,
-
-    /// <summary>The exact candidate is published as the Copying marker.</summary>
-    MarkerPublishedCopying = 21,
-
-    /// <summary>The Copying marker's exact identity and pre-image path are durable before rename.</summary>
-    MarkerCopyingRetirePrepared = 22,
-
-    /// <summary>A complete Ready marker candidate is durable and both legal locations are declared.</summary>
-    MarkerReadyPrepared = 23,
-
-    /// <summary>The exact candidate is published as the Ready marker.</summary>
-    MarkerPublishedReady = 24,
-
-    /// <summary>Exact marker retirement is authorized and durable before handle-bound deletion.</summary>
-    MarkerRetirePrepared = 25
-}
-
-/// <summary>
-/// One durably recorded claim. Paths are relative to the data root the journal belongs to.
-/// </summary>
-/// <remarks>
-/// For a <see cref="OwnedArtifactKind.CasPreimage"/> record the candidate's content hash and
-/// length are recorded <i>before</i> the swap begins. That is what lets recovery distinguish
-/// "our candidate is at the target" from "some file happens to be at the target" — the
-/// distinction CRUU16-001 showed the previous design could not make, and without which the
-/// pre-image (the only durable copy of the last committed state) could be deleted after a
-/// crash.
-/// </remarks>
-internal sealed record OwnedArtifactRecord(
-    Guid OperationId,
-    OwnedArtifactKind Kind,
-    OwnedArtifactPhase Phase,
-    string RelativePath,
-    WindowsFileIdentity Identity,
-    string? RestoreRelativePath = null,
-    string? CandidateSha256Hex = null,
-    long CandidateLength = -1,
-    Guid? MarkerAttemptId = null);
-
-/// <summary>
-/// The ownership ledger could not be trusted. Because the ledger authorizes deletion and
-/// compare-and-swap restoration, a ledger that cannot be parsed exactly is not a reason to
-/// carry on with less information — it is a reason to stop (CRUU16-002).
-/// </summary>
-internal sealed class OwnedArtifactJournalCorruptException : IOException
-{
-    public OwnedArtifactJournalCorruptException(string message, Exception? inner = null)
-        : base(message, inner)
-    {
-    }
-}
-
-/// <summary>What a read of the ledger returned, bound to the exact object it was read from.</summary>
-internal sealed record OwnedArtifactJournalSnapshot(
-    IReadOnlyList<OwnedArtifactRecord> Records,
-    WindowsFileIdentity? Identity,
-    string? Sha256Hex)
-{
-    public static OwnedArtifactJournalSnapshot Absent { get; } = new([], null, null);
-
-    public bool Exists => Identity is not null;
-}
-
-/// <summary>
-/// The durable provenance authority for transient artifacts.
-/// </summary>
-/// <remarks>
-/// <para>A pathname is not ownership. What is ownership is the object identity recorded at the
-/// moment this process created the object — volume serial plus NTFS file ID, which no later
-/// substitution can reproduce.</para>
-/// <para>Because this ledger authorizes automatic destruction, it is held to the same standard
-/// as the data it protects (CRUU16-003): it is opened without following reparse points, proven
-/// to resolve inside the data root, parsed strictly, and rewritten only against the exact
-/// object that was read.</para>
-/// </remarks>
-internal interface IOwnedArtifactJournal
-{
-    /// <summary>Durably records a claim for an artifact inside <paramref name="root"/>.</summary>
-    void Record(string root, OwnedArtifactRecord record);
-
-    /// <summary>
-    /// Reads the ledger for <paramref name="root"/>, bound to the object it was read from.
-    /// </summary>
-    /// <exception cref="OwnedArtifactJournalCorruptException">
-    /// The ledger exists but cannot be parsed exactly.
-    /// </exception>
-    OwnedArtifactJournalSnapshot Read(string root);
-
-    /// <summary>
-    /// Replaces the ledger with exactly <paramref name="surviving"/>, but only if the object at
-    /// the ledger's pathname is still the one <paramref name="expected"/> was read from.
-    /// </summary>
-    void Rewrite(string root, OwnedArtifactJournalSnapshot expected, IReadOnlyList<OwnedArtifactRecord> surviving);
-}
-
-/// <summary>
-/// Append-only, one ledger per data root. Records are single lines, each carrying a checksum
-/// over its own fields, so a torn final append is distinguishable from a corrupted record.
-/// </summary>
 internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 {
-    internal const string JournalFileName = ".prompthelper-owned.log";
+    internal const string JournalFileName = OwnedArtifactJournalPaths.JournalFileName;
     private const string RecordVersion = "4";
 
     private const uint GENERIC_READ = 0x80000000;
@@ -240,7 +59,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         out FILE_ATTRIBUTE_TAG_INFO fileInformation,
         uint bufferSize);
 
-    public static string GetJournalPath(string root) => Path.Combine(root, JournalFileName);
+    public static string GetJournalPath(string root) => OwnedArtifactJournalPaths.GetJournalPath(root);
 
     public void Record(string root, OwnedArtifactRecord record)
     {
@@ -342,7 +161,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 
             return new OwnedArtifactJournalSnapshot(
                 Parse(raw, journalPath),
-                WindowsFileIdentity.FromHandle(handle),
+                WindowsFileIdentity.FromHandle(handle).ToObjectIdentity(),
                 Convert.ToHexStringLower(SHA256.HashData(raw)));
         }
     }
@@ -427,7 +246,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             using WindowsExpectedTargetAuthority? authority =
                 WindowsExpectedTargetAuthority.Open(journalPath, fullRoot);
 
-            if (authority is null || authority.Identity != expected.Identity)
+            if (authority is null || authority.Identity.ToObjectIdentity() != expected.Identity)
             {
                 return;
             }
@@ -448,7 +267,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         using WindowsExpectedTargetAuthority? retained =
             WindowsExpectedTargetAuthority.Open(journalPath, fullRoot);
 
-        if (retained is null || retained.Identity != expected.Identity)
+        if (retained is null || retained.Identity.ToObjectIdentity() != expected.Identity)
         {
             throw new StaleExpectedFileException(
                 $"The ownership journal '{journalPath}' was replaced after it was read. The replacement was preserved.");
@@ -531,7 +350,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
                 OwnedArtifactPhase.MarkerRetirePrepared => "marker-retire",
                 _ => throw new ArgumentOutOfRangeException(nameof(record))
             },
-            record.Identity.ToToken(),
+            SerializeWindowsIdentity(record.Identity),
             Convert.ToBase64String(Encoding.UTF8.GetBytes(record.RelativePath)),
             record.RestoreRelativePath is null
                 ? string.Empty
@@ -548,6 +367,24 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
         string body = string.Join('|', fields);
 
         return body + "|" + Checksum(body);
+    }
+
+    private static string SerializeWindowsIdentity(FileObjectIdentity identity)
+    {
+        const string scheme = "windows-file-id-v1";
+        if (!string.Equals(identity.Scheme, scheme, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Windows ownership journal cannot serialize identity scheme '{identity.Scheme}'.");
+        }
+
+        if (!WindowsFileIdentity.TryParseToken(identity.Value, out WindowsFileIdentity parsed))
+        {
+            throw new InvalidOperationException(
+                "Windows ownership journal received an invalid Windows file identity.");
+        }
+
+        return parsed.ToToken();
     }
 
     private static string Checksum(string body) =>
@@ -616,7 +453,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
 
         if (!Enum.IsDefined(kind) ||
             !Enum.IsDefined(phase) ||
-            !WindowsFileIdentity.TryParseToken(parts[4], out WindowsFileIdentity identity))
+            !WindowsFileIdentity.TryParseToken(parts[4], out WindowsFileIdentity windowsIdentity))
         {
             return false;
         }
@@ -675,7 +512,7 @@ internal sealed class WindowsOwnedArtifactJournal : IOwnedArtifactJournal
             kind,
             phase,
             relativePath,
-            identity,
+            windowsIdentity.ToObjectIdentity(),
             restoreRelativePath,
             candidateSha,
             candidateLength,

@@ -413,7 +413,7 @@ public sealed class Cruu19RegressionTests
         Directory.CreateDirectory(path);
         WindowsFileIdentity identity = DirectoryIdentity(temp.Root, path);
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction(temp.Root);
-        tx.TrackCreatedDirectory(path, identity.ToToken());
+        tx.TrackCreatedDirectory(path, identity.ToObjectIdentity());
         Directory.Move(path, displaced);
         Directory.CreateDirectory(path);
 
@@ -481,7 +481,7 @@ public sealed class Cruu19RegressionTests
         Directory.CreateDirectory(path);
         WindowsFileIdentity identity = DirectoryIdentity(temp.Root, path);
         using var tx = new DataFolderMigrationService.MigrationTargetTransaction(temp.Root);
-        tx.TrackCreatedDirectory(path, identity.ToToken());
+        tx.TrackCreatedDirectory(path, identity.ToObjectIdentity());
         Directory.Move(path, displaced);
         Directory.CreateDirectory(path);
         File.WriteAllText(Path.Combine(path, "foreign.txt"), "foreign");

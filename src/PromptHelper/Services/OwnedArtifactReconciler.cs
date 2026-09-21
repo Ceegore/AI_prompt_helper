@@ -457,7 +457,7 @@ internal static class OwnedArtifactReconciler
             return null;
         }
 
-        if (authority.Identity != record.Identity)
+        if (authority.Identity.ToObjectIdentity() != record.Identity)
         {
             authority.Dispose();
             return null;
@@ -536,7 +536,7 @@ internal static class OwnedArtifactReconciler
 
             using (handle)
             {
-                if (WindowsFileIdentity.FromHandle(handle) != record.Identity)
+                if (WindowsFileIdentity.FromHandle(handle).ToObjectIdentity() != record.Identity)
                 {
                     continue;
                 }
@@ -618,7 +618,7 @@ internal static class OwnedArtifactReconciler
         using (preimage)
         {
             bool preimageIsOurs = preimage is not null &&
-                                  WindowsFileIdentity.FromHandle(preimage) == record.Identity;
+                                  WindowsFileIdentity.FromHandle(preimage).ToObjectIdentity() == record.Identity;
 
             if (preimage is not null && !preimageIsOurs)
             {
@@ -787,7 +787,7 @@ internal static class OwnedArtifactReconciler
                     return new TargetState(
                         true,
                         false,
-                        WindowsFileIdentity.FromHandle(handle) == record.Identity,
+                        WindowsFileIdentity.FromHandle(handle).ToObjectIdentity() == record.Identity,
                         false,
                         null);
                 }
@@ -812,7 +812,7 @@ internal static class OwnedArtifactReconciler
                 return new TargetState(
                     true,
                     matches,
-                    WindowsFileIdentity.FromHandle(handle) == record.Identity,
+                    WindowsFileIdentity.FromHandle(handle).ToObjectIdentity() == record.Identity,
                     false,
                     null);
             }
@@ -870,7 +870,7 @@ internal static class OwnedArtifactReconciler
 
         using (handle)
         {
-            if (WindowsFileIdentity.FromHandle(handle) != record.Identity)
+            if (WindowsFileIdentity.FromHandle(handle).ToObjectIdentity() != record.Identity)
             {
                 // Something else occupies our pathname. Preserve it and forget the claim.
                 return;
@@ -929,7 +929,7 @@ internal static class OwnedArtifactReconciler
                 return;
             }
 
-            if (directory.Identity != record.Identity)
+            if (directory.Identity.ToObjectIdentity() != record.Identity)
             {
                 // A different directory now owns the pathname. Preserve it and retire our
                 // stale authority so it can never authorize deletion of the replacement.
@@ -980,7 +980,7 @@ internal static class OwnedArtifactReconciler
         try
         {
             temp = OpenExactNonReparse(tempPath, root);
-            if (temp is not null && WindowsFileIdentity.FromHandle(temp) == record.Identity)
+            if (temp is not null && WindowsFileIdentity.FromHandle(temp).ToObjectIdentity() == record.Identity)
             {
                 proven.Add(tempPath);
                 try
@@ -1015,7 +1015,7 @@ internal static class OwnedArtifactReconciler
         try
         {
             final = OpenExactNonReparse(finalPath, root);
-            if (final is not null && WindowsFileIdentity.FromHandle(final) == record.Identity)
+            if (final is not null && WindowsFileIdentity.FromHandle(final).ToObjectIdentity() == record.Identity)
             {
                 if (MatchesRecordedContent(final, record, out string? mismatch))
                 {

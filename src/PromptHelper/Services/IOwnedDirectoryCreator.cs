@@ -8,7 +8,7 @@ internal interface IOwnedDirectoryCreator
     OwnedDirectoryCreationResult TryCreateOwned(string path);
 }
 
-internal sealed record OwnedDirectoryClaim(string Path, WindowsFileIdentity Identity);
+internal sealed record OwnedDirectoryClaim(string Path, FileObjectIdentity Identity);
 
 internal sealed record OwnedDirectoryCreationResult(
     DirectoryCreateOutcome Outcome,
@@ -55,7 +55,7 @@ internal sealed class WindowsOwnedDirectoryCreator : IOwnedDirectoryCreator
             WindowsRetirableDirectory.OpenExistingOrNull(fullPath, parent)
             ?? throw new IOException($"Newly-created directory disappeared before it could be claimed: '{path}'.");
 
-        WindowsFileIdentity identity = directory.Identity;
+        FileObjectIdentity identity = directory.Identity.ToObjectIdentity();
 
         return new OwnedDirectoryCreationResult(
             outcome,
@@ -72,7 +72,7 @@ internal sealed class WindowsOwnedDirectoryCreator : IOwnedDirectoryCreator
         }
 
         ProductionCrashCut.Hit("WindowsOwnedDirectoryCreator.AfterCreateBeforeFirstClaim");
-        WindowsFileIdentity identity = directory.Identity;
+        FileObjectIdentity identity = directory.Identity.ToObjectIdentity();
         try
         {
             ProductionRuntimeEvidence.Hit("WindowsOwnedDirectoryCreator.RecordCreationIdentity");
