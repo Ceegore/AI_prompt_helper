@@ -77,6 +77,74 @@ public sealed class LinuxPathPlatformTests
     }
 
     [TestMethod]
+    public void PhysicalPathResolver_returns_existing_path_and_validates_input()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "PromptHelper-LinuxPathExisting-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            var resolver = new LinuxPhysicalPathResolver();
+
+            Assert.AreEqual(
+                Path.GetFullPath(root),
+                resolver.ResolveWithNearestExistingAncestor(root));
+
+            Assert.Throws<ArgumentException>(() =>
+                resolver.ResolveWithNearestExistingAncestor("   "));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void PhysicalPathResolver_preserves_multiple_missing_suffix_segments()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "PromptHelper-LinuxPathSuffix-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            string candidate = Path.Combine(root, "one", "two", "three");
+            string resolved = new LinuxPhysicalPathResolver()
+                .ResolveWithNearestExistingAncestor(candidate);
+
+            Assert.AreEqual(Path.GetFullPath(candidate), resolved);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void DirectoryCaseSensitivityInspector_validates_blank_and_missing_directory()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var inspector = new LinuxDirectoryCaseSensitivityInspector();
+
+        Assert.Throws<ArgumentException>(() => inspector.Inspect("   "));
+
+        string missing = Path.Combine(
+            Path.GetTempPath(),
+            "PromptHelper-LinuxCaseMissing-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Throws<DirectoryNotFoundException>(() =>
+            inspector.Inspect(missing));
+    }
+
+    [TestMethod]
     public void Linux_platform_services_fail_closed_on_other_operating_systems()
     {
         if (OperatingSystem.IsLinux())

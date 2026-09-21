@@ -10,6 +10,15 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/PromptHelper.Platform.Linux/PromptHelper.Platform.Linux.csproj" />
+    <ProjectReference Include="../../src/PromptHelper.Desktop/PromptHelper.Desktop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" Version="12.1.2" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
 </Project>

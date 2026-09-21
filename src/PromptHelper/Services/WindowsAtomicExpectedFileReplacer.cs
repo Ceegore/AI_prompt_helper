@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 
 namespace PromptHelper.Services;
@@ -177,6 +178,10 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
             throw;
         }
+
+        // Promotion is the point of no return. From here on, a bookkeeping failure must
+        // preserve the committed target and force restart; it must never enter stage cleanup.
+        RetireCompletedOperation(physicalRoot, operationId, fullTarget);
     }
 
     private void ReplaceExpectingPresent(
@@ -357,6 +362,9 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
                 candidateLength));
 
             authority.DeleteExact();
+            authority.Dispose();
+
+            RetireCompletedOperation(physicalRoot, operationId, fullTarget);
         }
         catch (Exception ex) when (ex is not CommittedAtomicReplacementRequiresRestartException)
         {
@@ -365,6 +373,48 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
                 fullTarget,
                 $"The replacement of '{fullTarget}' was committed, but durable recovery bookkeeping " +
                 "did not finish. Restart Prompt Helper before making another change.",
+                ex);
+        }
+    }
+
+    private void RetireCompletedOperation(
+        string physicalRoot,
+        Guid operationId,
+        string committedTarget)
+    {
+        try
+        {
+            OwnedArtifactJournalSnapshot snapshot =
+                _ownedArtifacts.Read(physicalRoot);
+
+            if (!snapshot.Exists ||
+                !snapshot.Records.Any(record => record.OperationId == operationId))
+            {
+                throw new InvalidDataException(
+                    $"The completed ownership transaction '{operationId}' is missing from the durable ledger.");
+            }
+
+            OwnedArtifactRecord[] surviving =
+                snapshot.Records
+                    .Where(record => record.OperationId != operationId)
+                    .ToArray();
+
+            _ownedArtifacts.Rewrite(
+                physicalRoot,
+                snapshot,
+                surviving);
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            InvalidDataException or
+            StaleExpectedFileException)
+        {
+            throw new CommittedAtomicReplacementRequiresRestartException(
+                operationId,
+                committedTarget,
+                $"The replacement of '{committedTarget}' was committed, but its completed ownership claim " +
+                "could not be retired safely. Restart Prompt Helper before making another change.",
                 ex);
         }
     }
