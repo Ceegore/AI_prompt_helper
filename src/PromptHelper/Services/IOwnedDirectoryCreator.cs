@@ -72,7 +72,7 @@ internal sealed class WindowsOwnedDirectoryCreator : IOwnedDirectoryCreator
         }
 
         ProductionCrashCut.Hit("WindowsOwnedDirectoryCreator.AfterCreateBeforeFirstClaim");
-        WindowsFileIdentity identity = directory.Identity;
+        FileObjectIdentity identity = directory.Identity.ToObjectIdentity();
         try
         {
             ProductionRuntimeEvidence.Hit("WindowsOwnedDirectoryCreator.RecordCreationIdentity");
