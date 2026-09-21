@@ -29,6 +29,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../PromptHelper.Core/PromptHelper.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="PromptHelper.Tests" />
     <InternalsVisibleTo Include="PromptHelper.CrashHarness" />
   </ItemGroup>
