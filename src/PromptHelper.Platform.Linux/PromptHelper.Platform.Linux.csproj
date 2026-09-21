@@ -13,4 +13,8 @@
     <ProjectReference Include="../PromptHelper.Core/PromptHelper.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PromptHelper.Platform.Linux.Tests" />
+  </ItemGroup>
+
 </Project>
