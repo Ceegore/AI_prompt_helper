@@ -219,9 +219,9 @@ internal sealed class WindowsExpectedTargetAuthority : IDisposable
     /// Proves this retained handle is the exact filesystem object the caller previously read.
     /// Content equality is intentionally insufficient for authority-sensitive rewrites.
     /// </summary>
-    public void AssertIdentityMatches(WindowsFileIdentity expectedIdentity)
+    public void AssertIdentityMatches(FileObjectIdentity expectedIdentity)
     {
-        if (Identity != expectedIdentity)
+        if (Identity.ToObjectIdentity() != expectedIdentity)
         {
             throw new StaleExpectedFileException(
                 $"'{OpenedPath}' was replaced by a different filesystem object. Reload before editing.");
