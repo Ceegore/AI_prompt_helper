@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Prompt Helper
+Comment=Organize and copy reusable AI prompts
+Exec=prompthelper
+Icon=prompthelper
+Terminal=false
+Type=Application
+Categories=Utility;Development;
+StartupNotify=true

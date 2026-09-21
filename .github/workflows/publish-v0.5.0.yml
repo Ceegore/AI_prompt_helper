@@ -1,0 +1,22 @@
+name: Publish v0.5.0
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/publish-v0.5.0.yml'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: v0.5.0
+      target_sha: ${{ github.sha }}
+      validation_only: false
+    secrets: inherit

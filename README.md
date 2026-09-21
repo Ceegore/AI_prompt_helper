@@ -1,6 +1,6 @@
 # Prompt Helper
 
-Prompt Helper is a small, lightweight, local Windows desktop application for organizing and copying reusable AI prompts.
+Prompt Helper is a small, lightweight, local desktop application for organizing and copying reusable AI prompts. It is available for **Windows x64** and **Linux x64**.
 
 ## Bundled Premades
 
@@ -8,91 +8,133 @@ The top-level **Premades** library mirrors the familiar **Games** and **Tools** 
 
 The bundled pack is installed once for both new and existing libraries. Existing categories with the same path are reused, personal prompts are never overwritten, and deleting or editing a premade is respected on later starts.
 
+## Data compatibility
+
+Windows and Linux use the same `library.json` schema and the same `prompts/<id>.md` files. No export or conversion step is required when moving a library between the two platforms.
+
+Canonical library JSON intentionally keeps the historical Windows CRLF byte format on both operating systems, so equivalent libraries have the same canonical bytes and SHA-256 value.
+
 ## Development requirements
 
-- Windows
-- stable .NET 10 SDK
+- Stable .NET 10 SDK
+- Windows for the WPF Windows application and Windows-specific integration tests
+- Linux for the native Linux filesystem integration tests and Avalonia Linux publish
 
 ## Build
+
+Windows/full solution:
 
 ```powershell
 dotnet build PromptHelper.slnx -c Release
 ```
 
+Linux desktop:
+
+```bash
+dotnet build src/PromptHelper.Desktop/PromptHelper.Desktop.csproj -c Release
+```
+
 ## Test
+
+Windows/full suite:
 
 ```powershell
 dotnet test PromptHelper.slnx -c Release
 ```
 
-## Publish (Self-Contained win-x64)
+Linux cross-platform/platform tests:
+
+```bash
+dotnet test tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj -c Release
+dotnet test tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release
+```
+
+## Publish
+
+### Windows x64
 
 ```powershell
 dotnet publish src/PromptHelper/PromptHelper.csproj `
   -c Release `
   -r win-x64 `
   --self-contained true `
-  -o artifacts/publish-check
+  -o artifacts/windows-publish
 ```
 
-## Run
+### Linux x64
+
+```bash
+dotnet publish src/PromptHelper.Desktop/PromptHelper.Desktop.csproj \
+  -c Release \
+  -r linux-x64 \
+  --self-contained true \
+  -o artifacts/linux-publish
+```
+
+The Linux desktop targets X11 directly and therefore also runs through XWayland on normal Wayland desktops. Required native packages on Debian/Ubuntu are `libx11-6 libice6 libsm6 libfontconfig1`.
+
+## Run from source
+
+Windows:
 
 ```powershell
 dotnet run --project src/PromptHelper/PromptHelper.csproj -c Release
 ```
 
-## Crash-Recovery Guarantee
+Linux:
 
-Prompt Helper's automated migration recovery is verified for abrupt application termination.
-Process termination is exercised at the enumerated durable-write and rename cuts. These tests kill the process
-without allowing application cleanup to run.
+```bash
+dotnet run --project src/PromptHelper.Desktop/PromptHelper.Desktop.csproj -c Release
+```
 
-Abrupt VM reset, kernel failure, storage-controller reordering, and physical power loss are
-outside the verified automatic-recovery guarantee. Those events remain best-effort and
-fail-closed until a dedicated post-reboot VM-reset test matrix is run; process-kill evidence
-must not be presented as proof of power-loss durability.
+## Crash-recovery guarantee
 
-## User Data & Data Folder Transitions
+Prompt Helper's automated migration/recovery behavior is verified for abrupt application termination at enumerated durable-write and rename cuts. These tests kill the process without allowing application cleanup to run.
 
-By default, Prompt Helper stores its library in:
+Abrupt VM reset, kernel failure, storage-controller reordering, and physical power loss remain outside the verified automatic-recovery guarantee. Those events are handled fail-closed/best-effort until a dedicated post-reboot VM-reset matrix is run.
 
-`%LOCALAPPDATA%\PromptHelper`
+## User data
 
-The active data folder can be changed from the top-right wrench icon (**Tools and settings**):
+Default library location:
 
-- **Selecting an EMPTY folder**: The current library and all prompts are copied to the new folder while preserving the previous folder as an intact safety copy. Prompt Helper will close immediately; reopen the application to start using the new data folder.
-- **Selecting an EXISTING Prompt Helper library**: The current library is **not** copied, merged, or overwritten. Prompt Helper prompts for explicit confirmation, updates the data-folder setting, and closes immediately. Reopening the application opens the pre-existing library at the chosen location.
+- Windows: `%LOCALAPPDATA%\PromptHelper`
+- Linux: the per-user local application-data location returned by .NET (normally `$XDG_DATA_HOME/PromptHelper` or `~/.local/share/PromptHelper`)
+
+Prompt bodies remain local Markdown files. Prompt Helper contains no telemetry, cloud account, or network-backed prompt storage.
+
+### Custom data folder
+
+Both desktop applications can open a custom Prompt Helper data folder.
+
+- Windows retains its migration workflow for moving/copying an existing library with the established safety checks.
+- Linux switches to the selected library folder without deleting or copying the old folder automatically. A new/empty selected folder receives a fresh Prompt Helper library; an existing compatible folder is opened as-is.
+
+A configured data folder must be an absolute path and must satisfy the platform's filesystem safety/authority checks.
 
 ## Appearance
 
-Open **Tools and settings** and use the **Dark mode** switch to change the appearance immediately. The choice is saved locally. Windows high-contrast mode always takes priority so the application continues to use the system accessibility colors.
+Both desktop applications provide a persistent dark-mode setting. The Windows WPF build additionally yields to Windows high-contrast system colors.
 
-### Target Folder Constraints
+## Linux filesystem safety
 
-A configured data folder must:
-- Be a fully qualified, absolute filesystem path.
-- Not be a drive volume root (such as `C:\` or `D:\`).
-- Not be nested inside the current data folder, nor contain the current data folder.
-- Not be nested inside or contain the `%LOCALAPPDATA%\PromptHelper` bootstrap directory (unless selecting the exact default root).
-- Support standard create, atomic replace (`File.Replace`), and delete write capabilities.
-- Not be actively held/locked by another running instance of Prompt Helper.
+The Linux implementation uses platform-native primitives rather than weakening the Windows invariants:
 
-### Settings Recovery Authority
+- `O_NOFOLLOW` no-symlink opens
+- `statx` filesystem-object identity with birth time
+- same-directory staging
+- file and parent-directory `fsync`
+- atomic `rename` / `renameat2(RENAME_NOREPLACE)`
+- durable ownership journal and startup reconciliation
+- fail-closed recovery when exact object provenance cannot be proven
+- single-instance locking through `flock`
 
-The application bootstrap configuration is stored at:
+## Release assets
 
-- `%LOCALAPPDATA%\PromptHelper\settings.json` (authoritative primary)
-- `%LOCALAPPDATA%\PromptHelper\settings.backup.json` (automatic safety backup)
+v0.5.0 and later cross-platform releases provide:
 
-If `settings.json` is missing or corrupt, Prompt Helper automatically recovers the data-folder configuration from `settings.backup.json`. Settings created by a newer schema version are never downgraded or overwritten.
-
-## Privacy & Offline Execution
-
-Prompt Helper operates strictly locally and offline. Prompt bodies remain local `.md` files on disk. The application does not contain telemetry, cloud accounts, or external network dependencies.
-
-## Release Assets
-
-- Portable self-contained Windows x64 ZIP (no .NET installation required)
-- Separate SHA-256 checksum for verifying the downloaded ZIP
-- SPDX software bill of materials and per-file checksums inside the ZIP
-- Unsigned by default; optional Authenticode signing remains available for maintainers who already own a certificate
+- portable self-contained Windows x64 ZIP
+- portable self-contained Linux x64 `.tar.gz`
+- Debian/Ubuntu amd64 `.deb`
+- separate SHA-256 files for every package
+- SPDX SBOM and per-file checksums inside portable payloads
+- optional Authenticode signing on Windows when maintainer signing secrets are configured
