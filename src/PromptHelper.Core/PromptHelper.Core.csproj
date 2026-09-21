@@ -15,6 +15,7 @@
     <InternalsVisibleTo Include="PromptHelper.Core.Tests" />
     <InternalsVisibleTo Include="PromptHelper.CrashHarness" />
     <InternalsVisibleTo Include="PromptHelper.Platform.Linux" />
+    <InternalsVisibleTo Include="PromptHelper.Platform.Linux.Tests" />
   </ItemGroup>
 
 </Project>
