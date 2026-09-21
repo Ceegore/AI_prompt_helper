@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Models;
 using PromptHelper.Services;
@@ -200,15 +201,15 @@ public sealed class LinuxDesktopSettingsStoreTests
         using var test = new SettingsTestDirectory();
         Directory.CreateDirectory(test.Root);
         string customRoot = Path.Combine(test.Root, "library");
+        string json = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            dataRootPath = customRoot,
+            useDarkMode = true
+        });
         File.WriteAllText(
             Path.Combine(test.Root, "settings.json"),
-            $"""
-            {
-              "schemaVersion": 1,
-              "dataRootPath": "{{customRoot}}",
-              "useDarkMode": true
-            }
-            """,
+            json,
             new UTF8Encoding(false));
 
         var store = new LinuxDesktopSettingsStore(test.Root);
