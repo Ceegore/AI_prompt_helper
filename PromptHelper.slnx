@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/PromptHelper.Core/PromptHelper.Core.csproj" />
+    <Project Path="src/PromptHelper.Platform.Linux/PromptHelper.Platform.Linux.csproj" />
     <Project Path="src/PromptHelper/PromptHelper.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj" />
+    <Project Path="tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj" />
     <Project Path="tests/PromptHelper.CrashHarness/PromptHelper.CrashHarness.csproj" />
     <Project Path="tests/PromptHelper.Tests/PromptHelper.Tests.csproj" />
   </Folder>
