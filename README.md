@@ -89,9 +89,9 @@ dotnet run --project src/PromptHelper.Desktop/PromptHelper.Desktop.csproj -c Rel
 
 ## Crash-recovery guarantee
 
-Prompt Helper's automated migration/recovery behavior is verified for abrupt application termination at enumerated durable-write and rename cuts. These tests kill the process without allowing application cleanup to run.
+Prompt Helper's automated migration/recovery behavior is verified for abrupt application termination at enumerated durable-write and rename cuts. Process termination is exercised by killing the process without allowing application cleanup to run.
 
-Abrupt VM reset, kernel failure, storage-controller reordering, and physical power loss remain outside the verified automatic-recovery guarantee. Those events are handled fail-closed/best-effort until a dedicated post-reboot VM-reset matrix is run.
+Abrupt VM reset, kernel failure, storage-controller reordering, and physical power loss remain outside the verified automatic-recovery guarantee. Process-kill evidence must not be presented as proof of power-loss durability; those events are handled fail-closed/best-effort until a dedicated post-reboot VM-reset matrix is run.
 
 ## User data
 
