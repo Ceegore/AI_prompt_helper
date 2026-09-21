@@ -26,33 +26,6 @@ internal enum ArtifactProvenance
 }
 
 /// <summary>
-/// How serious a reconciliation problem is. The distinction matters because these outcomes
-/// decide whether the application may go on to load state (CRUU16-004).
-/// </summary>
-internal enum ReconciliationSeverity
-{
-    /// <summary>Something was left alone on purpose. Normal, and worth reporting only as information.</summary>
-    Notice,
-
-    /// <summary>A cleanup could not be completed. Nothing committed is at risk.</summary>
-    Warning,
-
-    /// <summary>
-    /// Committed state may be unaccounted for: an interrupted compare-and-swap could not be
-    /// resolved, the ownership ledger is unreadable, or an authority check failed. Continuing
-    /// would mean interpreting an in-flight crash window as ordinary state.
-    /// </summary>
-    Fatal
-}
-
-/// <summary>One thing reconciliation found, with the severity that decides what happens next.</summary>
-internal sealed record ReconciliationOutcome(
-    ReconciliationSeverity Severity,
-    string Code,
-    string Path,
-    string Message);
-
-/// <summary>
 /// Startup reconciliation for artifacts claimed in an <see cref="IOwnedArtifactJournal"/>.
 /// </summary>
 /// <remarks>
