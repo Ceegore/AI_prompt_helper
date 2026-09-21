@@ -143,8 +143,8 @@ public sealed class LinuxDesktopSettingsStore
 
             if (parsed.SchemaVersion > AppSettings.CurrentSchemaVersion)
             {
-                throw new UnsupportedSettingsSchemaException(
-                    parsed.SchemaVersion);
+                throw new NotSupportedException(
+                    $"Unsupported settings schema version: {parsed.SchemaVersion}.");
             }
 
             if (parsed.SchemaVersion == 1)
