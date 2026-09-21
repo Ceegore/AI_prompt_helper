@@ -164,7 +164,6 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
             PreSwapBarrierForTests?.Invoke(fullTarget);
 
             stage.PromoteNoOverwriteExact(fullTarget);
-            RetireCompletedOperation(physicalRoot, operationId, fullTarget);
         }
         catch (Exception ex)
         {
@@ -179,6 +178,10 @@ internal sealed class WindowsAtomicExpectedFileReplacer : IAtomicExpectedFileRep
 
             throw;
         }
+
+        // Promotion is the point of no return. From here on, a bookkeeping failure must
+        // preserve the committed target and force restart; it must never enter stage cleanup.
+        RetireCompletedOperation(physicalRoot, operationId, fullTarget);
     }
 
     private void ReplaceExpectingPresent(
