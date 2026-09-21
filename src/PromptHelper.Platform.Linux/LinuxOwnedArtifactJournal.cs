@@ -12,7 +12,7 @@ namespace PromptHelper.Services;
 /// </summary>
 internal sealed class LinuxOwnedArtifactJournal : IOwnedArtifactJournal
 {
-    private const string RecordVersion = "5";
+    private const string RecordVersion = "6";
     private const string LinuxIdentityScheme = "linux-statx-v1";
     private const string WindowsIdentityScheme = "windows-file-id-v1";
 
@@ -234,7 +234,8 @@ internal sealed class LinuxOwnedArtifactJournal : IOwnedArtifactJournal
             record.CandidateSha256Hex ?? string.Empty,
             record.CandidateLength.ToString(
                 System.Globalization.CultureInfo.InvariantCulture),
-            record.MarkerAttemptId?.ToString("N") ?? string.Empty);
+            record.MarkerAttemptId?.ToString("N") ?? string.Empty,
+            record.PreviousSha256Hex ?? string.Empty);
 
         return body + "|" + Checksum(body);
     }
@@ -261,9 +262,14 @@ internal sealed class LinuxOwnedArtifactJournal : IOwnedArtifactJournal
         }
 
         string[] parts = body.Split('|');
-        if (parts.Length == 11 && parts[0] == RecordVersion)
+        if (parts.Length == 12 && parts[0] == RecordVersion)
         {
-            return TryDeserializeLinux(parts, out record);
+            return TryDeserializeLinux(parts, hasPreviousHash: true, out record);
+        }
+
+        if (parts.Length == 11 && parts[0] == "5")
+        {
+            return TryDeserializeLinux(parts, hasPreviousHash: false, out record);
         }
 
         // Windows journal v2/v3/v4 records are understood as opaque foreign-platform
@@ -280,6 +286,7 @@ internal sealed class LinuxOwnedArtifactJournal : IOwnedArtifactJournal
 
     private static bool TryDeserializeLinux(
         string[] parts,
+        bool hasPreviousHash,
         out OwnedArtifactRecord record)
     {
         record = null!;
@@ -317,6 +324,17 @@ internal sealed class LinuxOwnedArtifactJournal : IOwnedArtifactJournal
             return false;
         }
 
+        string? previousSha = null;
+        if (hasPreviousHash)
+        {
+            previousSha = parts[11].Length == 0 ? null : parts[11];
+            if (previousSha is not null &&
+                (previousSha.Length != 64 || !previousSha.All(Uri.IsHexDigit)))
+            {
+                return false;
+            }
+        }
+
         record = new OwnedArtifactRecord(
             operationId,
             kind,
@@ -326,7 +344,8 @@ internal sealed class LinuxOwnedArtifactJournal : IOwnedArtifactJournal
             restoreRelativePath,
             candidateSha,
             candidateLength,
-            markerAttemptId);
+            markerAttemptId,
+            previousSha);
         return true;
     }
 
