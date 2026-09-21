@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Models;
 using PromptHelper.Services;
@@ -39,5 +40,158 @@ public sealed class LinuxDesktopSettingsStoreTests
         Assert.AreEqual(
             DefaultDataRoot.Path,
             store.ResolveEffectiveDataRoot(settings));
+    }
+
+    [TestMethod]
+    public void Save_and_load_roundtrip_persists_current_settings_and_backup()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+        string customRoot = Path.Combine(test.Root, "custom-library");
+
+        store.Save(new AppSettings
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            DataRootPath = customRoot,
+            UseDarkMode = true
+        });
+
+        AppSettings loaded = store.Load();
+
+        Assert.AreEqual(AppSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+        Assert.AreEqual(Path.GetFullPath(customRoot), loaded.DataRootPath);
+        Assert.IsTrue(loaded.UseDarkMode);
+        Assert.IsTrue(File.Exists(store.SettingsPath));
+        Assert.IsTrue(File.Exists(Path.Combine(test.Root, "settings.backup.json")));
+    }
+
+    [TestMethod]
+    public void Corrupt_primary_recovers_from_current_backup_and_repairs_primary()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+        store.Save(new AppSettings
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            UseDarkMode = true
+        });
+
+        string backupPath = Path.Combine(test.Root, "settings.backup.json");
+        byte[] expected = File.ReadAllBytes(backupPath);
+        File.WriteAllText(store.SettingsPath, "{ broken", new UTF8Encoding(false));
+
+        AppSettings loaded = store.Load();
+
+        Assert.IsTrue(loaded.UseDarkMode);
+        CollectionAssert.AreEqual(expected, File.ReadAllBytes(store.SettingsPath));
+        CollectionAssert.AreEqual(expected, File.ReadAllBytes(backupPath));
+    }
+
+    [TestMethod]
+    public void Future_primary_fails_closed_and_is_not_overwritten_by_older_backup()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+        store.Save(new AppSettings
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            UseDarkMode = false
+        });
+
+        byte[] future = Encoding.UTF8.GetBytes(
+            """
+            {
+              "schemaVersion": 999,
+              "dataRootPath": null,
+              "useDarkMode": true
+            }
+            """);
+        File.WriteAllBytes(store.SettingsPath, future);
+
+        UnsupportedSettingsSchemaException ex =
+            Assert.Throws<UnsupportedSettingsSchemaException>(() => store.Load());
+
+        Assert.AreEqual(999, ex.SchemaVersion);
+        CollectionAssert.AreEqual(future, File.ReadAllBytes(store.SettingsPath));
+    }
+
+    [TestMethod]
+    public void Future_backup_fails_closed_when_primary_is_missing()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+        store.Save(new AppSettings
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            UseDarkMode = false
+        });
+
+        File.Delete(store.SettingsPath);
+        string backupPath = Path.Combine(test.Root, "settings.backup.json");
+        byte[] future = Encoding.UTF8.GetBytes(
+            """
+            {
+              "schemaVersion": 999,
+              "dataRootPath": null,
+              "useDarkMode": true
+            }
+            """);
+        File.WriteAllBytes(backupPath, future);
+
+        UnsupportedSettingsSchemaException ex =
+            Assert.Throws<UnsupportedSettingsSchemaException>(() => store.Load());
+
+        Assert.AreEqual(999, ex.SchemaVersion);
+        CollectionAssert.AreEqual(future, File.ReadAllBytes(backupPath));
+        Assert.IsFalse(File.Exists(store.SettingsPath));
+    }
+
+    [TestMethod]
+    public void Corrupt_primary_and_backup_fail_closed()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        Directory.CreateDirectory(test.Root);
+        File.WriteAllText(
+            Path.Combine(test.Root, "settings.json"),
+            "{ broken",
+            new UTF8Encoding(false));
+        File.WriteAllText(
+            Path.Combine(test.Root, "settings.backup.json"),
+            "[]",
+            new UTF8Encoding(false));
+
+        var store = new LinuxDesktopSettingsStore(test.Root);
+
+        Assert.Throws<InvalidDataException>(() => store.Load());
+    }
+
+    private sealed class SettingsTestDirectory : IDisposable
+    {
+        public SettingsTestDirectory()
+        {
+            Root = Path.Combine(
+                Path.GetTempPath(),
+                "PromptHelper-LinuxSettings-" + Guid.NewGuid().ToString("N"));
+        }
+
+        public string Root { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Root))
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+        }
     }
 }
