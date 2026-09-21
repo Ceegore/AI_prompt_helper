@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PromptHelper.Models;
@@ -57,7 +60,7 @@ public sealed class CrossPlatformRoundtripAcceptanceTests
             nested.Id,
             "Windows seed\r\nUnicode: e\u0301 😀 العربية\r\n",
             "Seed α").Value;
-        service.CreatePrompt(category.Id, "Second body\nLF input", "Second").Value;
+        _ = service.CreatePrompt(category.Id, "Second body\nLF input", "Second").Value;
 
         File.WriteAllText(
             Path.Combine(root, ".roundtrip-seed.txt"),
