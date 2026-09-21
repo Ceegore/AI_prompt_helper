@@ -5,10 +5,14 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - '.github/workflows/release-package-ci.yml'
+      - '.github/workflows/cross-platform-acceptance.yml'
       - 'tools/package-linux-release.sh'
       - 'packaging/linux/**'
       - 'src/PromptHelper/PromptHelper.csproj'
       - 'src/PromptHelper.Desktop/PromptHelper.Desktop.csproj'
+      - 'tests/PromptHelper.Tests/**'
+      - 'tests/PromptHelper.Core.Tests/**'
+      - 'tests/PromptHelper.Platform.Linux.Tests/**'
       - 'docs/releases/**'
 
 permissions:
