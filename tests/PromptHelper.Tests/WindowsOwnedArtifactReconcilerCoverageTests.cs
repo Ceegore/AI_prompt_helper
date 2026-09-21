@@ -221,7 +221,7 @@ public sealed class WindowsOwnedArtifactReconcilerCoverageTests
         Assert.IsTrue(foreign.HasFatal);
         Assert.IsTrue(foreign.Outcomes.Any(o => o.Code == "CAS_AMBIGUOUS"));
         Assert.AreEqual("foreign", File.ReadAllText(target));
-        Assert.AreEqual(1, foreignJournal.LastSurviving!.Count);
+        Assert.AreEqual(0, foreignJournal.RewriteCalls);
     }
 
     [TestMethod]
@@ -376,7 +376,7 @@ public sealed class WindowsOwnedArtifactReconcilerCoverageTests
         Assert.IsTrue(tampered.Outcomes.Any(o =>
             o.Code == "MIGRATION_FINAL_CONTENT_MISMATCH"));
         Assert.AreEqual("tampered", File.ReadAllText(final));
-        Assert.AreEqual(1, tamperedJournal.LastSurviving!.Count);
+        Assert.AreEqual(0, tamperedJournal.RewriteCalls);
     }
 
     [TestMethod]
@@ -423,7 +423,7 @@ public sealed class WindowsOwnedArtifactReconcilerCoverageTests
         Assert.IsTrue(durableResult.Outcomes.Any(o =>
             o.Code == "CAPABILITY_PROBE_DURABLE_CONTENT_MISMATCH"));
         Assert.AreEqual("different", File.ReadAllText(probe));
-        Assert.AreEqual(1, durableJournal.LastSurviving!.Count);
+        Assert.AreEqual(0, durableJournal.RewriteCalls);
     }
 
     private static OwnedArtifactRecord CasRecord(
