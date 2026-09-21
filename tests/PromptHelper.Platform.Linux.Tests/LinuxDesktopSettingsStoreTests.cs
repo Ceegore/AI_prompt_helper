@@ -114,10 +114,10 @@ public sealed class LinuxDesktopSettingsStoreTests
             """);
         File.WriteAllBytes(store.SettingsPath, future);
 
-        UnsupportedSettingsSchemaException ex =
-            Assert.Throws<UnsupportedSettingsSchemaException>(() => store.Load());
+        NotSupportedException ex =
+            Assert.Throws<NotSupportedException>(() => store.Load());
 
-        Assert.AreEqual(999, ex.SchemaVersion);
+        StringAssert.Contains(ex.Message, "999");
         CollectionAssert.AreEqual(future, File.ReadAllBytes(store.SettingsPath));
     }
 
@@ -146,10 +146,10 @@ public sealed class LinuxDesktopSettingsStoreTests
             """);
         File.WriteAllBytes(backupPath, future);
 
-        UnsupportedSettingsSchemaException ex =
-            Assert.Throws<UnsupportedSettingsSchemaException>(() => store.Load());
+        NotSupportedException ex =
+            Assert.Throws<NotSupportedException>(() => store.Load());
 
-        Assert.AreEqual(999, ex.SchemaVersion);
+        StringAssert.Contains(ex.Message, "999");
         CollectionAssert.AreEqual(future, File.ReadAllBytes(backupPath));
         Assert.IsFalse(File.Exists(store.SettingsPath));
     }
