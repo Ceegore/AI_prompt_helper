@@ -175,6 +175,113 @@ public sealed class LinuxDesktopSettingsStoreTests
         Assert.Throws<InvalidDataException>(() => store.Load());
     }
 
+    [TestMethod]
+    public void Empty_store_loads_current_defaults_without_creating_files()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+
+        AppSettings loaded = store.Load();
+
+        Assert.AreEqual(AppSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+        Assert.IsNull(loaded.DataRootPath);
+        Assert.IsFalse(loaded.UseDarkMode);
+        Assert.IsFalse(File.Exists(store.SettingsPath));
+        Assert.IsFalse(File.Exists(Path.Combine(test.Root, "settings.backup.json")));
+    }
+
+    [TestMethod]
+    public void Version_one_settings_are_migrated_in_memory_with_dark_mode_disabled()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        Directory.CreateDirectory(test.Root);
+        string customRoot = Path.Combine(test.Root, "library");
+        File.WriteAllText(
+            Path.Combine(test.Root, "settings.json"),
+            $"""
+            {
+              "schemaVersion": 1,
+              "dataRootPath": "{{customRoot}}",
+              "useDarkMode": true
+            }
+            """,
+            new UTF8Encoding(false));
+
+        var store = new LinuxDesktopSettingsStore(test.Root);
+        AppSettings loaded = store.Load();
+
+        Assert.AreEqual(AppSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+        Assert.AreEqual(Path.GetFullPath(customRoot), loaded.DataRootPath);
+        Assert.IsFalse(loaded.UseDarkMode);
+    }
+
+    [TestMethod]
+    public void Invalid_nonpositive_schema_uses_valid_backup()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+        store.Save(new AppSettings
+        {
+            SchemaVersion = AppSettings.CurrentSchemaVersion,
+            UseDarkMode = true
+        });
+
+        File.WriteAllText(
+            store.SettingsPath,
+            """
+            {
+              "schemaVersion": 0,
+              "dataRootPath": null,
+              "useDarkMode": false
+            }
+            """,
+            new UTF8Encoding(false));
+
+        AppSettings loaded = store.Load();
+
+        Assert.IsTrue(loaded.UseDarkMode);
+        Assert.AreEqual(AppSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+    }
+
+    [TestMethod]
+    public void Save_rejects_noncurrent_schema_and_null_settings()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var test = new SettingsTestDirectory();
+        var store = new LinuxDesktopSettingsStore(test.Root);
+
+        Assert.Throws<ArgumentNullException>(() => store.Save(null!));
+        Assert.Throws<InvalidDataException>(() =>
+            store.Save(new AppSettings
+            {
+                SchemaVersion = AppSettings.CurrentSchemaVersion + 1
+            }));
+    }
+
+    [TestMethod]
+    public void NormalizeDataRoot_handles_blank_and_trimmed_absolute_paths()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        Assert.IsNull(LinuxDesktopSettingsStore.NormalizeDataRoot(null));
+        Assert.IsNull(LinuxDesktopSettingsStore.NormalizeDataRoot("   "));
+
+        string absolute = Path.Combine(
+            Path.GetTempPath(),
+            "PromptHelper-settings-trimmed");
+
+        Assert.AreEqual(
+            Path.GetFullPath(absolute),
+            LinuxDesktopSettingsStore.NormalizeDataRoot("  " + absolute + "  "));
+    }
+
     private sealed class SettingsTestDirectory : IDisposable
     {
         public SettingsTestDirectory()
