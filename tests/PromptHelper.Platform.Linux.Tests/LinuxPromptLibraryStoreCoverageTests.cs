@@ -377,9 +377,10 @@ public sealed class LinuxPromptLibraryStoreCoverageTests
                 }
             };
 
-            Assert.Throws<InvalidOperationException>(() =>
+            IOException ex = Assert.Throws<IOException>(() =>
                 store.EditPrompt(prompt.Id, "new body", "new title"));
 
+            StringAssert.Contains(ex.Message, "Restart Prompt Helper");
             Assert.AreEqual("old body", store.ReadPrompt(prompt.Id));
             Assert.AreEqual(
                 "old title",
