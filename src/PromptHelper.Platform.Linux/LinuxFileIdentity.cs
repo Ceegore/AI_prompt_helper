@@ -13,7 +13,9 @@ internal readonly record struct LinuxFileIdentity(
     ulong Inode)
 {
     private const int AtEmptyPath = 0x1000;
-    private const uint StatxInode = 0x00000100;
+    private const uint StatxBasicStats = 0x000007ff;
+    private const ushort FileTypeMask = 0xf000;
+    private const ushort RegularFile = 0x8000;
 
     [StructLayout(LayoutKind.Explicit, Size = 256)]
     private struct StatxBuffer
@@ -52,18 +54,38 @@ internal readonly record struct LinuxFileIdentity(
         LinuxNativeFileSystem.EnsureLinux();
         ArgumentNullException.ThrowIfNull(handle);
 
-        int fd = handle.DangerousGetHandle().ToInt32();
-        if (statx(fd, string.Empty, AtEmptyPath, StatxInode, out StatxBuffer info) != 0)
-        {
-            int error = Marshal.GetLastPInvokeError();
-            throw new IOException(
-                $"Unable to read Linux file identity from an open handle (errno {error}).",
-                new Win32Exception(error));
-        }
+        StatxBuffer info = ReadHandleStatx(handle);
 
         return new LinuxFileIdentity(
             info.DeviceMajor,
             info.DeviceMinor,
             info.Inode);
+    }
+
+    public static void AssertRegularFile(SafeFileHandle handle, string path)
+    {
+        StatxBuffer info = ReadHandleStatx(handle);
+        if ((info.Mode & FileTypeMask) != RegularFile)
+        {
+            throw new InvalidDataException(
+                $"Expected a regular file but found another filesystem object at '{path}'.");
+        }
+    }
+
+    private static StatxBuffer ReadHandleStatx(SafeFileHandle handle)
+    {
+        LinuxNativeFileSystem.EnsureLinux();
+        ArgumentNullException.ThrowIfNull(handle);
+
+        int fd = handle.DangerousGetHandle().ToInt32();
+        if (statx(fd, string.Empty, AtEmptyPath, StatxBasicStats, out StatxBuffer info) != 0)
+        {
+            int error = Marshal.GetLastPInvokeError();
+            throw new IOException(
+                $"Unable to inspect an open Linux file handle (errno {error}).",
+                new Win32Exception(error));
+        }
+
+        return info;
     }
 }
