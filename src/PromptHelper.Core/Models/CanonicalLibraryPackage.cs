@@ -1,6 +1,5 @@
 using System;
 using System.Security.Cryptography;
-using System.Text.Json;
 using PromptHelper.Services;
 
 namespace PromptHelper.Models;
@@ -23,7 +22,7 @@ public sealed record CanonicalLibraryPackage
         ArgumentNullException.ThrowIfNull(document);
         LibraryValidator.Validate(document);
         LibraryDocument clone = LibraryDocumentCloner.Clone(document);
-        string json = JsonSerializer.Serialize(clone, LibraryRepository.JsonOptions);
+        string json = LibraryJson.SerializeCanonical(clone);
         byte[] bytes = StrictUtf8Text.Encode(json);
         return new CanonicalLibraryPackage(
             clone,
