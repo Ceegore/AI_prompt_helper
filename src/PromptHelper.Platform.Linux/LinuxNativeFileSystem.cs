@@ -17,6 +17,7 @@ internal static class LinuxNativeFileSystem
 
     private const int OpenReadOnly = 0;
     private const int OpenWriteOnly = 0x0001;
+    private const int OpenReadWrite = 0x0002;
     private const int OpenCreate = 0x0040;
     private const int OpenExclusive = 0x0080;
     private const int OpenDirectory = 0x10000;
@@ -85,6 +86,80 @@ internal static class LinuxNativeFileSystem
         {
             handle.Dispose();
             throw;
+        }
+    }
+
+    public static SafeFileHandle? OpenReadWriteNoFollowOrNull(string path)
+    {
+        EnsureLinux();
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        while (true)
+        {
+            int fd = openReadOnly(
+                path,
+                OpenReadWrite | OpenNoFollow | OpenCloseOnExec);
+
+            if (fd >= 0)
+            {
+                return new SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+            }
+
+            int error = Marshal.GetLastPInvokeError();
+            if (error == ErrorInterrupted)
+            {
+                continue;
+            }
+
+            if (error is ErrorNoEntry or ErrorNotDirectory)
+            {
+                return null;
+            }
+
+            if (error == ErrorLoop)
+            {
+                throw new InvalidDataException(
+                    $"Refusing to follow a symbolic link at '{path}'.");
+            }
+
+            throw NativeIOException(
+                $"Unable to open Linux file '{path}' for read/write without following links.",
+                error);
+        }
+    }
+
+    public static SafeFileHandle OpenReadWriteNoFollowOrCreate(string path)
+    {
+        EnsureLinux();
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        while (true)
+        {
+            int fd = openCreate(
+                path,
+                OpenReadWrite | OpenCreate | OpenNoFollow | OpenCloseOnExec,
+                OwnerReadWrite);
+
+            if (fd >= 0)
+            {
+                return new SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+            }
+
+            int error = Marshal.GetLastPInvokeError();
+            if (error == ErrorInterrupted)
+            {
+                continue;
+            }
+
+            if (error == ErrorLoop)
+            {
+                throw new InvalidDataException(
+                    $"Refusing to follow a symbolic link at '{path}'.");
+            }
+
+            throw NativeIOException(
+                $"Unable to open Linux file '{path}' for read/write without following links.",
+                error);
         }
     }
 
