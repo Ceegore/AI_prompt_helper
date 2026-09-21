@@ -18,14 +18,7 @@ public abstract record LibraryMetadataCompatibility
 
 public sealed class LibraryRepository
 {
-    public static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        AllowTrailingCommas = false,
-        ReadCommentHandling = JsonCommentHandling.Disallow,
-        RespectNullableAnnotations = true
-    };
+    public static readonly JsonSerializerOptions JsonOptions = LibraryJson.Options;
 
     private abstract record MetadataFileState
     {
@@ -88,7 +81,7 @@ public sealed class LibraryRepository
     {
         ArgumentNullException.ThrowIfNull(document);
         LibraryValidator.Validate(document);
-        string json = JsonSerializer.Serialize(document, JsonOptions);
+        string json = LibraryJson.SerializeCanonical(document);
         return StrictUtf8Text.Encode(json);
     }
 
