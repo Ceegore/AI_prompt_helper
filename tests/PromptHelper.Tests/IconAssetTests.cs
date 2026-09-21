@@ -162,6 +162,22 @@ public sealed class IconAssetTests
     }
 
     [TestMethod]
+    public void Linux_desktop_third_party_notice_includes_Avalonia_license()
+    {
+        string project = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "src", "PromptHelper.Desktop", "PromptHelper.Desktop.csproj"));
+        string notices = File.ReadAllText(RepositoryTestPaths.RequireFile(
+            "THIRD_PARTY_NOTICES.md"));
+
+        StringAssert.Contains(project, "Avalonia");
+        StringAssert.Contains(project, "Version=\"12.1.2\"");
+        StringAssert.Contains(notices, "Avalonia 12.1.2");
+        StringAssert.Contains(notices, "Copyright (c) AvaloniaUI OÜ");
+        StringAssert.Contains(notices, "Permission is hereby granted");
+        StringAssert.Contains(notices, "THE SOFTWARE IS PROVIDED \"AS IS\"");
+    }
+
+    [TestMethod]
     public void PromptHelperIco_when_present_is_valid_and_contains_required_square_frames()
     {
         string root = RepositoryTestPaths.Root;

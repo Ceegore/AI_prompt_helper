@@ -1,0 +1,26 @@
+name: Release Package Validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-package-ci.yml'
+      - 'tools/package-linux-release.sh'
+      - 'packaging/linux/**'
+      - 'src/PromptHelper/PromptHelper.csproj'
+      - 'src/PromptHelper.Desktop/PromptHelper.Desktop.csproj'
+      - 'docs/releases/**'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  validate:
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: v0.5.0
+      target_sha: ${{ github.event.pull_request.head.sha }}
+      validation_only: true
+    secrets: inherit

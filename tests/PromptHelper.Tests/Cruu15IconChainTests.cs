@@ -162,10 +162,15 @@ public sealed class Cruu15IconChainTests
         Assert.IsFalse(releaseWorkflow.Contains("release_gate", StringComparison.Ordinal),
             "The release path must not depend on an opt-in workflow_dispatch input.");
 
-        // And no step in it is conditional: a strict check that some configuration can skip is
-        // a strict check that will eventually be skipped.
-        Assert.IsFalse(releaseWorkflow.Contains("if: ${{", StringComparison.Ordinal),
-            "No step on the release path may be conditional.");
+        // The strict icon/source verification steps themselves must remain unconditional.
+        // Other release steps may be conditional (for example optional signing or the
+        // validation-only reusable-workflow path).
+        AssertUnconditionalReleaseStep(
+            releaseWorkflow,
+            "Verify repository release assets");
+        AssertUnconditionalReleaseStep(
+            releaseWorkflow,
+            "Verify icon is reproducible from the approved vector source");
 
         // The reparse-point tests in the full suite fail rather than opt out, so the release
         // runner has to be able to create symlinks.
@@ -183,6 +188,27 @@ public sealed class Cruu15IconChainTests
             RepositoryTestPaths.RequireFile(".github", "workflows", "windows-ci.yml"));
         StringAssert.Contains(ci, "VerifyIconGeneration.ps1");
         StringAssert.Contains(ci, "VerifyFindingCoverage.ps1");
+    }
+
+    private static void AssertUnconditionalReleaseStep(
+        string workflow,
+        string stepName)
+    {
+        string marker = $"- name: {stepName}";
+        int start = workflow.IndexOf(marker, StringComparison.Ordinal);
+        Assert.IsTrue(start >= 0, $"Release workflow is missing '{stepName}'.");
+
+        int nextStep = workflow.IndexOf(
+            "- name:",
+            start + marker.Length,
+            StringComparison.Ordinal);
+        string step = nextStep >= 0
+            ? workflow[start..nextStep]
+            : workflow[start..];
+
+        Assert.IsFalse(
+            step.Contains("if:", StringComparison.Ordinal),
+            $"Strict release step '{stepName}' must not be conditional.");
     }
 
     [TestMethod]
