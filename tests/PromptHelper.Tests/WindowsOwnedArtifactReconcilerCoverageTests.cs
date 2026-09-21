@@ -371,9 +371,11 @@ public sealed class WindowsOwnedArtifactReconcilerCoverageTests
         OwnedArtifactReconciler.Result tampered =
             OwnedArtifactReconciler.Reconcile(root.Path, tamperedJournal);
 
-        Assert.IsFalse(tampered.HasFatal);
+        Assert.IsTrue(tampered.HasFatal);
+        Assert.IsTrue(tampered.Outcomes.Any(o =>
+            o.Code == "MIGRATION_FINAL_CONTENT_MISMATCH"));
         Assert.AreEqual("tampered", File.ReadAllText(final));
-        Assert.AreEqual(0, tamperedJournal.LastSurviving!.Count);
+        Assert.AreEqual(1, tamperedJournal.LastSurviving!.Count);
     }
 
     [TestMethod]
