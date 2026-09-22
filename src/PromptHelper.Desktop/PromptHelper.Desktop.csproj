@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>PromptHelper.Desktop</RootNamespace>
     <AssemblyName>PromptHelper</AssemblyName>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 

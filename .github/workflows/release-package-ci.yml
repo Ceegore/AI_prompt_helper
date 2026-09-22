@@ -24,7 +24,7 @@ jobs:
   validate:
     uses: ./.github/workflows/release.yml
     with:
-      release_tag: v0.5.0
+      release_tag: v0.5.1
       target_sha: ${{ github.event.pull_request.head.sha }}
       validation_only: true
     secrets: inherit
