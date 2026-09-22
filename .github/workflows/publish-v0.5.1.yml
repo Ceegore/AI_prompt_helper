@@ -8,6 +8,8 @@ on:
       - 'docs/releases/v0.5.1.md'
       - 'src/PromptHelper/PromptHelper.csproj'
       - 'src/PromptHelper.Desktop/PromptHelper.Desktop.csproj'
+      - 'tests/PromptHelper.Tests/AuditDefectRegressionTests.cs'
+      - '.github/workflows/publish-v0.5.1.yml'
 
 permissions:
   contents: write
