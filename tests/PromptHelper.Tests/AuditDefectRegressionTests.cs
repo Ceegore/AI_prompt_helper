@@ -469,7 +469,8 @@ public sealed class AuditDefectRegressionTests
         Assert.IsNotNull(version);
         Assert.AreEqual(0, version.Major);
         Assert.AreEqual(5, version.Minor);
-        Assert.AreEqual(0, version.Build);
+        // Legacy audit sentinel name is retained for evidence compatibility; v0.5.1 expects patch 1.
+        Assert.AreEqual(1, version.Build);
     }
 
     [TestMethod]
