@@ -264,7 +264,7 @@ jobs:
           subject-path: artifacts/windows-assets/*
 
       - name: Upload Windows release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PromptHelper-windows-release-assets
           path: artifacts/windows-assets/*
@@ -272,7 +272,7 @@ jobs:
 
       - name: Upload Windows release test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-test-results
           path: '**/TestResults/**/*.trx'
@@ -400,7 +400,7 @@ jobs:
           subject-path: artifacts/linux-assets/*
 
       - name: Upload Linux release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PromptHelper-linux-release-assets
           path: artifacts/linux-assets/*
@@ -408,7 +408,7 @@ jobs:
 
       - name: Upload Linux release test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-test-results
           path: |
