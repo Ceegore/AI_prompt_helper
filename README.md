@@ -49,6 +49,17 @@ dotnet test tests/PromptHelper.Core.Tests/PromptHelper.Core.Tests.csproj -c Rele
 dotnet test tests/PromptHelper.Platform.Linux.Tests/PromptHelper.Platform.Linux.Tests.csproj -c Release
 ```
 
+On a Windows machine with Smart App Control or a WDAC/AppLocker policy enabled, run the
+Windows tests through the wrapper instead. A code-integrity block reports itself as hundreds
+of ordinary test failures; the wrapper detects it and exits `42` so it can never be mistaken
+for a regression:
+
+```powershell
+powershell -NoProfile -File tools\RunTestsSacSafe.ps1 -Build
+```
+
+See [AGENTS.md](AGENTS.md) for the full workflow and exit codes.
+
 ## Publish
 
 ### Windows x64
@@ -110,6 +121,16 @@ Both desktop applications can open a custom Prompt Helper data folder.
 - Linux switches to the selected library folder without deleting or copying the old folder automatically. A new/empty selected folder receives a fresh Prompt Helper library; an existing compatible folder is opened as-is.
 
 A configured data folder must be an absolute path and must satisfy the platform's filesystem safety/authority checks.
+
+On Windows one of those checks is the filesystem itself. The crash-safe write path identifies
+every transaction artifact by volume serial plus 128-bit file ID rather than by pathname,
+because a pathname can be occupied by a foreign object after a crash, so a volume without
+file IDs cannot provide the durability guarantee at all. **exFAT and FAT32 volumes do not
+support file IDs** — measured on an exFAT volume 2026-10-22: `FileIdInfo` fails with Win32 87
+and the volume reports no `FILE_SUPPORTS_OPEN_BY_FILE_ID`. USB sticks, SD cards and large
+external drives are commonly exFAT. Prompt Helper refuses such a folder when it is selected,
+names the filesystem and the missing capability, and writes nothing to the drive; use a folder
+on an NTFS or ReFS volume.
 
 ## Appearance
 

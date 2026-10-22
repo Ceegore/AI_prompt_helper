@@ -699,7 +699,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
         using var bootstrap = new TestDirectory();
         var policy = new ManagedDataRootPolicy();
 
-        string missingFolder = @"Z:\NonExistentDrive\MissingFolder";
+        string missingFolder = TestDrives.UnusedPath("NonExistentDrive", "MissingFolder");
         Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
             policy.ValidateConfiguredRootForStartup(missingFolder, bootstrap.Root));
     }
@@ -819,7 +819,7 @@ public sealed class Cruu7ComprehensiveVerificationTests
     [TestMethod]
     public void CRUU7_014_B_Lease_fails_immediately_on_access_denied_or_file_not_found()
     {
-        string invalidPath = @"Z:\NonExistentDrive\lock.file";
+        string invalidPath = TestDrives.UnusedPath("NonExistentDrive", "lock.file");
         Assert.Throws<IOException>(() => SettingsMutationLease.TryAcquire(invalidPath, SettingsLeasePolicy.FastTest));
     }
 
