@@ -567,6 +567,20 @@
         'CRUU21_004_CrashHarness_signal_contains_exact_production_cut_identity',
         'CRUU21_004_Hard_crash_evidence_map_is_per_sentinel_not_only_per_finding',
         'CRUU21_004_Release_gate_validates_child_and_parent_crash_evidence',
+        # CRUU22-001
+        'CRUU22_001_Filesystem_without_case_sensitivity_feature_is_not_an_inspection_failure',
+        'CRUU22_001_Capable_filesystem_query_failure_still_fails_closed',
+        # CRUU22-002
+        'CRUU22_002_Volume_without_file_identity_is_reported_as_unsupported',
+        'CRUU22_002_Volume_with_file_identity_is_supported',
+        'CRUU22_002_Non_capability_error_fails_closed_rather_than_blaming_the_drive',
+        'CRUU22_002_Unopenable_directory_is_an_inspection_failure',
+        'CRUU22_002_Unsupported_volume_is_reported_even_without_a_filesystem_name',
+        'CRUU22_002_Folder_selection_refuses_unsupported_volume_with_an_actionable_message',
+        'CRUU22_002_Startup_refuses_configured_folder_on_unsupported_volume',
+        'CRUU22_002_Supported_volume_is_accepted_unchanged',
+        'CRUU22_002_Inspection_failure_fails_closed_without_claiming_unsupported',
+        'CRUU22_002_Every_mounted_volume_is_classified_without_an_inspection_failure',
         # CRUU3-001
         'CRUU3_001_MainWindow_Requests_Shutdown_On_RestartRequired',
         # CRUU3-002

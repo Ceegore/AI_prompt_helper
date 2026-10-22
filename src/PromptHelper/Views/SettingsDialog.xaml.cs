@@ -194,6 +194,13 @@ public partial class SettingsDialog : Window
                 "\r\n\r\nNo data-folder change was committed. Restore or reconnect the folder and retry.",
                 "Configured Data Folder Unavailable");
         }
+        catch (UnsupportedDataRootFilesystemException ex)
+        {
+            _confirmationService.ShowWarning(
+                ex.Message +
+                "\r\n\r\nNo data-folder change was committed and the current data folder was left unchanged.",
+                "Drive Not Supported");
+        }
         catch (UnsupportedLibrarySchemaException ex)
         {
             _confirmationService.ShowWarning(

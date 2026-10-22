@@ -187,12 +187,25 @@ public sealed class ManagedDataRootPolicyTests
         string bootstrap = @"C:\Users\Test\AppData\Local\PromptHelper";
         string configured = @"E:\Removable\CustomData";
 
+        // The case-sensitivity inspector is faked so this test proves the dedicated safety
+        // error and nothing else. With the real inspector the result depended on what the
+        // machine happens to have mounted at E:\ - an exFAT volume there made the lexical
+        // pre-check fail first, and this test then reported a case-insensitivity error
+        // instead of the safety error it is about. Real filesystem behaviour is covered by
+        // CaseSensitivityFileSystemSupportTests.
+        var caseInspector = new FakeDirectoryCaseSensitivityInspector();
+
+        // Same reasoning for the volume inspector: E:\ is an exFAT volume on the development
+        // machine, so the real inspector would refuse it as a filesystem without file-ID
+        // support before this test ever reached the unavailable-folder path it is about.
+        var volumeInspector = new FakeDataRootVolumeCapabilityInspector();
+
         // DirectoryNotFound
         var resolver1 = new FakePhysicalPathResolver
         {
             Failure = new DirectoryNotFoundException("Could not find part of path")
         };
-        var policy1 = new ManagedDataRootPolicy(resolver1);
+        var policy1 = new ManagedDataRootPolicy(resolver1, caseInspector, volumeInspector);
         var ex1 = Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
             policy1.ValidateConfiguredRootForStartup(configured, bootstrap));
         Assert.AreEqual(Path.GetFullPath(configured), ex1.DataFolderPath);
@@ -202,7 +215,7 @@ public sealed class ManagedDataRootPolicyTests
         {
             Failure = new DriveNotFoundException("Drive not found")
         };
-        var policy2 = new ManagedDataRootPolicy(resolver2);
+        var policy2 = new ManagedDataRootPolicy(resolver2, caseInspector, volumeInspector);
         var ex2 = Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
             policy2.ValidateConfiguredRootForStartup(configured, bootstrap));
         Assert.AreEqual(Path.GetFullPath(configured), ex2.DataFolderPath);
@@ -212,7 +225,7 @@ public sealed class ManagedDataRootPolicyTests
         {
             Failure = new Win32Exception(3, "The system cannot find the path specified")
         };
-        var policy3 = new ManagedDataRootPolicy(resolver3);
+        var policy3 = new ManagedDataRootPolicy(resolver3, caseInspector, volumeInspector);
         var ex3 = Assert.Throws<ConfiguredDataFolderUnavailableException>(() =>
             policy3.ValidateConfiguredRootForStartup(configured, bootstrap));
         Assert.AreEqual(Path.GetFullPath(configured), ex3.DataFolderPath);

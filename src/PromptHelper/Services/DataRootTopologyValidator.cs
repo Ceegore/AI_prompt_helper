@@ -47,12 +47,44 @@ public static class DataRootTopologyValidator
         return FindNearestExistingDirectoryStrict(path);
     }
 
+    /// <summary>
+    /// Asserts that the volume backing <paramref name="existingDirectory"/> can support the
+    /// file-identity model the crash-safe write path is built on, so an unusable drive is
+    /// refused here - with an explanation - instead of failing later inside a staging write
+    /// with a native error code (CRUU22-002).
+    /// </summary>
+    internal static void AssertVolumeSupportsDataRoot(
+        IDataRootVolumeCapabilityInspector inspector,
+        string existingDirectory,
+        string reportedPath)
+    {
+        // Emitted before the inspection so a test that proves the fail-closed path still
+        // binds to this gate, which is the production code that turns a capability answer
+        // into a user-facing refusal.
+        ProductionRuntimeEvidence.Hit("DataRootTopologyValidator.AssertVolumeSupportsDataRoot");
+
+        DataRootVolumeCapabilities capabilities = inspector.Inspect(existingDirectory);
+
+        if (!capabilities.SupportsFileIdentity)
+        {
+            throw new UnsupportedDataRootFilesystemException(
+                reportedPath,
+                capabilities.FileSystemName,
+                "file identifiers (128-bit file IDs)",
+                // Which filesystems are affected, and what to use instead, are Windows facts;
+                // the core contract stays platform-neutral and takes the remedy from here.
+                "exFAT and FAT32 drives - most USB sticks, SD cards and large external " +
+                "drives - do not provide it. Choose a folder on an NTFS or ReFS drive instead.");
+        }
+    }
+
     public static DataRootRelationship ValidateTransition(
         string currentRoot,
         string targetRoot,
         string bootstrapRoot,
         IPhysicalPathResolver? resolver = null,
-        IDirectoryCaseSensitivityInspector? caseInspector = null)
+        IDirectoryCaseSensitivityInspector? caseInspector = null,
+        IDataRootVolumeCapabilityInspector? volumeInspector = null)
     {
         string lexicalCurrent = PathIdentity.NormalizeForComparison(currentRoot);
         string lexicalTarget = PathIdentity.NormalizeForComparison(targetRoot);
@@ -65,6 +97,7 @@ public static class DataRootTopologyValidator
         }
 
         var caseSensitivityInspector = caseInspector ?? new WindowsDirectoryCaseSensitivityInspector();
+        var volumeCapabilityInspector = volumeInspector ?? new WindowsDataRootVolumeCapabilityInspector();
         string nearestTargetDir = FindNearestExistingDirectory(lexicalTarget);
         try
         {
@@ -79,6 +112,8 @@ public static class DataRootTopologyValidator
             throw new InvalidOperationException(
                 $"Failed to verify case-insensitivity for target directory '{nearestTargetDir}': {ex.Message}", ex);
         }
+
+        AssertVolumeSupportsDataRoot(volumeCapabilityInspector, nearestTargetDir, lexicalTarget);
 
         var physicalResolver = resolver ?? new WindowsPhysicalPathResolver();
         string physicalCurrent = ResolvePhysicalOrThrow(physicalResolver, lexicalCurrent, "current data folder");
@@ -105,6 +140,8 @@ public static class DataRootTopologyValidator
             throw new InvalidOperationException(
                 $"Failed to verify case-insensitivity for physical target directory '{nearestPhysicalTargetDir}': {ex.Message}", ex);
         }
+
+        AssertVolumeSupportsDataRoot(volumeCapabilityInspector, nearestPhysicalTargetDir, physicalTarget);
 
         bool same = PathIdentity.Equals(physicalCurrent, physicalTarget);
         if (same)

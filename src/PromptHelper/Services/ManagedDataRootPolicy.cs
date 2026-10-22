@@ -8,13 +8,16 @@ public sealed class ManagedDataRootPolicy
 {
     private readonly IPhysicalPathResolver _resolver;
     private readonly IDirectoryCaseSensitivityInspector _caseInspector;
+    private readonly IDataRootVolumeCapabilityInspector _volumeInspector;
 
     public ManagedDataRootPolicy(
         IPhysicalPathResolver? resolver = null,
-        IDirectoryCaseSensitivityInspector? caseInspector = null)
+        IDirectoryCaseSensitivityInspector? caseInspector = null,
+        IDataRootVolumeCapabilityInspector? volumeInspector = null)
     {
         _resolver = resolver ?? new WindowsPhysicalPathResolver();
         _caseInspector = caseInspector ?? new WindowsDirectoryCaseSensitivityInspector();
+        _volumeInspector = volumeInspector ?? new WindowsDataRootVolumeCapabilityInspector();
     }
 
     public string ValidateConfiguredRootForStartup(
@@ -59,6 +62,8 @@ public sealed class ManagedDataRootPolicy
                 $"Failed to verify case-insensitivity for configured data folder '{lexical}': {ex.Message}", ex);
         }
 
+        DataRootTopologyValidator.AssertVolumeSupportsDataRoot(_volumeInspector, nearestDir, lexical);
+
         string physicalTarget;
         string physicalBootstrap;
 
@@ -102,6 +107,8 @@ public sealed class ManagedDataRootPolicy
                 $"Failed to verify case-insensitivity for configured physical data folder '{nearestPhysicalDir}': {ex.Message}", ex);
         }
 
+        DataRootTopologyValidator.AssertVolumeSupportsDataRoot(_volumeInspector, nearestPhysicalDir, physicalTarget);
+
         try
         {
             physicalBootstrap = DataRootTopologyValidator.ResolvePhysicalOrThrow(_resolver, Path.GetFullPath(bootstrapRoot), "bootstrap settings folder");
@@ -144,7 +151,8 @@ public sealed class ManagedDataRootPolicy
             targetRoot,
             bootstrap,
             _resolver,
-            _caseInspector);
+            _caseInspector,
+            _volumeInspector);
     }
 
     public void ValidateDisjointOrSame(

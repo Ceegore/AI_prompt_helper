@@ -276,6 +276,15 @@ public partial class App : Application
                 MessageBoxImage.Error);
             Shutdown();
         }
+        catch (UnsupportedDataRootFilesystemException ex)
+        {
+            MessageBox.Show(
+                $"{ex.Message}\n\nPrompt Helper did not create or modify a library there. Repair the configured data-folder setting to point at a supported drive before continuing.",
+                "Data Folder Drive Not Supported",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown();
+        }
         catch (Exception ex)
         {
             MessageBox.Show(

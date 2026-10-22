@@ -61,7 +61,7 @@ public sealed class DataFolderTransitionCoordinatorTests
             migrationService,
             confirmation);
 
-        Assert.Throws<IOException>(() => coordinator.RequestTransition(target));
+        TransitionFailureAssert.CleanRollback(() => coordinator.RequestTransition(target), target);
 
         // Settings unchanged
         Assert.AreEqual(Path.GetFullPath(source.Root), settingsRepo.GetEffectiveDataRoot());
@@ -343,7 +343,7 @@ public sealed class DataFolderTransitionCoordinatorTests
             new DataFolderMigrationService(),
             new FakeUserConfirmationService());
 
-        Assert.Throws<IOException>(() => coordinator.RequestTransition(target));
+        TransitionFailureAssert.CleanRollback(() => coordinator.RequestTransition(target), target);
 
         // Newly created empty root is cleaned up
         Assert.IsFalse(Directory.Exists(target));
@@ -380,7 +380,7 @@ public sealed class DataFolderTransitionCoordinatorTests
             new DataFolderMigrationService(),
             new FakeUserConfirmationService());
 
-        Assert.Throws<IOException>(() => coordinator.RequestTransition(target));
+        TransitionFailureAssert.CleanRollback(() => coordinator.RequestTransition(target), target);
 
         // Pre-existing directory is preserved
         Assert.IsTrue(Directory.Exists(target));
